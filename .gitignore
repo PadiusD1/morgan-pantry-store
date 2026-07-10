@@ -35,6 +35,5 @@ graphify-out/
 attached_assets/
 *.docx
 *.pptx
-api/index.js
 
 .vercel/
