@@ -4,7 +4,8 @@ import { SidebarProvider, Sidebar, SidebarContent, SidebarGroup, SidebarGroupLab
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { BoxesIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, Handshake, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, MonitorIcon, PackageIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import { BoxesIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, Handshake, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, LogOutIcon, MonitorIcon, PackageIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: HomeIcon, testId: "nav-dashboard" },
@@ -23,6 +24,11 @@ const navItems = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+  const { user, logout } = useAuth();
+
+  const visibleNavItems = navItems.filter(
+    (item) => item.href !== "/settings" || user?.role === "admin",
+  );
 
   return (
     <SidebarProvider className="app-shell">
@@ -55,7 +61,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               Modules
             </SidebarGroupLabel>
             <SidebarMenu>
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon;
                 const active = location === item.href;
                 return (
@@ -91,15 +97,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Button>
             </div>
             <Card className="glass-panel border-dashed border-sidebar-border/70 px-3 py-2.5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="space-y-0.5">
-                  <p className="text-xs font-medium text-sidebar-foreground/80" data-testid="text-storage-mode-heading">
-                    Local-only workspace
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-0.5 min-w-0">
+                  <p className="text-xs font-medium text-sidebar-foreground/90 truncate" data-testid="text-session-user-name">
+                    {user?.name ?? "Signed in"}
                   </p>
-                  <p className="text-[11px] text-sidebar-foreground/65" data-testid="text-storage-mode-description">
-                    All pantry data is stored in this browser. Clearing site data will wipe this repository.
+                  <p className="text-[11px] text-sidebar-foreground/65 capitalize" data-testid="text-session-user-role">
+                    <span className={user?.role === "admin" ? "badge-orange" : "badge-blue"}>
+                      {user?.role ?? ""}
+                    </span>
                   </p>
                 </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 text-xs"
+                  onClick={() => logout()}
+                  data-testid="button-logout"
+                >
+                  <LogOutIcon className="h-3.5 w-3.5 mr-1" />
+                  Sign out
+                </Button>
               </div>
             </Card>
           </div>

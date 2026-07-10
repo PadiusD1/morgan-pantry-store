@@ -22,6 +22,7 @@ export const userRoleEnum = pgEnum("user_role", [
   "admin",
   "staff",
   "volunteer",
+  "student",
 ]);
 
 export const transactionTypeEnum = pgEnum("transaction_type", ["IN", "OUT"]);
@@ -37,24 +38,33 @@ export const packageTypeEnum = pgEnum("package_type", [
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
-  username: text("username").notNull().unique(),
+  email: text("email").notNull().unique(),
+  // bcrypt hash — never a plaintext password
   password: text("password").notNull(),
-  role: userRoleEnum("role").notNull().default("volunteer"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at")
+  name: text("name").notNull(),
+  role: userRoleEnum("role").notNull().default("student"),
+  // Morgan State student ID (students only)
+  studentId: text("student_id"),
+  phone: text("phone"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date()),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
+  email: true,
   password: true,
+  name: true,
   role: true,
+  studentId: true,
+  phone: true,
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+export type SafeUser = Omit<User, "password">;
 
 // ─── Inventory Items ─────────────────────────────────────────────────────────
 
@@ -92,6 +102,9 @@ export const inventoryItems = pgTable("inventory_items", {
   costIsEstimated: boolean("cost_is_estimated").notNull().default(false),
   currency: text("currency").default("USD"),
 
+  // Request reservation system
+  reservedQuantity: integer("reserved_quantity").notNull().default(0),
+
   // Metadata
   reorderThreshold: integer("reorder_threshold"),
   allergens: text("allergens")
@@ -106,8 +119,8 @@ export const inventoryItems = pgTable("inventory_items", {
   matchConfidence: real("match_confidence"),
   rawPayload: jsonb("raw_payload"),
 
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at")
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date()),
@@ -143,8 +156,8 @@ export const clients = pgTable("clients", {
     .notNull()
     .default(sql`'{}'::text[]`),
   notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at")
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date()),
@@ -162,7 +175,7 @@ export const householdMembers = pgTable("household_members", {
   id: uuid("id").primaryKey().defaultRandom(),
   clientId: uuid("client_id")
     .notNull()
-    .references(() => clients.id),
+    .references(() => clients.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   relationship: text("relationship"),
   dateOfBirth: date("date_of_birth"),
@@ -171,7 +184,7 @@ export const householdMembers = pgTable("household_members", {
     .notNull()
     .default(sql`'{}'::text[]`),
   notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const insertHouseholdMemberSchema = createInsertSchema(householdMembers)
@@ -187,8 +200,8 @@ export const itemGroups = pgTable("item_groups", {
   name: text("name").notNull(),
   description: text("description"),
   isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at")
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date()),
@@ -204,7 +217,7 @@ export const itemGroupItems = pgTable("item_group_items", {
   id: uuid("id").primaryKey().defaultRandom(),
   groupId: uuid("group_id")
     .notNull()
-    .references(() => itemGroups.id),
+    .references(() => itemGroups.id, { onDelete: "cascade" }),
   inventoryItemId: uuid("inventory_item_id")
     .notNull()
     .references(() => inventoryItems.id),
@@ -217,22 +230,57 @@ export const insertItemGroupItemSchema = createInsertSchema(itemGroupItems)
 export type InsertItemGroupItem = z.infer<typeof insertItemGroupItemSchema>;
 export type ItemGroupItem = typeof itemGroupItems.$inferSelect;
 
+// ─── Donors ──────────────────────────────────────────────────────────────────
+
+export const donors = pgTable("donors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  organization: text("organization"),
+  contactName: text("contact_name"),
+  phone: text("phone"),
+  email: text("email"),
+  address: text("address"),
+  notes: text("notes"),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export const insertDonorSchema = createInsertSchema(donors)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+
+export type InsertDonor = z.infer<typeof insertDonorSchema>;
+export type Donor = typeof donors.$inferSelect;
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+export type Setting = typeof settings.$inferSelect;
+
 // ─── Transactions ────────────────────────────────────────────────────────────
 
 export const transactions = pgTable("transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
   type: transactionTypeEnum("type").notNull(),
-  timestamp: timestamp("timestamp").notNull().defaultNow(),
+  timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
   source: text("source"),
   donor: text("donor"),
   clientId: uuid("client_id").references(() => clients.id),
   clientName: text("client_name"),
+  donorId: uuid("donor_id").references(() => donors.id),
   // Emergency Shop Appointment flag: tracks emergency check-outs separately in reports
   isEmergency: boolean("is_emergency").notNull().default(false),
   latitude: doublePrecision("latitude"),
   longitude: doublePrecision("longitude"),
   accuracy: doublePrecision("accuracy"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const insertTransactionSchema = createInsertSchema(transactions)
@@ -298,7 +346,7 @@ export const priceHistory = pgTable("price_history", {
   costCents: integer("cost_cents").notNull(),
   currency: text("currency").notNull().default("USD"),
   source: text("source"),
-  recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const insertPriceHistorySchema = createInsertSchema(priceHistory)
@@ -317,7 +365,7 @@ export const weightHistory = pgTable("weight_history", {
   netWeightG: real("net_weight_g").notNull(),
   source: text("source"),
   isEstimated: boolean("is_estimated").notNull().default(false),
-  recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const insertWeightHistorySchema = createInsertSchema(weightHistory)
@@ -361,7 +409,15 @@ export const transactionsRelations = relations(transactions, ({ one, many }) => 
     fields: [transactions.clientId],
     references: [clients.id],
   }),
+  donor: one(donors, {
+    fields: [transactions.donorId],
+    references: [donors.id],
+  }),
   items: many(transactionItems),
+}));
+
+export const donorsRelations = relations(donors, ({ many }) => ({
+  transactions: many(transactions),
 }));
 
 export const transactionItemsRelations = relations(transactionItems, ({ one }) => ({
@@ -434,6 +490,8 @@ export const requestStatusEnum = pgEnum("request_status", [
 export const requests = pgTable("requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   clientId: uuid("client_id").references(() => clients.id),
+  // Authenticated student account that submitted this request (null for kiosk/walk-up)
+  userId: uuid("user_id").references(() => users.id),
   clientName: text("client_name").notNull(),
   clientIdentifier: text("client_identifier").notNull(),
   clientEmail: text("client_email"),
@@ -444,13 +502,13 @@ export const requests = pgTable("requests", {
   status: text("status").notNull().default("pending"),
   adminNote: text("admin_note"),
   reviewedBy: text("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
   pickupDeadline: text("pickup_deadline"),
-  fulfilledAt: timestamp("fulfilled_at"),
-  cancelledAt: timestamp("cancelled_at"),
+  fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
   transactionId: uuid("transaction_id").references(() => transactions.id),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at")
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date()),
@@ -468,7 +526,7 @@ export const requestItems = pgTable("request_items", {
   id: uuid("id").primaryKey().defaultRandom(),
   requestId: uuid("request_id")
     .notNull()
-    .references(() => requests.id),
+    .references(() => requests.id, { onDelete: "cascade" }),
   inventoryItemId: uuid("inventory_item_id")
     .notNull()
     .references(() => inventoryItems.id),
@@ -493,13 +551,13 @@ export const requestAuditLog = pgTable("request_audit_log", {
   id: uuid("id").primaryKey().defaultRandom(),
   requestId: uuid("request_id")
     .notNull()
-    .references(() => requests.id),
+    .references(() => requests.id, { onDelete: "cascade" }),
   action: text("action").notNull(),
   actor: text("actor"),
   details: text("details"),
   previousStatus: text("previous_status"),
   newStatus: text("new_status"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const insertRequestAuditLogSchema = createInsertSchema(requestAuditLog)
@@ -512,14 +570,16 @@ export type RequestAuditLog = typeof requestAuditLog.$inferSelect;
 
 export const notifications = pgTable("notifications", {
   id: uuid("id").primaryKey().defaultRandom(),
-  requestId: uuid("request_id").references(() => requests.id),
+  requestId: uuid("request_id").references(() => requests.id, {
+    onDelete: "set null",
+  }),
   recipientType: text("recipient_type").notNull(),
   recipientId: text("recipient_id").notNull(),
   type: text("type").notNull(),
   title: text("title").notNull(),
   message: text("message").notNull(),
   read: boolean("read").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const insertNotificationSchema = createInsertSchema(notifications)

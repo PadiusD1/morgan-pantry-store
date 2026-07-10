@@ -1,7 +1,6 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
-import { randomUUID } from "crypto";
-import { storage, rawDb } from "./storage";
+import { storage } from "./storage";
+import { pool } from "./pg";
 import { lookupBarcode } from "./barcode-lookup";
 import {
   insertInventoryItemSchema,
@@ -11,117 +10,52 @@ import {
   insertHouseholdMemberSchema,
   insertItemGroupSchema,
   insertItemGroupItemSchema,
+  insertDonorSchema,
 } from "@shared/schema";
+import {
+  createFoodRequest,
+  createRequestSchema,
+  getRequestPayload,
+  releaseRequestReservations,
+  RequestRateLimitError,
+} from "./request-service";
 
-function mapRequestRow(row: any) {
-  if (!row) return row;
-  return {
-    id: row.id,
-    clientId: row.client_id ?? null,
-    clientName: row.client_name,
-    clientIdentifier: row.client_identifier,
-    clientEmail: row.client_email ?? null,
-    clientPhone: row.client_phone ?? null,
-    reason: row.reason,
-    studentNote: row.student_note ?? null,
-    status: row.status,
-    adminNote: row.admin_note ?? null,
-    reviewedBy: row.reviewed_by ?? null,
-    reviewedAt: row.reviewed_at ?? null,
-    pickupDeadline: row.pickup_deadline ?? null,
-    fulfilledAt: row.fulfilled_at ?? null,
-    cancelledAt: row.cancelled_at ?? null,
-    transactionId: row.transaction_id ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+const PG_UNIQUE_VIOLATION = "23505";
+
+/** Settings keys the admin UI may write; everything else is rejected. */
+const ALLOWED_SETTING_KEYS = new Set([
+  "orgName",
+  "orgAddress",
+  "orgPhone",
+  "orgEmail",
+  "visitWarningDays",
+  "maxHouseholdSize",
+  "defaultDistributionNote",
+  "maxRequestsPerDay",
+  "requestExpirationHours",
+]);
+
+function actorName(req: { user?: { name?: string; email?: string } }): string {
+  return req.user?.name || req.user?.email || "staff";
 }
 
-function mapRequestItemRow(row: any) {
-  if (!row) return row;
-  return {
-    id: row.id,
-    requestId: row.request_id,
-    inventoryItemId: row.inventory_item_id,
-    itemName: row.item_name,
-    itemCategory: row.item_category ?? null,
-    requestedQuantity: row.requested_quantity,
-    approvedQuantity: row.approved_quantity ?? null,
-    fulfilledQuantity: row.fulfilled_quantity ?? null,
-    reserved: row.reserved === 1 || row.reserved === true,
-    denialReason: row.denial_reason ?? null,
-  };
-}
-
-function mapAuditLogRow(row: any) {
-  if (!row) return row;
-  return {
-    id: row.id,
-    requestId: row.request_id,
-    action: row.action,
-    actor: row.actor ?? null,
-    details: row.details ?? null,
-    previousStatus: row.previous_status ?? null,
-    newStatus: row.new_status ?? null,
-    createdAt: row.created_at,
-  };
-}
-
-function mapNotificationRow(row: any) {
-  if (!row) return row;
-  return {
-    id: row.id,
-    requestId: row.request_id ?? null,
-    recipientType: row.recipient_type,
-    recipientId: row.recipient_id,
-    type: row.type,
-    title: row.title,
-    message: row.message,
-    read: row.read === 1 || row.read === true,
-    createdAt: row.created_at,
-  };
-}
-
-function getRequestItemsPayload(requestId: string) {
-  return (rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(requestId) as any[])
-    .map(mapRequestItemRow);
-}
-
-function getRequestPayload(requestId: string, options: { auditLog?: boolean; clientHistory?: boolean } = {}) {
-  const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as any;
-  if (!request) return undefined;
-  const payload: any = {
-    ...mapRequestRow(request),
-    items: getRequestItemsPayload(requestId),
-  };
-  if (options.auditLog) {
-    payload.auditLog = (rawDb.prepare(
-      "SELECT * FROM request_audit_log WHERE request_id = ? ORDER BY created_at ASC",
-    ).all(requestId) as any[]).map(mapAuditLogRow);
-  }
-  if (options.clientHistory) {
-    payload.clientHistory = (rawDb.prepare(
-      "SELECT * FROM requests WHERE client_identifier = ? ORDER BY created_at DESC",
-    ).all(request.client_identifier) as any[]).map(mapRequestRow);
-  }
-  return payload;
-}
-
-function getHydratedItemGroupItems(groupId: string) {
-  return (rawDb.prepare(`
-    SELECT
-      igi.id,
-      igi.group_id,
-      igi.inventory_item_id,
-      igi.quantity,
-      ii.name,
-      ii.brand,
-      ii.category
-    FROM item_group_items igi
-    LEFT JOIN inventory_items ii ON ii.id = igi.inventory_item_id
-    WHERE igi.group_id = ?
-    ORDER BY ii.name COLLATE NOCASE, igi.id
-  `).all(groupId) as any[]).map((row) => ({
+async function getHydratedItemGroupItems(groupId: string) {
+  const { rows } = await pool.query(
+    `SELECT
+       igi.id,
+       igi.group_id,
+       igi.inventory_item_id,
+       igi.quantity,
+       ii.name,
+       ii.brand,
+       ii.category
+     FROM item_group_items igi
+     LEFT JOIN inventory_items ii ON ii.id = igi.inventory_item_id
+     WHERE igi.group_id = $1
+     ORDER BY lower(ii.name), igi.id`,
+    [groupId],
+  );
+  return rows.map((row) => ({
     id: row.id,
     groupId: row.group_id,
     inventoryItemId: row.inventory_item_id,
@@ -152,76 +86,15 @@ function parseItemGroupItems(rawItems: unknown, groupId: string) {
   return parsed;
 }
 
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express,
-): Promise<Server> {
-  // ─── Auto-backfill weight from item names ──────────────────────────
-  // Items created before weight-from-name parsing may have 0 weight
-  // despite having weight info in their name (e.g. "Fries - 5.25oz").
-  // Also backfills transaction items that recorded 0 weight.
-  (async () => {
-    const items = await storage.getInventoryItems();
-    const WEIGHT_RE = /(\d+(?:\.\d+)?)\s*-?\s*(oz|lb|lbs|g|kg)/i;
-    for (const item of items) {
-      const needsInventoryFix =
-        item.weightPerUnitLbs === "0" && !item.netWeightG && WEIGHT_RE.test(item.name);
-
-      // Determine correct weight — either already set or parsed from name
-      let lbs: number | null = null;
-      let grams: number | null = null;
-
-      if (item.weightPerUnitLbs !== "0" && parseFloat(item.weightPerUnitLbs) > 0) {
-        lbs = parseFloat(item.weightPerUnitLbs);
-      } else if (WEIGHT_RE.test(item.name)) {
-        const match = item.name.match(WEIGHT_RE)!;
-        const val = parseFloat(match[1]);
-        const unit = match[2].toLowerCase();
-        grams = 0;
-        if (unit === "oz") grams = val * 28.3495;
-        else if (unit === "lb" || unit === "lbs") grams = val * 453.592;
-        else if (unit === "g") grams = val;
-        else if (unit === "kg") grams = val * 1000;
-        if (grams > 0) {
-          lbs = Math.round((grams / 453.592) * 10000) / 10000;
-        }
-      }
-
-      // Backfill inventory item if needed
-      if (needsInventoryFix && grams && lbs) {
-        await storage.updateInventoryItem(item.id, {
-          netWeightG: grams,
-          unitWeightG: grams,
-          weightPerUnitLbs: String(lbs),
-        });
-        console.log(`[backfill] ${item.name}: set weight to ${grams.toFixed(1)}g / ${lbs}lbs`);
-      }
-
-      // Always fix transaction items that still have 0 weight for this item
-      if (lbs && lbs > 0) {
-        const updated = rawDb.prepare(
-          `UPDATE transaction_items SET weight_per_unit_lbs = ? WHERE inventory_item_id = ? AND (weight_per_unit_lbs = '0' OR weight_per_unit_lbs = '0.0000')`,
-        ).run(String(lbs), item.id);
-        if (updated.changes > 0) {
-          console.log(`[backfill] Fixed ${updated.changes} transaction item(s) for ${item.name}`);
-        }
-      }
-    }
-  })();
-
+export async function registerRoutes(app: Express): Promise<void> {
   // ─── Barcode Lookup ──────────────────────────────────────────────────
 
   app.get("/api/barcode-lookup/:code", async (req, res) => {
     const code = req.params.code?.trim();
     if (!code) return res.status(400).json({ message: "Barcode is required" });
 
-    // 1. Check if item already exists in our database
     const existing = await storage.getInventoryItemByBarcode(code);
     if (existing) {
-      // Duplicate update: fill in any missing enrichment fields
-      const updates: Record<string, unknown> = {};
-      if (!existing.brand && req.query.brand) updates.brand = req.query.brand;
-      // Return as-is (client can trigger re-enrichment separately)
       return res.json({
         status: "exists",
         item: existing,
@@ -229,7 +102,6 @@ export async function registerRoutes(
       });
     }
 
-    // 2. Query external APIs
     let result;
     try {
       result = await lookupBarcode(code);
@@ -245,8 +117,7 @@ export async function registerRoutes(
     if (result.found && result.product) {
       const p = result.product;
 
-      // 3. Auto-create the item in our database with enriched data
-      //    Race-safe: if another request already created this barcode, use existing.
+      // Race-safe: if another request already created this barcode, use existing.
       let item;
       try {
         item = await storage.createInventoryItem({
@@ -277,8 +148,7 @@ export async function registerRoutes(
           rawPayload: p.rawPayload,
         });
       } catch (err: any) {
-        // UNIQUE constraint on barcode — another concurrent request already created it
-        if (err?.code === "SQLITE_CONSTRAINT_UNIQUE" || err?.message?.includes("UNIQUE constraint")) {
+        if (err?.code === PG_UNIQUE_VIOLATION) {
           const existingItem = await storage.getInventoryItemByBarcode(code);
           if (existingItem) {
             return res.json({
@@ -291,7 +161,6 @@ export async function registerRoutes(
         throw err;
       }
 
-      // 4. Create pack components if detected
       if (p.packComponents && p.packComponents.length > 0) {
         for (const comp of p.packComponents) {
           await storage.createPackComponent({
@@ -304,7 +173,6 @@ export async function registerRoutes(
         }
       }
 
-      // 5. Record initial price history if we have cost data
       if (p.costCents) {
         await storage.createPriceHistory({
           inventoryItemId: item.id,
@@ -314,7 +182,6 @@ export async function registerRoutes(
         });
       }
 
-      // 6. Record initial weight history if we have weight data
       if (p.netWeightG) {
         await storage.createWeightHistory({
           inventoryItemId: item.id,
@@ -332,7 +199,6 @@ export async function registerRoutes(
       });
     }
 
-    // 7. No match found
     return res.json({
       status: "not_found",
       barcode: code,
@@ -388,7 +254,6 @@ export async function registerRoutes(
       return res.json(clients.filter((c: any) => c.clientType === "partner"));
     }
     if (typeFilter === "student") {
-      // Treat NULL/unset client_type as 'student' for backward compatibility
       return res.json(
         clients.filter((c: any) => !c.clientType || c.clientType === "student"),
       );
@@ -414,8 +279,7 @@ export async function registerRoutes(
       const client = await storage.createClient(result.data);
       res.status(201).json(client);
     } catch (err: any) {
-      // UNIQUE constraint on identifier — return clear error instead of 500
-      if (err?.code === "SQLITE_CONSTRAINT_UNIQUE" || err?.message?.includes("UNIQUE constraint")) {
+      if (err?.code === PG_UNIQUE_VIOLATION) {
         return res.status(409).json({
           message: `A client with identifier "${result.data.identifier}" already exists. Use a different identifier.`,
         });
@@ -458,7 +322,6 @@ export async function registerRoutes(
   app.post("/api/transactions", async (req, res) => {
     const { items: rawItems, ...txBody } = req.body;
 
-    // Coerce ISO timestamp strings to Date objects for Drizzle schema validation
     if (typeof txBody.timestamp === "string") {
       txBody.timestamp = new Date(txBody.timestamp);
     }
@@ -481,7 +344,6 @@ export async function registerRoutes(
           try {
             const invItem = await storage.getInventoryItem(rawItem.inventoryItemId);
             if (!invItem) {
-              // Item doesn't exist — create it with enough quantity for the checkout
               await storage.createInventoryItem({
                 name: rawItem.name || "Unknown Item",
                 category: "Uncategorized",
@@ -490,7 +352,6 @@ export async function registerRoutes(
                 valuePerUnitUsd: rawItem.valuePerUnitUsd || "0",
               });
             } else if (invItem.quantity < (rawItem.quantity || 0)) {
-              // Insufficient stock — bump inventory to match checkout amount
               await storage.updateInventoryItem(invItem.id, {
                 quantity: rawItem.quantity,
               });
@@ -555,14 +416,16 @@ export async function registerRoutes(
 
   app.get("/api/item-groups", async (_req, res) => {
     const groups = await storage.getItemGroups();
-    const withItems = groups.map((g) => ({ ...g, items: getHydratedItemGroupItems(g.id) }));
+    const withItems = await Promise.all(
+      groups.map(async (g) => ({ ...g, items: await getHydratedItemGroupItems(g.id) })),
+    );
     res.json(withItems);
   });
 
   app.get("/api/item-groups/:id", async (req, res) => {
     const group = await storage.getItemGroup(req.params.id);
     if (!group) return res.status(404).json({ message: "Not found" });
-    res.json({ ...group, items: getHydratedItemGroupItems(group.id) });
+    res.json({ ...group, items: await getHydratedItemGroupItems(group.id) });
   });
 
   app.post("/api/item-groups", async (req, res) => {
@@ -582,7 +445,7 @@ export async function registerRoutes(
       return res.status(400).json({ message: err.message || "Invalid bundle item data" });
     }
 
-    res.status(201).json({ ...group, items: getHydratedItemGroupItems(group.id) });
+    res.status(201).json({ ...group, items: await getHydratedItemGroupItems(group.id) });
   });
 
   app.patch("/api/item-groups/:id", async (req, res) => {
@@ -602,20 +465,28 @@ export async function registerRoutes(
         return res.status(400).json({ message: err.message || "Invalid bundle item data" });
       }
 
-      const replaceItems = rawDb.transaction(() => {
-        rawDb.prepare("DELETE FROM item_group_items WHERE group_id = ?").run(updated.id);
-        const insertItem = rawDb.prepare(`
-          INSERT INTO item_group_items (id, group_id, inventory_item_id, quantity)
-          VALUES (?, ?, ?, ?)
-        `);
+      // Atomic bulk replace of the group's items
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("DELETE FROM item_group_items WHERE group_id = $1", [updated.id]);
         for (const item of parsedItems) {
-          insertItem.run(randomUUID(), item.groupId, item.inventoryItemId, item.quantity ?? 1);
+          await client.query(
+            `INSERT INTO item_group_items (group_id, inventory_item_id, quantity)
+             VALUES ($1, $2, $3)`,
+            [item.groupId, item.inventoryItemId, item.quantity ?? 1],
+          );
         }
-      });
-      replaceItems();
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
     }
 
-    res.json({ ...updated, items: getHydratedItemGroupItems(updated.id) });
+    res.json({ ...updated, items: await getHydratedItemGroupItems(updated.id) });
   });
 
   app.delete("/api/item-groups/:id", async (req, res) => {
@@ -635,7 +506,7 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
     }
     const item = await storage.createItemGroupItem(result.data);
-    const hydrated = getHydratedItemGroupItems(group.id).find((i) => i.id === item.id) ?? item;
+    const hydrated = (await getHydratedItemGroupItems(group.id)).find((i) => i.id === item.id) ?? item;
     res.status(201).json(hydrated);
   });
 
@@ -660,6 +531,9 @@ export async function registerRoutes(
 
   app.put("/api/settings/:key", async (req, res) => {
     const { value } = req.body;
+    if (!ALLOWED_SETTING_KEYS.has(req.params.key)) {
+      return res.status(400).json({ message: `Unknown setting: ${req.params.key}` });
+    }
     if (typeof value !== "string") {
       return res.status(400).json({ message: "value must be a string" });
     }
@@ -676,21 +550,18 @@ export async function registerRoutes(
       storage.getClients(),
     ]);
 
-    // Weekly trend: last 7 days of OUT transactions
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const weeklyOuts = transactions.filter(
       (t) => t.type === "OUT" && new Date(t.timestamp) >= weekAgo,
     );
 
-    // Category breakdown
     const categoryMap = new Map<string, number>();
     for (const item of items) {
       const cat = item.category || "Uncategorized";
       categoryMap.set(cat, (categoryMap.get(cat) || 0) + item.quantity);
     }
 
-    // Top distributed items (last 30 days)
     const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const recentTxIds = transactions
       .filter((t) => t.type === "OUT" && new Date(t.timestamp) >= monthAgo)
@@ -710,20 +581,24 @@ export async function registerRoutes(
       .sort((a, b) => b.total - a.total)
       .slice(0, 10);
 
-    // Request metrics (additive — does not modify anything above)
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const weekAgoIso = weekAgo.toISOString();
     let pendingRequests = 0;
     let approvedReadyForPickup = 0;
     let todayRequests = 0;
     let expiredNoShowCount = 0;
     try {
-      pendingRequests = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status IN ('pending','under_review')").get() as any)?.count ?? 0;
-      approvedReadyForPickup = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status IN ('approved','partially_approved','ready_for_pickup')").get() as any)?.count ?? 0;
-      todayRequests = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE created_at >= ?").get(todayStart) as any)?.count ?? 0;
-      expiredNoShowCount = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status IN ('expired','no_show') AND updated_at >= ?").get(weekAgoIso) as any)?.count ?? 0;
+      const [pending, ready, today, expired] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status IN ('pending','under_review')`),
+        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status IN ('approved','partially_approved','ready_for_pickup')`),
+        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE created_at >= $1::timestamptz`, [todayStart]),
+        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status IN ('expired','no_show') AND updated_at >= $1::timestamptz`, [weekAgo.toISOString()]),
+      ]);
+      pendingRequests = pending.rows[0]?.count ?? 0;
+      approvedReadyForPickup = ready.rows[0]?.count ?? 0;
+      todayRequests = today.rows[0]?.count ?? 0;
+      expiredNoShowCount = expired.rows[0]?.count ?? 0;
     } catch {
-      // requests table may not exist yet — ignore
+      // stats are best-effort
     }
 
     res.json({
@@ -739,91 +614,19 @@ export async function registerRoutes(
     });
   });
 
-  // ─── Request Management System ─────────────────────────────────────
-
-  // Helper: ensure request tables exist (auto-migrate)
-  (() => {
-    try {
-      rawDb.exec(`
-        ALTER TABLE inventory_items ADD COLUMN reserved_quantity INTEGER NOT NULL DEFAULT 0;
-      `);
-    } catch { /* column already exists */ }
-
-    rawDb.exec(`
-      CREATE TABLE IF NOT EXISTS requests (
-        id                  TEXT PRIMARY KEY,
-        client_name         TEXT NOT NULL,
-        client_identifier   TEXT NOT NULL,
-        client_email        TEXT,
-        client_phone        TEXT,
-        client_id           TEXT,
-        reason              TEXT NOT NULL,
-        status              TEXT NOT NULL DEFAULT 'pending',
-        admin_note          TEXT,
-        reviewed_at         TEXT,
-        reviewed_by         TEXT,
-        pickup_deadline     TEXT,
-        fulfilled_at        TEXT,
-        cancelled_at        TEXT,
-        transaction_id      TEXT,
-        created_at          TEXT NOT NULL,
-        updated_at          TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS request_items (
-        id                  TEXT PRIMARY KEY,
-        request_id          TEXT NOT NULL,
-        inventory_item_id   TEXT NOT NULL,
-        item_name           TEXT NOT NULL,
-        item_category       TEXT,
-        requested_quantity  INTEGER NOT NULL,
-        approved_quantity   INTEGER,
-        fulfilled_quantity  INTEGER,
-        denial_reason       TEXT,
-        reserved            INTEGER NOT NULL DEFAULT 0,
-        created_at          TEXT NOT NULL,
-        FOREIGN KEY (request_id) REFERENCES requests(id),
-        FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS request_audit_log (
-        id                  TEXT PRIMARY KEY,
-        request_id          TEXT NOT NULL,
-        action              TEXT NOT NULL,
-        details             TEXT,
-        actor        TEXT,
-        previous_status     TEXT,
-        new_status          TEXT,
-        created_at          TEXT NOT NULL,
-        FOREIGN KEY (request_id) REFERENCES requests(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS notifications (
-        id                  TEXT PRIMARY KEY,
-        recipient_id        TEXT NOT NULL,
-        request_id          TEXT,
-        type                TEXT NOT NULL,
-        title               TEXT NOT NULL,
-        message             TEXT NOT NULL,
-        read                INTEGER NOT NULL DEFAULT 0,
-        created_at          TEXT NOT NULL
-      );
-    `);
-  })();
-
   // ─── 1. Public Inventory ─────────────────────────────────────────────
 
   app.get("/api/public/inventory", async (_req, res) => {
     const items = await storage.getInventoryItems();
     const available = items.filter((item: any) => {
-      const reserved = (item as any).reservedQuantity ?? 0;
+      const reserved = item.reservedQuantity ?? 0;
       return item.quantity - reserved > 0;
     }).map((item: any) => ({
       id: item.id,
       name: item.name,
       brand: item.brand,
       category: item.category,
-      quantity: item.quantity - ((item as any).reservedQuantity ?? 0),
+      quantity: item.quantity - (item.reservedQuantity ?? 0),
       allergens: item.allergens,
       reorderThreshold: item.reorderThreshold,
       weightPerUnitLbs: item.weightPerUnitLbs,
@@ -831,105 +634,36 @@ export async function registerRoutes(
     res.json(available);
   });
 
-  // ─── 2. Submit Request ───────────────────────────────────────────────
+  // ─── 2. Submit Request (staff / kiosk — identity typed on device) ────
 
   app.post("/api/requests", async (req, res) => {
-    const { clientName, clientIdentifier, clientEmail, clientPhone, clientId, reason, items, studentNote } = req.body;
-
-    // Validate required fields
-    if (!clientName || typeof clientName !== "string" || !clientName.trim()) {
-      return res.status(400).json({ message: "clientName is required" });
+    const parsed = createRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const message = parsed.error.errors[0]?.message ?? "Invalid request data";
+      const path = parsed.error.errors[0]?.path?.join(".");
+      return res.status(400).json({ message: path ? `${path}: ${message}` : message });
     }
-    if (!clientIdentifier || typeof clientIdentifier !== "string" || !clientIdentifier.trim()) {
-      return res.status(400).json({ message: "clientIdentifier is required" });
-    }
-    if (!reason || typeof reason !== "string" || !reason.trim()) {
-      return res.status(400).json({ message: "reason is required" });
-    }
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "items array is required and must not be empty" });
-    }
-    for (const item of items) {
-      if (!item.inventoryItemId || !item.itemName || !item.requestedQuantity || item.requestedQuantity < 1) {
-        return res.status(400).json({ message: "Each item must have inventoryItemId, itemName, and requestedQuantity >= 1" });
-      }
-    }
-
-    // Rate limit check
-    const todayMidnight = new Date();
-    todayMidnight.setHours(0, 0, 0, 0);
-    const todayIso = todayMidnight.toISOString();
-    const countRow = rawDb.prepare(
-      "SELECT COUNT(*) as count FROM requests WHERE client_identifier = ? AND created_at >= ?"
-    ).get(clientIdentifier.trim(), todayIso) as any;
-    const todayCount = countRow?.count ?? 0;
-
-    let maxRequestsPerDay = 5;
     try {
-      const setting = await storage.getSetting("maxRequestsPerDay");
-      if (setting) maxRequestsPerDay = parseInt(setting) || 5;
-    } catch {}
-
-    if (todayCount >= maxRequestsPerDay) {
-      return res.status(429).json({ message: `Rate limit exceeded. Maximum ${maxRequestsPerDay} requests per day.` });
+      const payload = await createFoodRequest(parsed.data, actorName(req));
+      res.status(201).json(payload);
+    } catch (err) {
+      if (err instanceof RequestRateLimitError) {
+        return res.status(429).json({ message: err.message });
+      }
+      throw err;
     }
-
-    const now = new Date().toISOString();
-    const requestId = randomUUID();
-
-    // Create request
-    rawDb.prepare(`
-      INSERT INTO requests (id, client_name, client_identifier, client_email, client_phone, client_id, reason, student_note, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-    `).run(
-      requestId,
-      clientName.trim(),
-      clientIdentifier.trim(),
-      clientEmail || null,
-      clientPhone || null,
-      clientId || null,
-      reason.trim(),
-      typeof studentNote === "string" && studentNote.trim() ? studentNote.trim() : null,
-      now,
-      now,
-    );
-
-    // Create request items
-    for (const item of items) {
-      const itemId = randomUUID();
-      rawDb.prepare(`
-        INSERT INTO request_items (id, request_id, inventory_item_id, item_name, item_category, requested_quantity)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(itemId, requestId, item.inventoryItemId, item.itemName, item.itemCategory || null, item.requestedQuantity);
-    }
-
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, previous_status, new_status, created_at)
-      VALUES (?, ?, 'created', 'Request submitted', NULL, 'pending', ?)
-    `).run(auditId, requestId, now);
-
-    // Notification for requester
-    const notifId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-      VALUES (?, ?, ?, ?, 'request_submitted', 'Request Submitted', 'Your request has been submitted and is pending review.', ?)
-    `).run(notifId, 'client', clientIdentifier.trim(), requestId, now);
-
-    res.status(201).json(getRequestPayload(requestId));
   });
 
-  // ─── 3. Public Lookup by Identifier ──────────────────────────────────
+  // ─── 3. Lookup by Identifier (staff/kiosk history check) ─────────────
 
   app.get("/api/requests/lookup/:identifier", async (req, res) => {
-    const rows = rawDb.prepare(
-      "SELECT * FROM requests WHERE client_identifier = ? ORDER BY created_at DESC"
-    ).all(req.params.identifier) as any[];
-    const withItems = rows.map((r: any) => ({
-      ...mapRequestRow(r),
-      items: getRequestItemsPayload(r.id),
-    }));
+    const rows = await storage.getRequestsByClientIdentifier(req.params.identifier);
+    const withItems = await Promise.all(
+      rows.map(async (r: any) => ({
+        ...r,
+        items: await storage.getRequestItems(r.id),
+      })),
+    );
     res.json(withItems);
   });
 
@@ -937,71 +671,71 @@ export async function registerRoutes(
 
   app.get("/api/requests/analytics", async (_req, res) => {
     try {
-      const mostRequested = rawDb.prepare(`
-        SELECT ri.item_name, ri.inventory_item_id, SUM(ri.requested_quantity) as total_requested
+      const mostRequested = (await pool.query(`
+        SELECT ri.item_name, ri.inventory_item_id, SUM(ri.requested_quantity)::int AS total_requested
         FROM request_items ri
         GROUP BY ri.inventory_item_id, ri.item_name
         ORDER BY total_requested DESC LIMIT 10
-      `).all();
+      `)).rows;
 
-      const mostApproved = rawDb.prepare(`
-        SELECT ri.item_name, ri.inventory_item_id, SUM(ri.approved_quantity) as total_approved
+      const mostApproved = (await pool.query(`
+        SELECT ri.item_name, ri.inventory_item_id, SUM(ri.approved_quantity)::int AS total_approved
         FROM request_items ri
         WHERE ri.approved_quantity > 0
         GROUP BY ri.inventory_item_id, ri.item_name
         ORDER BY total_approved DESC LIMIT 10
-      `).all();
+      `)).rows;
 
-      const decidedRow = rawDb.prepare(`
+      const decidedRow = (await pool.query(`
         SELECT
-          COUNT(CASE WHEN status IN ('approved','partially_approved','completed') THEN 1 END) as approved_count,
-          COUNT(CASE WHEN status = 'denied' THEN 1 END) as denied_count,
-          COUNT(*) as total
+          COUNT(*) FILTER (WHERE status IN ('approved','partially_approved','completed'))::int AS approved_count,
+          COUNT(*) FILTER (WHERE status = 'denied')::int AS denied_count,
+          COUNT(*)::int AS total
         FROM requests WHERE status IN ('approved','partially_approved','completed','denied')
-      `).get() as any;
+      `)).rows[0];
       const approvalRate = decidedRow?.total > 0 ? decidedRow.approved_count / decidedRow.total : 0;
       const denialRate = decidedRow?.total > 0 ? decidedRow.denied_count / decidedRow.total : 0;
 
-      const noShowRow = rawDb.prepare(`
+      const noShowRow = (await pool.query(`
         SELECT
-          COUNT(CASE WHEN status = 'no_show' THEN 1 END) as no_show_count,
-          COUNT(*) as total
+          COUNT(*) FILTER (WHERE status = 'no_show')::int AS no_show_count,
+          COUNT(*)::int AS total
         FROM requests WHERE status IN ('approved','partially_approved','completed','no_show','expired','ready_for_pickup')
-      `).get() as any;
+      `)).rows[0];
       const noShowRate = noShowRow?.total > 0 ? noShowRow.no_show_count / noShowRow.total : 0;
 
-      const avgDecisionRow = rawDb.prepare(`
-        SELECT AVG((julianday(reviewed_at) - julianday(created_at)) * 24) as avg_hours
+      const avgDecisionRow = (await pool.query(`
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (reviewed_at - created_at)) / 3600), 0)::float AS avg_hours
         FROM requests WHERE reviewed_at IS NOT NULL
-      `).get() as any;
+      `)).rows[0];
       const avgDecisionTime = avgDecisionRow?.avg_hours ?? 0;
 
-      const avgPickupRow = rawDb.prepare(`
-        SELECT AVG((julianday(fulfilled_at) - julianday(reviewed_at)) * 24) as avg_hours
+      const avgPickupRow = (await pool.query(`
+        SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (fulfilled_at - reviewed_at)) / 3600), 0)::float AS avg_hours
         FROM requests WHERE fulfilled_at IS NOT NULL AND reviewed_at IS NOT NULL
-      `).get() as any;
+      `)).rows[0];
       const avgPickupTime = avgPickupRow?.avg_hours ?? 0;
 
-      const requestsByStatus = rawDb.prepare(`
-        SELECT status, COUNT(*) as count FROM requests GROUP BY status
-      `).all();
+      const requestsByStatus = (await pool.query(`
+        SELECT status, COUNT(*)::int AS count FROM requests GROUP BY status
+      `)).rows;
 
-      const topCategories = rawDb.prepare(`
-        SELECT ri.item_category as category, COUNT(*) as count
+      const topCategories = (await pool.query(`
+        SELECT ri.item_category AS category, COUNT(*)::int AS count
         FROM request_items ri
         WHERE ri.item_category IS NOT NULL
         GROUP BY ri.item_category
         ORDER BY count DESC LIMIT 10
-      `).all();
+      `)).rows;
 
-      const unmetDemand = rawDb.prepare(`
+      const unmetDemand = (await pool.query(`
         SELECT ri.item_name, ri.inventory_item_id,
-          SUM(ri.requested_quantity) - SUM(COALESCE(ri.approved_quantity, 0)) as unmet
+          (SUM(ri.requested_quantity) - SUM(COALESCE(ri.approved_quantity, 0)))::int AS unmet
         FROM request_items ri
         GROUP BY ri.inventory_item_id, ri.item_name
-        HAVING unmet > 0
+        HAVING SUM(ri.requested_quantity) - SUM(COALESCE(ri.approved_quantity, 0)) > 0
         ORDER BY unmet DESC LIMIT 10
-      `).all();
+      `)).rows;
 
       res.json({
         mostRequested,
@@ -1016,6 +750,7 @@ export async function registerRoutes(
         unmetDemand,
       });
     } catch (err: any) {
+      console.error("[requests/analytics] error:", err);
       res.json({
         mostRequested: [],
         mostApproved: [],
@@ -1037,77 +772,72 @@ export async function registerRoutes(
     // Auto-expire overdue requests
     try {
       const nowIso = new Date().toISOString();
-      let expirationHours = 48;
-      try {
-        const setting = await storage.getSetting("requestExpirationHours");
-        if (setting) expirationHours = parseInt(setting) || 48;
-      } catch {}
-
-      const expired = rawDb.prepare(`
-        SELECT id FROM requests
-        WHERE status IN ('approved','partially_approved','ready_for_pickup')
-        AND pickup_deadline IS NOT NULL AND pickup_deadline < ?
-      `).all(nowIso) as any[];
+      const expired = (await pool.query(
+        `SELECT id FROM requests
+         WHERE status IN ('approved','partially_approved','ready_for_pickup')
+         AND pickup_deadline IS NOT NULL AND pickup_deadline < $1`,
+        [nowIso],
+      )).rows;
 
       for (const r of expired) {
-        const rItems = rawDb.prepare(
-          `SELECT inventory_item_id, approved_quantity FROM request_items WHERE request_id = ? AND reserved = 1`
-        ).all(r.id) as any[];
-        for (const item of rItems) {
-          rawDb.prepare(
-            `UPDATE inventory_items SET reserved_quantity = MAX(0, reserved_quantity - ?) WHERE id = ?`
-          ).run(item.approved_quantity, item.inventory_item_id);
-        }
-        rawDb.prepare(`UPDATE request_items SET reserved = 0 WHERE request_id = ?`).run(r.id);
-        rawDb.prepare(`UPDATE requests SET status = 'expired', updated_at = ? WHERE id = ?`).run(nowIso, r.id);
-        const auditId = randomUUID();
-        rawDb.prepare(
-          `INSERT INTO request_audit_log (id, request_id, action, details, previous_status, new_status, created_at)
-           VALUES (?, ?, 'expired', 'Auto-expired: pickup deadline passed', 'approved', 'expired', ?)`
-        ).run(auditId, r.id, nowIso);
+        await releaseRequestReservations(r.id);
+        await pool.query(
+          `UPDATE requests SET status = 'expired', updated_at = now() WHERE id = $1`,
+          [r.id],
+        );
+        await storage.createAuditLogEntry({
+          requestId: r.id,
+          action: "expired",
+          details: "Auto-expired: pickup deadline passed",
+          previousStatus: "approved",
+          newStatus: "expired",
+        });
       }
-    } catch {}
+    } catch (err) {
+      console.error("[requests] auto-expire error:", err);
+    }
 
-    // Build query with filters
     const { status, dateFrom, dateTo, identifier, sort } = req.query;
-    let sql = "SELECT * FROM requests WHERE 1=1";
+    const conditions: string[] = [];
     const params: any[] = [];
 
     if (status && typeof status === "string") {
-      sql += " AND status = ?";
       params.push(status);
+      conditions.push(`status = $${params.length}`);
     }
     if (dateFrom && typeof dateFrom === "string") {
-      sql += " AND created_at >= ?";
       params.push(dateFrom);
+      conditions.push(`created_at >= $${params.length}::timestamptz`);
     }
     if (dateTo && typeof dateTo === "string") {
-      sql += " AND created_at <= ?";
       params.push(dateTo);
+      conditions.push(`created_at <= $${params.length}::timestamptz`);
     }
     if (identifier && typeof identifier === "string") {
-      sql += " AND client_identifier = ?";
       params.push(identifier);
+      conditions.push(`client_identifier = $${params.length}`);
     }
 
-    if (sort === "oldest") {
-      sql += " ORDER BY created_at ASC";
-    } else {
-      sql += " ORDER BY created_at DESC";
-    }
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const order = sort === "oldest" ? "ASC" : "DESC";
+    const { rows } = await pool.query(
+      `SELECT id FROM requests${where} ORDER BY created_at ${order}`,
+      params,
+    );
 
-    const requests = rawDb.prepare(sql).all(...params) as any[];
-    const withItems = requests.map((r: any) => ({
-      ...mapRequestRow(r),
-      items: getRequestItemsPayload(r.id),
-    }));
+    const withItems = await Promise.all(
+      rows.map(async (r: any) => {
+        const request = await storage.getRequest(r.id);
+        return { ...request, items: await storage.getRequestItems(r.id) };
+      }),
+    );
     res.json(withItems);
   });
 
   // ─── 5. Request Detail ───────────────────────────────────────────────
 
   app.get("/api/requests/:id", async (req, res) => {
-    const request = getRequestPayload(req.params.id, { auditLog: true, clientHistory: true });
+    const request = await getRequestPayload(req.params.id, { auditLog: true, clientHistory: true });
     if (!request) return res.status(404).json({ message: "Request not found" });
     res.json(request);
   });
@@ -1116,17 +846,16 @@ export async function registerRoutes(
 
   app.post("/api/requests/:id/approve", async (req, res) => {
     try {
-      const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+      const request = await storage.getRequest(req.params.id);
       if (!request) return res.status(404).json({ message: "Request not found" });
       if (!["pending", "under_review"].includes(request.status)) {
         return res.status(400).json({ message: `Cannot approve request with status '${request.status}'` });
       }
 
-      const requestItems = rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(req.params.id) as any[];
+      const requestItems = await storage.getRequestItems(req.params.id);
       const { items: bodyItems, adminNote } = req.body;
-      const now = new Date().toISOString();
+      const actor = actorName(req);
 
-      // Determine approved quantities per item
       const approvalMap = new Map<string, number>();
       if (Array.isArray(bodyItems)) {
         for (const bi of bodyItems) {
@@ -1134,91 +863,99 @@ export async function registerRoutes(
         }
       }
 
-      // Precompute: is this a partial approval? (must happen outside transaction for status)
       let isPartial = false;
       for (const ri of requestItems) {
-        const approvedQty = approvalMap.has(ri.id) ? approvalMap.get(ri.id)! : ri.requested_quantity;
-        if (approvedQty < ri.requested_quantity || approvedQty === 0) {
+        const approvedQty = approvalMap.has(ri.id) ? approvalMap.get(ri.id)! : ri.requestedQuantity;
+        if (approvedQty < ri.requestedQuantity || approvedQty === 0) {
           isPartial = true;
           break;
         }
       }
 
-      // Read expiration setting before the transaction (async calls can't be inside db.transaction)
       let expirationHours = 48;
       try {
         const setting = await storage.getSetting("requestExpirationHours");
         if (setting) expirationHours = parseInt(setting) || 48;
-      } catch {}
+      } catch {
+        // default stands
+      }
       const deadline = new Date(Date.now() + expirationHours * 60 * 60 * 1000).toISOString();
       const newStatus = isPartial ? "partially_approved" : "approved";
 
-      // Atomic transaction: reserve inventory + update request + audit log + notification
-      // Uses WHERE clause atomic reservation to prevent race conditions (double-approval oversells)
-      const approveAtomic = rawDb.transaction(() => {
+      // Atomic transaction: reserve inventory + update request + audit + notification.
+      // The conditional UPDATE prevents TOCTOU double-approval oversells.
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
         for (const ri of requestItems) {
-          const approvedQty = approvalMap.has(ri.id) ? approvalMap.get(ri.id)! : ri.requested_quantity;
+          const approvedQty = approvalMap.has(ri.id) ? approvalMap.get(ri.id)! : ri.requestedQuantity;
 
           if (approvedQty > 0) {
-            // CRITICAL: atomic availability check + reservation in one UPDATE
-            // This prevents TOCTOU race where two concurrent approvals oversell inventory
-            const result = rawDb.prepare(`
-              UPDATE inventory_items
-              SET reserved_quantity = reserved_quantity + ?
-              WHERE id = ? AND (quantity - reserved_quantity) >= ?
-            `).run(approvedQty, ri.inventory_item_id, approvedQty);
+            const result = await client.query(
+              `UPDATE inventory_items
+               SET reserved_quantity = reserved_quantity + $1
+               WHERE id = $2 AND (quantity - reserved_quantity) >= $1`,
+              [approvedQty, ri.inventoryItemId],
+            );
 
-            if (result.changes === 0) {
-              // Either item doesn't exist or insufficient available stock
-              const invItem = rawDb.prepare("SELECT name, quantity, reserved_quantity FROM inventory_items WHERE id = ?").get(ri.inventory_item_id) as any;
+            if (result.rowCount === 0) {
+              const invItem = (await client.query(
+                "SELECT name, quantity, reserved_quantity FROM inventory_items WHERE id = $1",
+                [ri.inventoryItemId],
+              )).rows[0];
               if (!invItem) {
-                throw new Error(`Inventory item ${ri.item_name} no longer exists`);
+                throw new Error(`Inventory item ${ri.itemName} no longer exists`);
               }
               const available = invItem.quantity - (invItem.reserved_quantity || 0);
-              throw new Error(`Insufficient stock for ${ri.item_name}. Available: ${available}, Requested: ${approvedQty}`);
+              throw new Error(`Insufficient stock for ${ri.itemName}. Available: ${available}, Requested: ${approvedQty}`);
             }
 
-            rawDb.prepare(
-              "UPDATE request_items SET approved_quantity = ?, reserved = 1 WHERE id = ?"
-            ).run(approvedQty, ri.id);
+            await client.query(
+              "UPDATE request_items SET approved_quantity = $1, reserved = true WHERE id = $2",
+              [approvedQty, ri.id],
+            );
           } else {
-            rawDb.prepare(
-              "UPDATE request_items SET approved_quantity = 0, reserved = 0, denial_reason = ? WHERE id = ?"
-            ).run("Not approved", ri.id);
+            await client.query(
+              "UPDATE request_items SET approved_quantity = 0, reserved = false, denial_reason = $1 WHERE id = $2",
+              ["Not approved", ri.id],
+            );
           }
         }
 
-        // Update request status
-        rawDb.prepare(`
-          UPDATE requests SET status = ?, reviewed_at = ?, reviewed_by = 'admin', admin_note = ?, pickup_deadline = ?, updated_at = ?
-          WHERE id = ?
-        `).run(newStatus, now, adminNote || null, deadline, now, req.params.id);
+        await client.query(
+          `UPDATE requests SET status = $1, reviewed_at = now(), reviewed_by = $2, admin_note = $3, pickup_deadline = $4, updated_at = now()
+           WHERE id = $5`,
+          [newStatus, actor, adminNote || null, deadline, req.params.id],
+        );
 
-        // Audit log
-        const auditId = randomUUID();
-        rawDb.prepare(`
-          INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-          VALUES (?, ?, 'approved', ?, 'admin', ?, ?, ?)
-        `).run(auditId, req.params.id, isPartial ? "Partially approved" : "Fully approved", request.status, newStatus, now);
+        await client.query(
+          `INSERT INTO request_audit_log (request_id, action, details, actor, previous_status, new_status)
+           VALUES ($1, 'approved', $2, $3, $4, $5)`,
+          [req.params.id, isPartial ? "Partially approved" : "Fully approved", actor, request.status, newStatus],
+        );
 
-        // Notification
-        const notifId = randomUUID();
-        rawDb.prepare(`
-          INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-          VALUES (?, ?, ?, ?, 'request_approved', 'Request Approved', ?, ?)
-        `).run(notifId, 'client', request.client_identifier, req.params.id,
-          isPartial ? "Your request has been partially approved. Please pick up by the deadline." : "Your request has been approved. Please pick up by the deadline.",
-          now);
-      });
+        await client.query(
+          `INSERT INTO notifications (recipient_type, recipient_id, request_id, type, title, message)
+           VALUES ('client', $1, $2, 'request_approved', 'Request Approved', $3)`,
+          [
+            request.clientIdentifier,
+            req.params.id,
+            isPartial
+              ? "Your request has been partially approved. Please pick up by the deadline."
+              : "Your request has been approved. Please pick up by the deadline.",
+          ],
+        );
 
-      try {
-        approveAtomic();
+        await client.query("COMMIT");
       } catch (err: any) {
-        // Transaction auto-rolled back. Return conflict error.
+        await client.query("ROLLBACK");
+        client.release();
         return res.status(409).json({ message: err.message || "Failed to reserve inventory" });
       }
+      client.release();
 
-      res.json(getRequestPayload(req.params.id));
+      res.json(await getRequestPayload(req.params.id));
     } catch (err: any) {
       console.error("[approve] error:", err);
       res.status(500).json({ message: "Internal error approving request" });
@@ -1228,7 +965,7 @@ export async function registerRoutes(
   // ─── 7. Deny Request ─────────────────────────────────────────────────
 
   app.post("/api/requests/:id/deny", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
     if (!["pending", "under_review"].includes(request.status)) {
       return res.status(400).json({ message: `Cannot deny request with status '${request.status}'` });
@@ -1238,42 +975,48 @@ export async function registerRoutes(
     if (!adminNote || typeof adminNote !== "string" || !adminNote.trim()) {
       return res.status(400).json({ message: "adminNote is required when denying a request" });
     }
+    const actor = actorName(req);
 
-    const now = new Date().toISOString();
-    rawDb.prepare(`
-      UPDATE requests SET status = 'denied', admin_note = ?, reviewed_at = ?, reviewed_by = 'admin', updated_at = ?
-      WHERE id = ?
-    `).run(adminNote.trim(), now, now, req.params.id);
+    await storage.updateRequest(req.params.id, {
+      status: "denied",
+      adminNote: adminNote.trim(),
+      reviewedAt: new Date(),
+      reviewedBy: actor,
+    });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'denied', ?, 'admin', ?, 'denied', ?)
-    `).run(auditId, req.params.id, adminNote.trim(), request.status, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "denied",
+      actor,
+      details: adminNote.trim(),
+      previousStatus: request.status,
+      newStatus: "denied",
+    });
 
-    // Notification
-    const notifId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-      VALUES (?, ?, ?, ?, 'request_denied', 'Request Denied', ?, ?)
-    `).run(notifId, 'client', request.client_identifier, req.params.id, `Your request has been denied. Reason: ${adminNote.trim()}`, now);
+    await storage.createNotification({
+      requestId: req.params.id,
+      recipientType: "client",
+      recipientId: request.clientIdentifier,
+      type: "request_denied",
+      title: "Request Denied",
+      message: `Your request has been denied. Reason: ${adminNote.trim()}`,
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
   // ─── 8. Fulfill Request ──────────────────────────────────────────────
 
   app.post("/api/requests/:id/fulfill", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
     if (!["approved", "partially_approved", "ready_for_pickup"].includes(request.status)) {
       return res.status(400).json({ message: `Cannot fulfill request with status '${request.status}'` });
     }
 
-    const requestItems = rawDb.prepare(
-      "SELECT * FROM request_items WHERE request_id = ? AND approved_quantity > 0"
-    ).all(req.params.id) as any[];
+    const requestItems = (await storage.getRequestItems(req.params.id)).filter(
+      (ri: any) => (ri.approvedQuantity ?? 0) > 0,
+    );
 
     const { items: bodyItems } = req.body || {};
     const fulfillMap = new Map<string, number>();
@@ -1282,74 +1025,83 @@ export async function registerRoutes(
         fulfillMap.set(bi.id, bi.fulfilledQuantity);
       }
     }
+    const actor = actorName(req);
 
-    const now = new Date().toISOString();
+    const client = await pool.connect();
+    let txId: string;
+    try {
+      await client.query("BEGIN");
 
-    // Create transaction
-    const txId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO transactions (id, type, timestamp, client_id, client_name, created_at)
-      VALUES (?, 'OUT', ?, ?, ?, ?)
-    `).run(txId, now, request.client_id || null, request.client_name, now);
+      const txResult = await client.query(
+        `INSERT INTO transactions (type, timestamp, client_id, client_name)
+         VALUES ('OUT', now(), $1, $2) RETURNING id`,
+        [request.clientId || null, request.clientName],
+      );
+      txId = txResult.rows[0].id;
 
-    // Process each item
-    for (const ri of requestItems) {
-      const fulfilledQty = fulfillMap.has(ri.id) ? fulfillMap.get(ri.id)! : ri.approved_quantity;
+      for (const ri of requestItems) {
+        const fulfilledQty = fulfillMap.has(ri.id) ? fulfillMap.get(ri.id)! : ri.approvedQuantity;
 
-      // Decrement inventory quantity
-      rawDb.prepare(
-        "UPDATE inventory_items SET quantity = MAX(0, quantity - ?) WHERE id = ?"
-      ).run(fulfilledQty, ri.inventory_item_id);
+        await client.query(
+          "UPDATE inventory_items SET quantity = GREATEST(0, quantity - $1) WHERE id = $2",
+          [fulfilledQty, ri.inventoryItemId],
+        );
+        await client.query(
+          "UPDATE inventory_items SET reserved_quantity = GREATEST(0, reserved_quantity - $1) WHERE id = $2",
+          [ri.approvedQuantity, ri.inventoryItemId],
+        );
+        await client.query(
+          "UPDATE request_items SET fulfilled_quantity = $1, reserved = false WHERE id = $2",
+          [fulfilledQty, ri.id],
+        );
 
-      // Release reservation
-      rawDb.prepare(
-        "UPDATE inventory_items SET reserved_quantity = MAX(0, reserved_quantity - ?) WHERE id = ?"
-      ).run(ri.approved_quantity, ri.inventory_item_id);
+        const invItem = (await client.query(
+          "SELECT weight_per_unit_lbs, value_per_unit_usd FROM inventory_items WHERE id = $1",
+          [ri.inventoryItemId],
+        )).rows[0];
+        await client.query(
+          `INSERT INTO transaction_items (transaction_id, inventory_item_id, name, quantity, weight_per_unit_lbs, value_per_unit_usd)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [txId, ri.inventoryItemId, ri.itemName, fulfilledQty,
+            invItem?.weight_per_unit_lbs || "0", invItem?.value_per_unit_usd || "0"],
+        );
+      }
 
-      // Update request item
-      rawDb.prepare(
-        "UPDATE request_items SET fulfilled_quantity = ?, reserved = 0 WHERE id = ?"
-      ).run(fulfilledQty, ri.id);
+      await client.query(
+        `UPDATE requests SET status = 'completed', fulfilled_at = now(), transaction_id = $1, updated_at = now()
+         WHERE id = $2`,
+        [txId, req.params.id],
+      );
 
-      // Create transaction item
-      const invItem = rawDb.prepare("SELECT * FROM inventory_items WHERE id = ?").get(ri.inventory_item_id) as any;
-      const txItemId = randomUUID();
-      rawDb.prepare(`
-        INSERT INTO transaction_items (id, transaction_id, inventory_item_id, name, quantity, weight_per_unit_lbs, value_per_unit_usd)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(txItemId, txId, ri.inventory_item_id, ri.item_name, fulfilledQty,
-        invItem?.weight_per_unit_lbs || "0", invItem?.value_per_unit_usd || "0");
+      await client.query(
+        `INSERT INTO request_audit_log (request_id, action, details, actor, previous_status, new_status)
+         VALUES ($1, 'fulfilled', 'Request fulfilled and items distributed', $2, $3, 'completed')`,
+        [req.params.id, actor, request.status],
+      );
+
+      await client.query(
+        `INSERT INTO notifications (recipient_type, recipient_id, request_id, type, title, message)
+         VALUES ('client', $1, $2, 'request_fulfilled', 'Request Completed', 'Your request has been fulfilled. Thank you!')`,
+        [request.clientIdentifier, req.params.id],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      client.release();
+      throw err;
     }
+    client.release();
 
-    // Update request
-    rawDb.prepare(`
-      UPDATE requests SET status = 'completed', fulfilled_at = ?, transaction_id = ?, updated_at = ?
-      WHERE id = ?
-    `).run(now, txId, now, req.params.id);
-
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'fulfilled', 'Request fulfilled and items distributed', 'admin', ?, 'completed', ?)
-    `).run(auditId, req.params.id, request.status, now);
-
-    // Notification
-    const notifId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-      VALUES (?, ?, ?, ?, 'request_fulfilled', 'Request Completed', 'Your request has been fulfilled. Thank you!', ?)
-    `).run(notifId, 'client', request.client_identifier, req.params.id, now);
-
-    const updated = getRequestPayload(req.params.id) as Record<string, unknown>;
-    const transaction = rawDb.prepare("SELECT * FROM transactions WHERE id = ?").get(txId);
+    const updated = await getRequestPayload(req.params.id) as Record<string, unknown>;
+    const transaction = (await pool.query("SELECT * FROM transactions WHERE id = $1", [txId])).rows[0];
     res.json({ ...updated, transaction });
   });
 
   // ─── 9. Cancel Request ───────────────────────────────────────────────
 
   app.post("/api/requests/:id/cancel", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
 
     const terminalStatuses = ["completed", "denied", "expired", "no_show", "cancelled"];
@@ -1357,47 +1109,40 @@ export async function registerRoutes(
       return res.status(400).json({ message: `Cannot cancel request with status '${request.status}'` });
     }
 
-    const now = new Date().toISOString();
-
-    // Release reservations if any
     if (["approved", "partially_approved", "ready_for_pickup"].includes(request.status)) {
-      const reservedItems = rawDb.prepare(
-        "SELECT * FROM request_items WHERE request_id = ? AND reserved = 1"
-      ).all(req.params.id) as any[];
-      for (const ri of reservedItems) {
-        rawDb.prepare(
-          "UPDATE inventory_items SET reserved_quantity = MAX(0, reserved_quantity - ?) WHERE id = ?"
-        ).run(ri.approved_quantity, ri.inventory_item_id);
-      }
-      rawDb.prepare("UPDATE request_items SET reserved = 0 WHERE request_id = ?").run(req.params.id);
+      await releaseRequestReservations(req.params.id);
     }
 
-    rawDb.prepare(`
-      UPDATE requests SET status = 'cancelled', cancelled_at = ?, updated_at = ?
-      WHERE id = ?
-    `).run(now, now, req.params.id);
+    await storage.updateRequest(req.params.id, {
+      status: "cancelled",
+      cancelledAt: new Date(),
+    });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'cancelled', 'Request cancelled', NULL, ?, 'cancelled', ?)
-    `).run(auditId, req.params.id, request.status, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "cancelled",
+      actor: actorName(req),
+      details: "Request cancelled",
+      previousStatus: request.status,
+      newStatus: "cancelled",
+    });
 
-    // Notification
-    const notifId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-      VALUES (?, ?, ?, ?, 'request_cancelled', 'Request Cancelled', 'Your request has been cancelled.', ?)
-    `).run(notifId, 'client', request.client_identifier, req.params.id, now);
+    await storage.createNotification({
+      requestId: req.params.id,
+      recipientType: "client",
+      recipientId: request.clientIdentifier,
+      type: "request_cancelled",
+      title: "Request Cancelled",
+      message: "Your request has been cancelled.",
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
   // ─── 10. No-Show ─────────────────────────────────────────────────────
 
   app.post("/api/requests/:id/no-show", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
 
     const terminalStatuses = ["completed", "denied", "expired", "no_show", "cancelled"];
@@ -1405,47 +1150,37 @@ export async function registerRoutes(
       return res.status(400).json({ message: `Cannot mark no-show for request with status '${request.status}'` });
     }
 
-    const now = new Date().toISOString();
-
-    // Release reservations if any
     if (["approved", "partially_approved", "ready_for_pickup"].includes(request.status)) {
-      const reservedItems = rawDb.prepare(
-        "SELECT * FROM request_items WHERE request_id = ? AND reserved = 1"
-      ).all(req.params.id) as any[];
-      for (const ri of reservedItems) {
-        rawDb.prepare(
-          "UPDATE inventory_items SET reserved_quantity = MAX(0, reserved_quantity - ?) WHERE id = ?"
-        ).run(ri.approved_quantity, ri.inventory_item_id);
-      }
-      rawDb.prepare("UPDATE request_items SET reserved = 0 WHERE request_id = ?").run(req.params.id);
+      await releaseRequestReservations(req.params.id);
     }
 
-    rawDb.prepare(`
-      UPDATE requests SET status = 'no_show', updated_at = ?
-      WHERE id = ?
-    `).run(now, req.params.id);
+    await storage.updateRequest(req.params.id, { status: "no_show" });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'no_show', 'Client did not pick up', 'admin', ?, 'no_show', ?)
-    `).run(auditId, req.params.id, request.status, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "no_show",
+      actor: actorName(req),
+      details: "Client did not pick up",
+      previousStatus: request.status,
+      newStatus: "no_show",
+    });
 
-    // Notification
-    const notifId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-      VALUES (?, ?, ?, ?, 'request_no_show', 'No-Show Recorded', 'You were marked as a no-show for your request. Reserved items have been released.', ?)
-    `).run(notifId, 'client', request.client_identifier, req.params.id, now);
+    await storage.createNotification({
+      requestId: req.params.id,
+      recipientType: "client",
+      recipientId: request.clientIdentifier,
+      type: "request_no_show",
+      title: "No-Show Recorded",
+      message: "You were marked as a no-show for your request. Reserved items have been released.",
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
   // ─── 11. Extend Pickup Deadline ──────────────────────────────────────
 
   app.post("/api/requests/:id/extend", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
     if (!["approved", "partially_approved", "ready_for_pickup"].includes(request.status)) {
       return res.status(400).json({ message: `Cannot extend deadline for request with status '${request.status}'` });
@@ -1456,26 +1191,24 @@ export async function registerRoutes(
       return res.status(400).json({ message: "newDeadline (ISO string) is required" });
     }
 
-    const now = new Date().toISOString();
-    rawDb.prepare(`
-      UPDATE requests SET pickup_deadline = ?, updated_at = ?
-      WHERE id = ?
-    `).run(newDeadline, now, req.params.id);
+    await storage.updateRequest(req.params.id, { pickupDeadline: newDeadline });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'deadline_extended', ?, 'admin', ?, ?, ?)
-    `).run(auditId, req.params.id, `Pickup deadline extended to ${newDeadline}`, request.status, request.status, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "deadline_extended",
+      actor: actorName(req),
+      details: `Pickup deadline extended to ${newDeadline}`,
+      previousStatus: request.status,
+      newStatus: request.status,
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
   // ─── 12. Add Admin Note ──────────────────────────────────────────────
 
   app.post("/api/requests/:id/note", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
 
     const { note } = req.body;
@@ -1483,138 +1216,145 @@ export async function registerRoutes(
       return res.status(400).json({ message: "note is required" });
     }
 
-    const now = new Date().toISOString();
-    rawDb.prepare(`
-      UPDATE requests SET admin_note = ?, updated_at = ?
-      WHERE id = ?
-    `).run(note, now, req.params.id);
+    await storage.updateRequest(req.params.id, { adminNote: note });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'note_added', ?, 'admin', ?, ?, ?)
-    `).run(auditId, req.params.id, note, request.status, request.status, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "note_added",
+      actor: actorName(req),
+      details: note,
+      previousStatus: request.status,
+      newStatus: request.status,
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
   // ─── 13. Mark Under Review ───────────────────────────────────────────
 
   app.post("/api/requests/:id/review", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
     if (request.status !== "pending") {
       return res.status(400).json({ message: `Cannot mark as under review from status '${request.status}'` });
     }
 
-    const now = new Date().toISOString();
-    rawDb.prepare(`
-      UPDATE requests SET status = 'under_review', updated_at = ?
-      WHERE id = ?
-    `).run(now, req.params.id);
+    await storage.updateRequest(req.params.id, { status: "under_review" });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'review_started', 'Request marked as under review', 'admin', 'pending', 'under_review', ?)
-    `).run(auditId, req.params.id, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "review_started",
+      actor: actorName(req),
+      details: "Request marked as under review",
+      previousStatus: "pending",
+      newStatus: "under_review",
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
   // ─── 14. Mark Ready for Pickup ───────────────────────────────────────
 
   app.post("/api/requests/:id/ready", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = await storage.getRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
     if (!["approved", "partially_approved"].includes(request.status)) {
       return res.status(400).json({ message: `Cannot mark as ready from status '${request.status}'` });
     }
 
-    const now = new Date().toISOString();
-    rawDb.prepare(`
-      UPDATE requests SET status = 'ready_for_pickup', updated_at = ?
-      WHERE id = ?
-    `).run(now, req.params.id);
+    await storage.updateRequest(req.params.id, { status: "ready_for_pickup" });
 
-    // Audit log
-    const auditId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO request_audit_log (id, request_id, action, details, actor, previous_status, new_status, created_at)
-      VALUES (?, ?, 'ready_for_pickup', 'Items are ready for client pickup', 'admin', ?, 'ready_for_pickup', ?)
-    `).run(auditId, req.params.id, request.status, now);
+    await storage.createAuditLogEntry({
+      requestId: req.params.id,
+      action: "ready_for_pickup",
+      actor: actorName(req),
+      details: "Items are ready for client pickup",
+      previousStatus: request.status,
+      newStatus: "ready_for_pickup",
+    });
 
-    // Notification
-    const notifId = randomUUID();
-    rawDb.prepare(`
-      INSERT INTO notifications (id, recipient_type, recipient_id, request_id, type, title, message, created_at)
-      VALUES (?, ?, ?, ?, 'request_ready', 'Ready for Pickup', 'Your items are ready for pickup!', ?)
-    `).run(notifId, 'client', request.client_identifier, req.params.id, now);
+    await storage.createNotification({
+      requestId: req.params.id,
+      recipientType: "client",
+      recipientId: request.clientIdentifier,
+      type: "request_ready",
+      title: "Ready for Pickup",
+      message: "Your items are ready for pickup!",
+    });
 
-    res.json(getRequestPayload(req.params.id));
+    res.json(await getRequestPayload(req.params.id));
   });
 
-  // ─── 15. Get Notifications ───────────────────────────────────────────
+  // ─── 15. Get Notifications (staff view, by recipient) ────────────────
 
   app.get("/api/notifications/:recipientId", async (req, res) => {
-    const notifications = rawDb.prepare(
-      "SELECT * FROM notifications WHERE recipient_id = ? ORDER BY created_at DESC"
-    ).all(req.params.recipientId) as any[];
-    res.json(notifications.map(mapNotificationRow));
+    const notifications = await storage.getNotifications(req.params.recipientId);
+    res.json(notifications);
   });
 
   // ─── 16. Mark Notification Read ──────────────────────────────────────
 
   app.post("/api/notifications/:id/read", async (req, res) => {
-    rawDb.prepare("UPDATE notifications SET read = 1 WHERE id = ?").run(req.params.id);
+    await storage.markNotificationRead(req.params.id);
     res.json({ success: true });
   });
 
   // ─── Donor Management ─────────────────────────────────────────────
 
+  async function donorTransactions(donorId: string, donorName: string) {
+    const { rows } = await pool.query(
+      `SELECT * FROM transactions
+       WHERE type = 'IN' AND (donor_id = $1 OR donor = $2)
+       ORDER BY timestamp DESC`,
+      [donorId, donorName],
+    );
+    return rows;
+  }
+
+  async function transactionItemsFor(txId: string) {
+    const { rows } = await pool.query(
+      "SELECT * FROM transaction_items WHERE transaction_id = $1",
+      [txId],
+    );
+    return rows;
+  }
+
   app.get("/api/donors", async (_req, res) => {
     const donors = await storage.getDonors();
-    // Add computed stats for each donor
-    const withStats = donors.map((d: any) => {
-      const txRows = rawDb.prepare(
-        "SELECT * FROM transactions WHERE type = 'IN' AND (donor_id = ? OR donor = ?) ORDER BY timestamp DESC"
-      ).all(d.id, d.name) as any[];
-      let totalItems = 0;
-      let totalWeight = 0;
-      let totalValue = 0;
-      for (const tx of txRows) {
-        const items = rawDb.prepare("SELECT * FROM transaction_items WHERE transaction_id = ?").all(tx.id) as any[];
-        for (const item of items) {
-          totalItems += item.quantity || 0;
-          totalWeight += (parseFloat(item.weight_per_unit_lbs) || 0) * (item.quantity || 0);
-          totalValue += (parseFloat(item.value_per_unit_usd) || 0) * (item.quantity || 0);
+    const withStats = await Promise.all(
+      donors.map(async (d: any) => {
+        const txRows = await donorTransactions(d.id, d.name);
+        let totalItems = 0;
+        let totalWeight = 0;
+        let totalValue = 0;
+        for (const tx of txRows) {
+          const items = await transactionItemsFor(tx.id);
+          for (const item of items) {
+            totalItems += item.quantity || 0;
+            totalWeight += (parseFloat(item.weight_per_unit_lbs) || 0) * (item.quantity || 0);
+            totalValue += (parseFloat(item.value_per_unit_usd) || 0) * (item.quantity || 0);
+          }
         }
-      }
-      const lastTimestamp = txRows[0]?.timestamp ?? null;
-      return {
-        ...d,
-        totalDonations: txRows.length,
-        // UI-facing short names (donors.tsx reads these)
-        totalItems,
-        lastDonation: lastTimestamp,
-        // Long-form names kept for any existing readers
-        totalItemsDonated: totalItems,
-        totalWeightDonated: Math.round(totalWeight * 100) / 100,
-        totalValueDonated: Math.round(totalValue * 100) / 100,
-        lastDonationDate: lastTimestamp,
-      };
-    });
+        const lastTimestamp = txRows[0]?.timestamp ?? null;
+        return {
+          ...d,
+          totalDonations: txRows.length,
+          totalItems,
+          lastDonation: lastTimestamp,
+          totalItemsDonated: totalItems,
+          totalWeightDonated: Math.round(totalWeight * 100) / 100,
+          totalValueDonated: Math.round(totalValue * 100) / 100,
+          lastDonationDate: lastTimestamp,
+        };
+      }),
+    );
     res.json(withStats);
   });
 
   app.get("/api/donors/:id/export", async (req, res) => {
     const donor = await storage.getDonor(req.params.id);
     if (!donor) return res.status(404).json({ message: "Donor not found" });
-    const txRows = rawDb.prepare(
-      "SELECT * FROM transactions WHERE type = 'IN' AND (donor_id = ? OR donor = ?) ORDER BY timestamp DESC"
-    ).all(donor.id, donor.name) as any[];
+    const txRows = await donorTransactions(donor.id, donor.name);
 
     let totalItems = 0, totalWeight = 0, totalValue = 0;
     const lines: string[] = [];
@@ -1624,7 +1364,7 @@ export async function registerRoutes(
     lines.push("");
     lines.push("Date,Items,Total Qty,Total Weight (lbs),Total Value ($)");
     for (const tx of txRows) {
-      const items = rawDb.prepare("SELECT * FROM transaction_items WHERE transaction_id = ?").all(tx.id) as any[];
+      const items = await transactionItemsFor(tx.id);
       let qty = 0, wt = 0, val = 0;
       const names: string[] = [];
       for (const item of items) {
@@ -1658,36 +1398,10 @@ export async function registerRoutes(
   app.get("/api/donors/:id/history", async (req, res) => {
     const donor = await storage.getDonor(req.params.id);
     if (!donor) return res.status(404).json({ message: "Donor not found" });
-    const txRows = rawDb.prepare(
-      "SELECT * FROM transactions WHERE type = 'IN' AND (donor_id = ? OR donor = ?) ORDER BY timestamp DESC"
-    ).all(donor.id, donor.name) as any[];
+    const txRows = await donorTransactions(donor.id, donor.name);
 
-    interface DonationHistoryItemOut {
-      id: string;
-      type: string;
-      date: string;
-      source: string | null;
-      donor: string | null;
-      latitude: number | null;
-      longitude: number | null;
-      accuracy: number | null;
-      items: Array<{
-        id: string;
-        inventoryItemId: string | null;
-        name: string;
-        quantity: number;
-        weight: number;
-        value: number;
-      }>;
-      totalQuantity: number;
-      totalWeight: number;
-      totalValue: number;
-    }
-
-    const history: DonationHistoryItemOut[] = txRows.map((tx: any) => {
-      const rawItems = rawDb
-        .prepare("SELECT * FROM transaction_items WHERE transaction_id = ?")
-        .all(tx.id) as any[];
+    const history = await Promise.all(txRows.map(async (tx: any) => {
+      const rawItems = await transactionItemsFor(tx.id);
       const items = rawItems.map((item: any) => {
         const weightPerUnit = parseFloat(item.weight_per_unit_lbs) || 0;
         const valuePerUnit = parseFloat(item.value_per_unit_usd) || 0;
@@ -1718,19 +1432,17 @@ export async function registerRoutes(
         totalWeight,
         totalValue,
       };
-    });
+    }));
     res.json(history);
   });
 
   app.get("/api/donors/:id", async (req, res) => {
     const donor = await storage.getDonor(req.params.id);
     if (!donor) return res.status(404).json({ message: "Donor not found" });
-    const txRows = rawDb.prepare(
-      "SELECT * FROM transactions WHERE type = 'IN' AND (donor_id = ? OR donor = ?) ORDER BY timestamp DESC"
-    ).all(donor.id, donor.name) as any[];
+    const txRows = await donorTransactions(donor.id, donor.name);
     let totalItems = 0, totalWeight = 0, totalValue = 0;
     for (const tx of txRows) {
-      const items = rawDb.prepare("SELECT * FROM transaction_items WHERE transaction_id = ?").all(tx.id) as any[];
+      const items = await transactionItemsFor(tx.id);
       for (const item of items) {
         totalItems += item.quantity || 0;
         totalWeight += (parseFloat(item.weight_per_unit_lbs) || 0) * (item.quantity || 0);
@@ -1750,14 +1462,23 @@ export async function registerRoutes(
   });
 
   app.post("/api/donors", async (req, res) => {
-    const { name } = req.body;
-    if (!name?.trim()) return res.status(400).json({ message: "Donor name is required" });
-    const donor = await storage.createDonor(req.body);
+    const result = insertDonorSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+    }
+    if (!result.data.name?.trim()) {
+      return res.status(400).json({ message: "Donor name is required" });
+    }
+    const donor = await storage.createDonor(result.data);
     res.status(201).json(donor);
   });
 
   app.patch("/api/donors/:id", async (req, res) => {
-    const updated = await storage.updateDonor(req.params.id, req.body);
+    const result = insertDonorSchema.partial().safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+    }
+    const updated = await storage.updateDonor(req.params.id, result.data);
     if (!updated) return res.status(404).json({ message: "Donor not found" });
     res.json(updated);
   });
@@ -1769,31 +1490,26 @@ export async function registerRoutes(
   });
 
   // ─── Emergency Shop Appointment Reports ─────────────────────────────
-  //
-  // Aggregates per-client emergency check-out counts so the UI can:
-  //  - Flag students with more than one Emergency Shop Appointment
-  //  - Show a dedicated "Emergencies" category in reports
-  //
+
   app.get("/api/reports/emergencies", async (_req, res) => {
     try {
-      // Per-client emergency totals (joined back to clients so we always have the latest name)
-      const perClient = rawDb.prepare(`
+      const perClient = (await pool.query(`
         SELECT
-          COALESCE(t.client_id, '') AS client_id,
+          COALESCE(t.client_id::text, '') AS client_id,
           COALESCE(c.name, t.client_name) AS client_name,
           COALESCE(c.identifier, '') AS client_identifier,
-          COUNT(*) AS emergency_count,
+          COUNT(*)::int AS emergency_count,
           MAX(t.timestamp) AS last_emergency_at
         FROM transactions t
         LEFT JOIN clients c ON c.id = t.client_id
-        WHERE t.type = 'OUT' AND t.is_emergency = 1
-        GROUP BY COALESCE(t.client_id, t.client_name)
+        WHERE t.type = 'OUT' AND t.is_emergency = true
+        GROUP BY COALESCE(t.client_id::text, t.client_name), COALESCE(c.name, t.client_name), COALESCE(c.identifier, ''), COALESCE(t.client_id::text, '')
         ORDER BY emergency_count DESC, last_emergency_at DESC
-      `).all() as any[];
+      `)).rows;
 
-      const totalEmergencies = (rawDb.prepare(
-        "SELECT COUNT(*) as count FROM transactions WHERE type = 'OUT' AND is_emergency = 1",
-      ).get() as any)?.count ?? 0;
+      const totalEmergencies = (await pool.query(
+        `SELECT COUNT(*)::int AS count FROM transactions WHERE type = 'OUT' AND is_emergency = true`,
+      )).rows[0]?.count ?? 0;
 
       const flaggedStudents = perClient.filter((r) => r.emergency_count > 1);
 
@@ -1809,20 +1525,13 @@ export async function registerRoutes(
   });
 
   // ─── Monthly Summary CSV ─────────────────────────────────────────────
-  //
-  // Returns a CSV report grouped by month with:
-  //   - Per-item subtotals (units distributed, cost per unit, line total)
-  //   - Per-category subtotals
-  //   - Monthly totals
-  //   - A year-end bottom line with the grand total per year
-  //
+
   app.get("/api/reports/monthly-csv", async (req, res) => {
     try {
       const yearFilter = typeof req.query.year === "string" ? req.query.year : null;
       const includeEmergencyOnly = req.query.emergency === "1" || req.query.emergency === "true";
 
-      // Pull all OUT transactions + their line items + inventory category in one shot
-      const rows = rawDb.prepare(`
+      const rows = (await pool.query(`
         SELECT
           t.id           AS tx_id,
           t.timestamp    AS ts,
@@ -1839,9 +1548,8 @@ export async function registerRoutes(
         LEFT JOIN inventory_items i ON i.id = ti.inventory_item_id
         WHERE t.type = 'OUT'
         ORDER BY t.timestamp ASC
-      `).all() as any[];
+      `)).rows;
 
-      // year → month (1-12) → { categories: Map<category, Map<itemName, {qty,costPerUnit,total}>>, total, emergencyCount }
       type ItemAgg = { quantity: number; costPerUnit: number; total: number };
       type CategoryAgg = { items: Map<string, ItemAgg>; total: number };
       type MonthAgg = { categories: Map<string, CategoryAgg>; total: number; emergencyCount: number };
@@ -1882,12 +1590,10 @@ export async function registerRoutes(
         }
         const itemAgg = catAgg.items.get(itemName)!;
         itemAgg.quantity += qty;
-        // Keep the most recently observed unit cost (price history isn't joined here)
         if (cost > 0) itemAgg.costPerUnit = cost;
         itemAgg.total += lineTotal;
       }
 
-      // Build CSV
       const MONTH_NAMES = [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
@@ -1955,8 +1661,6 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to generate monthly summary" });
     }
   });
-
-  return httpServer;
 }
 
 // ─── CSV helpers ──────────────────────────────────────────────────────

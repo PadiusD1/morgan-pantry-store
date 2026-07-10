@@ -1,13 +1,10 @@
 /**
  * Storage layer – IStorage interface + concrete implementation.
  *
- * The exported `storage` singleton was previously a MemStorage (in-memory Maps).
- * It is now a SqliteStorage backed by a persistent file on disk.
- *
- * Location: %LOCALAPPDATA%\MorganPantryStore\app.db
- *
- * The IStorage interface is unchanged — all route handlers continue to work
- * without modification.
+ * The concrete implementation is PgStorage (server/pg-storage.ts), backed by
+ * Supabase Postgres through drizzle-orm. The previous SqliteStorage lived in
+ * server/sqlite-storage.ts (see git history) and was retired when the app
+ * moved to Vercel serverless, where a file database cannot persist.
  */
 
 import type {
@@ -33,15 +30,20 @@ import type {
   InsertItemGroup,
   ItemGroupItem,
   InsertItemGroupItem,
+  Donor,
+  InsertDonor,
 } from "@shared/schema";
 
-// ─── IStorage interface (unchanged) ─────────────────────────────────────────
+// ─── IStorage interface ──────────────────────────────────────────────────────
 
 export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUsers(): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, user: Partial<InsertUser>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<boolean>;
 
   // Inventory
   getInventoryItems(): Promise<InventoryItem[]>;
@@ -112,6 +114,7 @@ export interface IStorage {
   createRequest(data: any): Promise<any>;
   updateRequest(id: string, data: any): Promise<any | undefined>;
   getRequestsByClientIdentifier(identifier: string): Promise<any[]>;
+  getRequestsByUserId(userId: string): Promise<any[]>;
   getRequestCountSince(identifier: string, since: string): Promise<number>;
 
   // ─── Request Items ────────────────────────────────────────────────────
@@ -136,21 +139,16 @@ export interface IStorage {
   getAvailableQuantity(itemId: string): Promise<number>;
 
   // ─── Donors ─────────────────────────────────────────────────────────
-  getDonors(): Promise<any[]>;
-  getDonor(id: string): Promise<any | undefined>;
-  getDonorByName(name: string): Promise<any | undefined>;
-  createDonor(data: any): Promise<any>;
-  updateDonor(id: string, data: any): Promise<any | undefined>;
+  getDonors(): Promise<Donor[]>;
+  getDonor(id: string): Promise<Donor | undefined>;
+  getDonorByName(name: string): Promise<Donor | undefined>;
+  createDonor(data: InsertDonor): Promise<Donor>;
+  updateDonor(id: string, data: Partial<InsertDonor>): Promise<Donor | undefined>;
   deleteDonor(id: string): Promise<boolean>;
 }
 
-// ─── Concrete implementation: SQLite ────────────────────────────────────────
+// ─── Concrete implementation: Postgres (Supabase) ───────────────────────────
 
-import { initDatabase } from "./db";
-import { SqliteStorage } from "./sqlite-storage";
+import { PgStorage } from "./pg-storage";
 
-const db = initDatabase();
-export const storage: IStorage = new SqliteStorage(db);
-
-/** Direct DB access for one-off maintenance tasks (backfill, migrations). */
-export const rawDb = db;
+export const storage: IStorage = new PgStorage();

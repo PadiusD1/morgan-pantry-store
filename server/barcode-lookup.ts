@@ -1,4 +1,4 @@
-import { log } from "./index";
+import { log } from "./app";
 
 // ─── Server-Side Barcode Result Cache ────────────────────────────────────────
 // Prevents re-hitting external APIs for the same barcode within a session.

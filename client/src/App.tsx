@@ -21,8 +21,11 @@ import DonorsPage from "@/pages/donors";
 import DonorDetailPage from "@/pages/donor-detail";
 import PartnersPage from "@/pages/partners";
 import PartnerDetailPage from "@/pages/partner-detail";
+import LoginPage from "@/pages/login";
+import SignupPage from "@/pages/signup";
 import { AppShell } from "@/components/layout/AppShell";
 import { RepositoryProvider } from "@/lib/repository";
+import { AuthProvider, RequireAuth, STAFF_ROLES } from "@/lib/auth";
 
 function Router() {
   return (
@@ -51,22 +54,40 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <RepositoryProvider>
+        <AuthProvider>
           <Toaster />
           <Switch>
+            <Route path="/login">
+              <LoginPage />
+            </Route>
+            <Route path="/signup">
+              <SignupPage />
+            </Route>
             <Route path="/portal">
-              <PublicRequestPage />
+              {/* Students request food here; staff may preview it too. */}
+              <RequireAuth roles={["student", ...STAFF_ROLES]}>
+                <PublicRequestPage />
+              </RequireAuth>
             </Route>
             <Route path="/kiosk">
-              <KioskPage />
+              {/* Walk-up kiosk is a staff-supervised device. */}
+              <RequireAuth roles={STAFF_ROLES}>
+                <KioskPage />
+              </RequireAuth>
             </Route>
             <Route>
-              <AppShell>
-                <Router />
-              </AppShell>
+              <RequireAuth roles={STAFF_ROLES}>
+                {/* RepositoryProvider stays inside the staff branch: it loads
+                    the full client/transaction datasets, which are staff-only. */}
+                <RepositoryProvider>
+                  <AppShell>
+                    <Router />
+                  </AppShell>
+                </RepositoryProvider>
+              </RequireAuth>
             </Route>
           </Switch>
-        </RepositoryProvider>
+        </AuthProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );
