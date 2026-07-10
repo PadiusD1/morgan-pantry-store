@@ -12,6 +12,8 @@ type ReasonStepProps = {
   cart: Map<string, CartEntry>;
   reason: string;
   onReasonChange: (reason: string) => void;
+  studentNote?: string;
+  onStudentNoteChange?: (note: string) => void;
   onSubmit: () => void;
   onBack: () => void;
   submitting: boolean;
@@ -22,6 +24,8 @@ export function ReasonStep({
   cart,
   reason,
   onReasonChange,
+  studentNote = "",
+  onStudentNoteChange,
   onSubmit,
   onBack,
   submitting,
@@ -70,6 +74,26 @@ export function ReasonStep({
               </p>
             )}
           </div>
+
+          {onStudentNoteChange && (
+            <div className="space-y-1.5">
+              <label
+                className={isKiosk ? "text-lg font-medium" : "text-sm font-medium"}
+                htmlFor="req-student-note"
+              >
+                Note to staff (optional)
+              </label>
+              <Textarea
+                id="req-student-note"
+                value={studentNote}
+                onChange={(e) => onStudentNoteChange(e.target.value)}
+                placeholder="Anything else we should know? (allergies, pickup timing, household details, etc.)"
+                rows={isKiosk ? 4 : 2}
+                className={isKiosk ? "text-lg" : ""}
+                data-testid="textarea-req-student-note"
+              />
+            </div>
+          )}
 
           <div className="space-y-2">
             <p className={`font-medium ${isKiosk ? "text-base" : "text-sm"}`}>

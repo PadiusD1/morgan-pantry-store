@@ -10,10 +10,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { PlusIcon, SearchIcon, XIcon, Trash2Icon } from "lucide-react";
+import { PlusIcon, SearchIcon, XIcon, Trash2Icon, SirenIcon } from "lucide-react";
 
 export default function ClientsPage() {
-  const { clients, upsertClient, transactions, settings } = useRepository();
+  const { clients: allClients, upsertClient, transactions, settings } = useRepository();
+  // The Clients page is for student clients only — partner orgs live under /partners.
+  // Treat NULL/unset client_type as 'student' for backward compatibility with existing rows.
+  const clients = useMemo(
+    () => allClients.filter((c) => !c.clientType || c.clientType === "student"),
+    [allClients],
+  );
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
@@ -97,6 +103,17 @@ export default function ClientsPage() {
     if (!visit) return undefined;
     return new Date(visit.timestamp);
   }
+
+  // Per-client emergency count. Students with more than 1 Emergency Shop Appointment
+  // are surfaced as "flagged" in the Status column.
+  const emergencyCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const tx of transactions) {
+      if (tx.type !== "OUT" || !tx.isEmergency || !tx.clientId) continue;
+      map.set(tx.clientId, (map.get(tx.clientId) ?? 0) + 1);
+    }
+    return map;
+  }, [transactions]);
 
   function visitWarning(clientId: string) {
     const last = lastVisitDate(clientId);
@@ -206,12 +223,24 @@ export default function ClientsPage() {
                       ) : ""}
                     </TableCell>
                     <TableCell className="text-xs">
-                      <Badge
-                        variant={c.status === "active" ? "default" : "secondary"}
-                        className="text-[10px] h-5 px-1.5"
-                      >
-                        {c.status ?? "active"}
-                      </Badge>
+                      <div className="flex flex-col gap-1">
+                        <Badge
+                          variant={c.status === "active" ? "default" : "secondary"}
+                          className="text-[10px] h-5 px-1.5 w-fit"
+                        >
+                          {c.status ?? "active"}
+                        </Badge>
+                        {(emergencyCounts.get(c.id) ?? 0) > 1 && (
+                          <Badge
+                            variant="destructive"
+                            className="text-[10px] h-5 px-1.5 w-fit"
+                            data-testid={`badge-flagged-${c.id}`}
+                          >
+                            <SirenIcon className="h-3 w-3 mr-1" />
+                            Flagged · {emergencyCounts.get(c.id)} emergencies
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-xs" data-testid={`text-client-last-visit-${c.id}`}>
                       {last ? last.toLocaleDateString() : "No visits yet"}

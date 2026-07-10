@@ -4,7 +4,7 @@ import { SidebarProvider, Sidebar, SidebarContent, SidebarGroup, SidebarGroupLab
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { BoxesIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, MonitorIcon, PackageIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
+import { BoxesIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, Handshake, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, MonitorIcon, PackageIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: HomeIcon, testId: "nav-dashboard" },
@@ -12,6 +12,7 @@ const navItems = [
   { href: "/check-in", label: "Check-In", icon: ClipboardListIcon, testId: "nav-check-in" },
   { href: "/check-out", label: "Check-Out", icon: ShoppingCartIcon, testId: "nav-check-out" },
   { href: "/clients", label: "Clients", icon: UsersIcon, testId: "nav-clients" },
+  { href: "/partners", label: "Partners", icon: Handshake, testId: "nav-partners" },
   { href: "/donors", label: "Donors", icon: HeartHandshakeIcon, testId: "nav-donors" },
   { href: "/item-groups", label: "Item Groups", icon: LayersIcon, testId: "nav-item-groups" },
   { href: "/requests", label: "Requests", icon: InboxIcon, testId: "nav-requests" },
@@ -148,6 +149,7 @@ function pageTitleForPath(path: string) {
   if (path.startsWith("/check-in")) return "Check-In (Receiving)";
   if (path.startsWith("/check-out")) return "Check-Out (Distribution)";
   if (path.startsWith("/clients")) return "Clients";
+  if (path.startsWith("/partners")) return "Partners Hub";
   if (path.startsWith("/donors")) return "Donors";
   if (path.startsWith("/item-groups")) return "Item Groups";
   if (path.startsWith("/requests")) return "Requests";
@@ -162,6 +164,7 @@ function pageSubtitleForPath(path: string) {
   if (path.startsWith("/check-in")) return "Receive new product into inventory and log sources.";
   if (path.startsWith("/check-out")) return "Build distribution carts, track visits, and decrement stock.";
   if (path.startsWith("/clients")) return "Maintain client records and visit history with gentle frequency checks.";
+  if (path.startsWith("/partners")) return "Manage partner organizations that receive bulk distributions from the pantry.";
   if (path.startsWith("/donors")) return "Track donor profiles, donation history, and generate donor reports.";
   if (path.startsWith("/item-groups")) return "Create pre-built distribution bundles for quick check-out.";
   if (path.startsWith("/requests")) return "Review and manage item requests from students and visitors.";

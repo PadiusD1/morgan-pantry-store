@@ -13,6 +13,145 @@ import {
   insertItemGroupItemSchema,
 } from "@shared/schema";
 
+function mapRequestRow(row: any) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    clientId: row.client_id ?? null,
+    clientName: row.client_name,
+    clientIdentifier: row.client_identifier,
+    clientEmail: row.client_email ?? null,
+    clientPhone: row.client_phone ?? null,
+    reason: row.reason,
+    studentNote: row.student_note ?? null,
+    status: row.status,
+    adminNote: row.admin_note ?? null,
+    reviewedBy: row.reviewed_by ?? null,
+    reviewedAt: row.reviewed_at ?? null,
+    pickupDeadline: row.pickup_deadline ?? null,
+    fulfilledAt: row.fulfilled_at ?? null,
+    cancelledAt: row.cancelled_at ?? null,
+    transactionId: row.transaction_id ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRequestItemRow(row: any) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    inventoryItemId: row.inventory_item_id,
+    itemName: row.item_name,
+    itemCategory: row.item_category ?? null,
+    requestedQuantity: row.requested_quantity,
+    approvedQuantity: row.approved_quantity ?? null,
+    fulfilledQuantity: row.fulfilled_quantity ?? null,
+    reserved: row.reserved === 1 || row.reserved === true,
+    denialReason: row.denial_reason ?? null,
+  };
+}
+
+function mapAuditLogRow(row: any) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    action: row.action,
+    actor: row.actor ?? null,
+    details: row.details ?? null,
+    previousStatus: row.previous_status ?? null,
+    newStatus: row.new_status ?? null,
+    createdAt: row.created_at,
+  };
+}
+
+function mapNotificationRow(row: any) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    requestId: row.request_id ?? null,
+    recipientType: row.recipient_type,
+    recipientId: row.recipient_id,
+    type: row.type,
+    title: row.title,
+    message: row.message,
+    read: row.read === 1 || row.read === true,
+    createdAt: row.created_at,
+  };
+}
+
+function getRequestItemsPayload(requestId: string) {
+  return (rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(requestId) as any[])
+    .map(mapRequestItemRow);
+}
+
+function getRequestPayload(requestId: string, options: { auditLog?: boolean; clientHistory?: boolean } = {}) {
+  const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as any;
+  if (!request) return undefined;
+  const payload: any = {
+    ...mapRequestRow(request),
+    items: getRequestItemsPayload(requestId),
+  };
+  if (options.auditLog) {
+    payload.auditLog = (rawDb.prepare(
+      "SELECT * FROM request_audit_log WHERE request_id = ? ORDER BY created_at ASC",
+    ).all(requestId) as any[]).map(mapAuditLogRow);
+  }
+  if (options.clientHistory) {
+    payload.clientHistory = (rawDb.prepare(
+      "SELECT * FROM requests WHERE client_identifier = ? ORDER BY created_at DESC",
+    ).all(request.client_identifier) as any[]).map(mapRequestRow);
+  }
+  return payload;
+}
+
+function getHydratedItemGroupItems(groupId: string) {
+  return (rawDb.prepare(`
+    SELECT
+      igi.id,
+      igi.group_id,
+      igi.inventory_item_id,
+      igi.quantity,
+      ii.name,
+      ii.brand,
+      ii.category
+    FROM item_group_items igi
+    LEFT JOIN inventory_items ii ON ii.id = igi.inventory_item_id
+    WHERE igi.group_id = ?
+    ORDER BY ii.name COLLATE NOCASE, igi.id
+  `).all(groupId) as any[]).map((row) => ({
+    id: row.id,
+    groupId: row.group_id,
+    inventoryItemId: row.inventory_item_id,
+    name: row.name ?? "Missing item",
+    brand: row.brand ?? null,
+    category: row.category ?? null,
+    quantity: row.quantity ?? 1,
+    defaultQuantity: row.quantity ?? 1,
+  }));
+}
+
+function parseItemGroupItems(rawItems: unknown, groupId: string) {
+  if (!Array.isArray(rawItems)) return [];
+
+  const parsed = [];
+  for (const rawItem of rawItems as any[]) {
+    const quantity = Number(rawItem.quantity ?? rawItem.defaultQuantity ?? 1);
+    const itemResult = insertItemGroupItemSchema.safeParse({
+      inventoryItemId: rawItem.inventoryItemId,
+      groupId,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? Math.floor(quantity) : 1,
+    });
+    if (!itemResult.success) {
+      throw new Error("Invalid bundle item data");
+    }
+    parsed.push(itemResult.data);
+  }
+  return parsed;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express,
@@ -242,8 +381,18 @@ export async function registerRoutes(
 
   // ─── Clients ─────────────────────────────────────────────────────────
 
-  app.get("/api/clients", async (_req, res) => {
+  app.get("/api/clients", async (req, res) => {
     const clients = await storage.getClients();
+    const typeFilter = typeof req.query.type === "string" ? req.query.type : null;
+    if (typeFilter === "partner") {
+      return res.json(clients.filter((c: any) => c.clientType === "partner"));
+    }
+    if (typeFilter === "student") {
+      // Treat NULL/unset client_type as 'student' for backward compatibility
+      return res.json(
+        clients.filter((c: any) => !c.clientType || c.clientType === "student"),
+      );
+    }
     res.json(clients);
   });
 
@@ -406,20 +555,14 @@ export async function registerRoutes(
 
   app.get("/api/item-groups", async (_req, res) => {
     const groups = await storage.getItemGroups();
-    const withItems = await Promise.all(
-      groups.map(async (g) => {
-        const items = await storage.getItemGroupItems(g.id);
-        return { ...g, items };
-      }),
-    );
+    const withItems = groups.map((g) => ({ ...g, items: getHydratedItemGroupItems(g.id) }));
     res.json(withItems);
   });
 
   app.get("/api/item-groups/:id", async (req, res) => {
     const group = await storage.getItemGroup(req.params.id);
     if (!group) return res.status(404).json({ message: "Not found" });
-    const items = await storage.getItemGroupItems(group.id);
-    res.json({ ...group, items });
+    res.json({ ...group, items: getHydratedItemGroupItems(group.id) });
   });
 
   app.post("/api/item-groups", async (req, res) => {
@@ -430,32 +573,49 @@ export async function registerRoutes(
     }
     const group = await storage.createItemGroup(result.data);
 
-    const createdItems = [];
-    if (Array.isArray(rawItems)) {
-      for (const rawItem of rawItems) {
-        const itemResult = insertItemGroupItemSchema.safeParse({
-          ...rawItem,
-          groupId: group.id,
-        });
-        if (itemResult.success) {
-          const created = await storage.createItemGroupItem(itemResult.data);
-          createdItems.push(created);
-        }
+    try {
+      for (const item of parseItemGroupItems(rawItems, group.id)) {
+        await storage.createItemGroupItem(item);
       }
+    } catch (err: any) {
+      await storage.deleteItemGroup(group.id);
+      return res.status(400).json({ message: err.message || "Invalid bundle item data" });
     }
 
-    res.status(201).json({ ...group, items: createdItems });
+    res.status(201).json({ ...group, items: getHydratedItemGroupItems(group.id) });
   });
 
   app.patch("/api/item-groups/:id", async (req, res) => {
-    const result = insertItemGroupSchema.partial().safeParse(req.body);
+    const { items: rawItems, ...groupBody } = req.body;
+    const result = insertItemGroupSchema.partial().safeParse(groupBody);
     if (!result.success) {
       return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
     }
     const updated = await storage.updateItemGroup(req.params.id, result.data);
     if (!updated) return res.status(404).json({ message: "Not found" });
-    const items = await storage.getItemGroupItems(updated.id);
-    res.json({ ...updated, items });
+
+    if (Array.isArray(rawItems)) {
+      let parsedItems;
+      try {
+        parsedItems = parseItemGroupItems(rawItems, updated.id);
+      } catch (err: any) {
+        return res.status(400).json({ message: err.message || "Invalid bundle item data" });
+      }
+
+      const replaceItems = rawDb.transaction(() => {
+        rawDb.prepare("DELETE FROM item_group_items WHERE group_id = ?").run(updated.id);
+        const insertItem = rawDb.prepare(`
+          INSERT INTO item_group_items (id, group_id, inventory_item_id, quantity)
+          VALUES (?, ?, ?, ?)
+        `);
+        for (const item of parsedItems) {
+          insertItem.run(randomUUID(), item.groupId, item.inventoryItemId, item.quantity ?? 1);
+        }
+      });
+      replaceItems();
+    }
+
+    res.json({ ...updated, items: getHydratedItemGroupItems(updated.id) });
   });
 
   app.delete("/api/item-groups/:id", async (req, res) => {
@@ -475,7 +635,8 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
     }
     const item = await storage.createItemGroupItem(result.data);
-    res.status(201).json(item);
+    const hydrated = getHydratedItemGroupItems(group.id).find((i) => i.id === item.id) ?? item;
+    res.status(201).json(hydrated);
   });
 
   app.delete("/api/item-group-items/:id", async (req, res) => {
@@ -557,7 +718,7 @@ export async function registerRoutes(
     let todayRequests = 0;
     let expiredNoShowCount = 0;
     try {
-      pendingRequests = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").get() as any)?.count ?? 0;
+      pendingRequests = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status IN ('pending','under_review')").get() as any)?.count ?? 0;
       approvedReadyForPickup = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status IN ('approved','partially_approved','ready_for_pickup')").get() as any)?.count ?? 0;
       todayRequests = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE created_at >= ?").get(todayStart) as any)?.count ?? 0;
       expiredNoShowCount = (rawDb.prepare("SELECT COUNT(*) as count FROM requests WHERE status IN ('expired','no_show') AND updated_at >= ?").get(weekAgoIso) as any)?.count ?? 0;
@@ -673,7 +834,7 @@ export async function registerRoutes(
   // ─── 2. Submit Request ───────────────────────────────────────────────
 
   app.post("/api/requests", async (req, res) => {
-    const { clientName, clientIdentifier, clientEmail, clientPhone, clientId, reason, items } = req.body;
+    const { clientName, clientIdentifier, clientEmail, clientPhone, clientId, reason, items, studentNote } = req.body;
 
     // Validate required fields
     if (!clientName || typeof clientName !== "string" || !clientName.trim()) {
@@ -718,26 +879,28 @@ export async function registerRoutes(
 
     // Create request
     rawDb.prepare(`
-      INSERT INTO requests (id, client_name, client_identifier, client_email, client_phone, client_id, reason, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-    `).run(requestId, clientName.trim(), clientIdentifier.trim(), clientEmail || null, clientPhone || null, clientId || null, reason.trim(), now, now);
+      INSERT INTO requests (id, client_name, client_identifier, client_email, client_phone, client_id, reason, student_note, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(
+      requestId,
+      clientName.trim(),
+      clientIdentifier.trim(),
+      clientEmail || null,
+      clientPhone || null,
+      clientId || null,
+      reason.trim(),
+      typeof studentNote === "string" && studentNote.trim() ? studentNote.trim() : null,
+      now,
+      now,
+    );
 
     // Create request items
-    const createdItems: any[] = [];
     for (const item of items) {
       const itemId = randomUUID();
       rawDb.prepare(`
         INSERT INTO request_items (id, request_id, inventory_item_id, item_name, item_category, requested_quantity)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(itemId, requestId, item.inventoryItemId, item.itemName, item.itemCategory || null, item.requestedQuantity);
-      createdItems.push({
-        id: itemId,
-        requestId,
-        inventoryItemId: item.inventoryItemId,
-        itemName: item.itemName,
-        itemCategory: item.itemCategory || null,
-        requestedQuantity: item.requestedQuantity,
-      });
     }
 
     // Audit log
@@ -754,8 +917,7 @@ export async function registerRoutes(
       VALUES (?, ?, ?, ?, 'request_submitted', 'Request Submitted', 'Your request has been submitted and is pending review.', ?)
     `).run(notifId, 'client', clientIdentifier.trim(), requestId, now);
 
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) as Record<string, unknown>;
-    res.status(201).json({ ...request, items: createdItems });
+    res.status(201).json(getRequestPayload(requestId));
   });
 
   // ─── 3. Public Lookup by Identifier ──────────────────────────────────
@@ -764,10 +926,10 @@ export async function registerRoutes(
     const rows = rawDb.prepare(
       "SELECT * FROM requests WHERE client_identifier = ? ORDER BY created_at DESC"
     ).all(req.params.identifier) as any[];
-    const withItems = rows.map((r: any) => {
-      const items = rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(r.id);
-      return { ...r, items };
-    });
+    const withItems = rows.map((r: any) => ({
+      ...mapRequestRow(r),
+      items: getRequestItemsPayload(r.id),
+    }));
     res.json(withItems);
   });
 
@@ -935,24 +1097,19 @@ export async function registerRoutes(
     }
 
     const requests = rawDb.prepare(sql).all(...params) as any[];
-    const withItems = requests.map((r: any) => {
-      const items = rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(r.id);
-      return { ...r, items };
-    });
+    const withItems = requests.map((r: any) => ({
+      ...mapRequestRow(r),
+      items: getRequestItemsPayload(r.id),
+    }));
     res.json(withItems);
   });
 
   // ─── 5. Request Detail ───────────────────────────────────────────────
 
   app.get("/api/requests/:id", async (req, res) => {
-    const request = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as any;
+    const request = getRequestPayload(req.params.id, { auditLog: true, clientHistory: true });
     if (!request) return res.status(404).json({ message: "Request not found" });
-    const items = rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(req.params.id);
-    const auditLog = rawDb.prepare("SELECT * FROM request_audit_log WHERE request_id = ? ORDER BY created_at ASC").all(req.params.id);
-    const clientHistory = rawDb.prepare(
-      "SELECT * FROM requests WHERE client_identifier = ? ORDER BY created_at DESC"
-    ).all(request.client_identifier);
-    res.json({ ...request, items, auditLog, clientHistory });
+    res.json(request);
   });
 
   // ─── 6. Approve Request ──────────────────────────────────────────────
@@ -1061,9 +1218,7 @@ export async function registerRoutes(
         return res.status(409).json({ message: err.message || "Failed to reserve inventory" });
       }
 
-      const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as Record<string, unknown>;
-      const updatedItems = rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(req.params.id);
-      res.json({ ...updated, items: updatedItems });
+      res.json(getRequestPayload(req.params.id));
     } catch (err: any) {
       console.error("[approve] error:", err);
       res.status(500).json({ message: "Internal error approving request" });
@@ -1104,8 +1259,7 @@ export async function registerRoutes(
       VALUES (?, ?, ?, ?, 'request_denied', 'Request Denied', ?, ?)
     `).run(notifId, 'client', request.client_identifier, req.params.id, `Your request has been denied. Reason: ${adminNote.trim()}`, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 8. Fulfill Request ──────────────────────────────────────────────
@@ -1187,10 +1341,9 @@ export async function registerRoutes(
       VALUES (?, ?, ?, ?, 'request_fulfilled', 'Request Completed', 'Your request has been fulfilled. Thank you!', ?)
     `).run(notifId, 'client', request.client_identifier, req.params.id, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id) as Record<string, unknown>;
-    const updatedItems = rawDb.prepare("SELECT * FROM request_items WHERE request_id = ?").all(req.params.id);
+    const updated = getRequestPayload(req.params.id) as Record<string, unknown>;
     const transaction = rawDb.prepare("SELECT * FROM transactions WHERE id = ?").get(txId);
-    res.json({ ...updated, items: updatedItems, transaction });
+    res.json({ ...updated, transaction });
   });
 
   // ─── 9. Cancel Request ───────────────────────────────────────────────
@@ -1238,8 +1391,7 @@ export async function registerRoutes(
       VALUES (?, ?, ?, ?, 'request_cancelled', 'Request Cancelled', 'Your request has been cancelled.', ?)
     `).run(notifId, 'client', request.client_identifier, req.params.id, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 10. No-Show ─────────────────────────────────────────────────────
@@ -1287,8 +1439,7 @@ export async function registerRoutes(
       VALUES (?, ?, ?, ?, 'request_no_show', 'No-Show Recorded', 'You were marked as a no-show for your request. Reserved items have been released.', ?)
     `).run(notifId, 'client', request.client_identifier, req.params.id, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 11. Extend Pickup Deadline ──────────────────────────────────────
@@ -1318,8 +1469,7 @@ export async function registerRoutes(
       VALUES (?, ?, 'deadline_extended', ?, 'admin', ?, ?, ?)
     `).run(auditId, req.params.id, `Pickup deadline extended to ${newDeadline}`, request.status, request.status, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 12. Add Admin Note ──────────────────────────────────────────────
@@ -1346,8 +1496,7 @@ export async function registerRoutes(
       VALUES (?, ?, 'note_added', ?, 'admin', ?, ?, ?)
     `).run(auditId, req.params.id, note, request.status, request.status, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 13. Mark Under Review ───────────────────────────────────────────
@@ -1372,8 +1521,7 @@ export async function registerRoutes(
       VALUES (?, ?, 'review_started', 'Request marked as under review', 'admin', 'pending', 'under_review', ?)
     `).run(auditId, req.params.id, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 14. Mark Ready for Pickup ───────────────────────────────────────
@@ -1405,8 +1553,7 @@ export async function registerRoutes(
       VALUES (?, ?, ?, ?, 'request_ready', 'Ready for Pickup', 'Your items are ready for pickup!', ?)
     `).run(notifId, 'client', request.client_identifier, req.params.id, now);
 
-    const updated = rawDb.prepare("SELECT * FROM requests WHERE id = ?").get(req.params.id);
-    res.json(updated);
+    res.json(getRequestPayload(req.params.id));
   });
 
   // ─── 15. Get Notifications ───────────────────────────────────────────
@@ -1414,8 +1561,8 @@ export async function registerRoutes(
   app.get("/api/notifications/:recipientId", async (req, res) => {
     const notifications = rawDb.prepare(
       "SELECT * FROM notifications WHERE recipient_id = ? ORDER BY created_at DESC"
-    ).all(req.params.recipientId);
-    res.json(notifications);
+    ).all(req.params.recipientId) as any[];
+    res.json(notifications.map(mapNotificationRow));
   });
 
   // ─── 16. Mark Notification Read ──────────────────────────────────────
@@ -1621,5 +1768,203 @@ export async function registerRoutes(
     res.json({ success: true });
   });
 
+  // ─── Emergency Shop Appointment Reports ─────────────────────────────
+  //
+  // Aggregates per-client emergency check-out counts so the UI can:
+  //  - Flag students with more than one Emergency Shop Appointment
+  //  - Show a dedicated "Emergencies" category in reports
+  //
+  app.get("/api/reports/emergencies", async (_req, res) => {
+    try {
+      // Per-client emergency totals (joined back to clients so we always have the latest name)
+      const perClient = rawDb.prepare(`
+        SELECT
+          COALESCE(t.client_id, '') AS client_id,
+          COALESCE(c.name, t.client_name) AS client_name,
+          COALESCE(c.identifier, '') AS client_identifier,
+          COUNT(*) AS emergency_count,
+          MAX(t.timestamp) AS last_emergency_at
+        FROM transactions t
+        LEFT JOIN clients c ON c.id = t.client_id
+        WHERE t.type = 'OUT' AND t.is_emergency = 1
+        GROUP BY COALESCE(t.client_id, t.client_name)
+        ORDER BY emergency_count DESC, last_emergency_at DESC
+      `).all() as any[];
+
+      const totalEmergencies = (rawDb.prepare(
+        "SELECT COUNT(*) as count FROM transactions WHERE type = 'OUT' AND is_emergency = 1",
+      ).get() as any)?.count ?? 0;
+
+      const flaggedStudents = perClient.filter((r) => r.emergency_count > 1);
+
+      res.json({
+        totalEmergencies,
+        flaggedStudents,
+        perClient,
+      });
+    } catch (err: any) {
+      console.error("[reports/emergencies] error:", err);
+      res.json({ totalEmergencies: 0, flaggedStudents: [], perClient: [] });
+    }
+  });
+
+  // ─── Monthly Summary CSV ─────────────────────────────────────────────
+  //
+  // Returns a CSV report grouped by month with:
+  //   - Per-item subtotals (units distributed, cost per unit, line total)
+  //   - Per-category subtotals
+  //   - Monthly totals
+  //   - A year-end bottom line with the grand total per year
+  //
+  app.get("/api/reports/monthly-csv", async (req, res) => {
+    try {
+      const yearFilter = typeof req.query.year === "string" ? req.query.year : null;
+      const includeEmergencyOnly = req.query.emergency === "1" || req.query.emergency === "true";
+
+      // Pull all OUT transactions + their line items + inventory category in one shot
+      const rows = rawDb.prepare(`
+        SELECT
+          t.id           AS tx_id,
+          t.timestamp    AS ts,
+          t.is_emergency AS is_emergency,
+          t.client_name  AS client_name,
+          ti.inventory_item_id AS inv_id,
+          ti.name        AS item_name,
+          ti.quantity    AS quantity,
+          ti.weight_per_unit_lbs AS weight_per_unit,
+          ti.value_per_unit_usd  AS value_per_unit,
+          i.category     AS category
+        FROM transactions t
+        JOIN transaction_items ti ON ti.transaction_id = t.id
+        LEFT JOIN inventory_items i ON i.id = ti.inventory_item_id
+        WHERE t.type = 'OUT'
+        ORDER BY t.timestamp ASC
+      `).all() as any[];
+
+      // year → month (1-12) → { categories: Map<category, Map<itemName, {qty,costPerUnit,total}>>, total, emergencyCount }
+      type ItemAgg = { quantity: number; costPerUnit: number; total: number };
+      type CategoryAgg = { items: Map<string, ItemAgg>; total: number };
+      type MonthAgg = { categories: Map<string, CategoryAgg>; total: number; emergencyCount: number };
+      const yearMap = new Map<number, Map<number, MonthAgg>>();
+
+      for (const r of rows) {
+        if (includeEmergencyOnly && !r.is_emergency) continue;
+
+        const ts = new Date(r.ts);
+        if (Number.isNaN(ts.getTime())) continue;
+        const year = ts.getFullYear();
+        if (yearFilter && String(year) !== yearFilter) continue;
+        const month = ts.getMonth() + 1;
+
+        const qty = Number(r.quantity) || 0;
+        const cost = parseFloat(r.value_per_unit) || 0;
+        const lineTotal = qty * cost;
+        const category = r.category || "Uncategorized";
+        const itemName = r.item_name || "Unknown item";
+
+        if (!yearMap.has(year)) yearMap.set(year, new Map());
+        const monthsForYear = yearMap.get(year)!;
+        if (!monthsForYear.has(month)) {
+          monthsForYear.set(month, { categories: new Map(), total: 0, emergencyCount: 0 });
+        }
+        const monthAgg = monthsForYear.get(month)!;
+        if (r.is_emergency) monthAgg.emergencyCount += 1;
+        monthAgg.total += lineTotal;
+
+        if (!monthAgg.categories.has(category)) {
+          monthAgg.categories.set(category, { items: new Map(), total: 0 });
+        }
+        const catAgg = monthAgg.categories.get(category)!;
+        catAgg.total += lineTotal;
+
+        if (!catAgg.items.has(itemName)) {
+          catAgg.items.set(itemName, { quantity: 0, costPerUnit: cost, total: 0 });
+        }
+        const itemAgg = catAgg.items.get(itemName)!;
+        itemAgg.quantity += qty;
+        // Keep the most recently observed unit cost (price history isn't joined here)
+        if (cost > 0) itemAgg.costPerUnit = cost;
+        itemAgg.total += lineTotal;
+      }
+
+      // Build CSV
+      const MONTH_NAMES = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+      ];
+      const lines: string[] = [];
+      lines.push(`Morgan State FRC Monthly Summary${includeEmergencyOnly ? " (Emergency Shop Appointments only)" : ""}`);
+      lines.push(`Generated,${new Date().toLocaleString()}`);
+      lines.push("");
+
+      const sortedYears = Array.from(yearMap.keys()).sort();
+      for (const year of sortedYears) {
+        const months = yearMap.get(year)!;
+        lines.push(`Year,${year}`);
+        let yearTotal = 0;
+        let yearEmergencies = 0;
+        const sortedMonths = Array.from(months.keys()).sort((a, b) => a - b);
+        for (const month of sortedMonths) {
+          const monthAgg = months.get(month)!;
+          yearTotal += monthAgg.total;
+          yearEmergencies += monthAgg.emergencyCount;
+          lines.push("");
+          lines.push(`Month,${MONTH_NAMES[month - 1]} ${year}`);
+          if (monthAgg.emergencyCount > 0) {
+            lines.push(`Emergency Shop Appointments,${monthAgg.emergencyCount}`);
+          }
+          lines.push("Category,Item,Quantity,Cost per Unit,Line Total");
+          const sortedCategories = Array.from(monthAgg.categories.keys()).sort();
+          for (const category of sortedCategories) {
+            const catAgg = monthAgg.categories.get(category)!;
+            const sortedItems = Array.from(catAgg.items.entries()).sort((a, b) =>
+              a[0].localeCompare(b[0]),
+            );
+            for (const [itemName, itemAgg] of sortedItems) {
+              lines.push([
+                csvEscape(category),
+                csvEscape(itemName),
+                itemAgg.quantity.toString(),
+                itemAgg.costPerUnit.toFixed(2),
+                itemAgg.total.toFixed(2),
+              ].join(","));
+            }
+            lines.push(`${csvEscape(category)} subtotal,,,,${catAgg.total.toFixed(2)}`);
+          }
+          lines.push(`${MONTH_NAMES[month - 1]} ${year} total,,,,${monthAgg.total.toFixed(2)}`);
+        }
+        lines.push("");
+        lines.push(`${year} GRAND TOTAL,,,,${yearTotal.toFixed(2)}`);
+        if (yearEmergencies > 0) {
+          lines.push(`${year} Emergency Shop Appointments,,,,${yearEmergencies}`);
+        }
+        lines.push("");
+      }
+
+      if (sortedYears.length === 0) {
+        lines.push("No distribution records found for the selected filter.");
+      }
+
+      const csv = lines.join("\n");
+      const filename = `frc-monthly-summary${yearFilter ? `-${yearFilter}` : ""}${includeEmergencyOnly ? "-emergencies" : ""}.csv`;
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(csv);
+    } catch (err: any) {
+      console.error("[reports/monthly-csv] error:", err);
+      res.status(500).json({ message: "Failed to generate monthly summary" });
+    }
+  });
+
   return httpServer;
+}
+
+// ─── CSV helpers ──────────────────────────────────────────────────────
+function csvEscape(value: string): string {
+  if (value == null) return "";
+  const str = String(value);
+  if (/[",\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
 }

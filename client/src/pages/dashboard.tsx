@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useRepository, useInventorySummary, isLowStock } from "@/lib/repository";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -337,13 +338,16 @@ function RequestMetrics() {
       const res = await apiRequest("GET", "/api/dashboard/stats");
       return res.json();
     },
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   if (!stats || stats.pendingRequests === undefined) return null;
 
   return (
     <section className="grid gap-3 md:grid-cols-4">
-      <Card className="glass-panel">
+      <Link href="/requests?status=pending" className="block">
+      <Card className="glass-panel h-full transition-colors hover:bg-muted/40">
         <CardContent className="py-3 px-4 flex items-center gap-3">
           <InboxIcon className="h-5 w-5 text-amber-600" />
           <div>
@@ -352,7 +356,9 @@ function RequestMetrics() {
           </div>
         </CardContent>
       </Card>
-      <Card className="glass-panel">
+      </Link>
+      <Link href="/requests?status=ready_for_pickup" className="block">
+      <Card className="glass-panel h-full transition-colors hover:bg-muted/40">
         <CardContent className="py-3 px-4 flex items-center gap-3">
           <CheckCircleIcon className="h-5 w-5 text-green-600" />
           <div>
@@ -361,7 +367,9 @@ function RequestMetrics() {
           </div>
         </CardContent>
       </Card>
-      <Card className="glass-panel">
+      </Link>
+      <Link href="/requests" className="block">
+      <Card className="glass-panel h-full transition-colors hover:bg-muted/40">
         <CardContent className="py-3 px-4 flex items-center gap-3">
           <ClockIcon className="h-5 w-5 text-blue-600" />
           <div>
@@ -370,7 +378,9 @@ function RequestMetrics() {
           </div>
         </CardContent>
       </Card>
-      <Card className="glass-panel">
+      </Link>
+      <Link href="/requests" className="block">
+      <Card className="glass-panel h-full transition-colors hover:bg-muted/40">
         <CardContent className="py-3 px-4 flex items-center gap-3">
           <AlertTriangleIcon className="h-5 w-5 text-orange-600" />
           <div>
@@ -379,6 +389,7 @@ function RequestMetrics() {
           </div>
         </CardContent>
       </Card>
+      </Link>
     </section>
   );
 }

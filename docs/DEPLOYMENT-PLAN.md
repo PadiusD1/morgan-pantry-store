@@ -164,11 +164,15 @@ cp -r /mnt/Morgan-Pantry-Store/* /opt/morgan-pantry/
 sudo umount /mnt
 ```
 
+Use a clean repository clone/copy when possible. Do not copy `node_modules`, `dist`, or any nested backup copy of the project; Linux should rebuild dependencies with `npm ci`.
+
 #### Step 9: Build and Start
 ```bash
 cd /opt/morgan-pantry
-npm ci --omit=dev
+npm ci
+npm run check
 npm run build
+npm prune --omit=dev
 mkdir -p logs data backups
 
 # Test it works
@@ -298,7 +302,7 @@ curl http://localhost:5000/api/health  # Should work — PM2 started it on boot
 | Monthly | Check disk space | `ssh pantry@SERVER_IP "df -h"` |
 | Monthly | Check backups exist on NAS | Log into QNAP web UI → check `pantry-backups` folder |
 | Every 3 years | Replace UPS battery | Buy APC replacement battery APCRBC154 (~$25) |
-| If app needs updating | Pull new code | `ssh pantry@SERVER_IP "cd /opt/morgan-pantry && git pull && npm ci --omit=dev && npm run build && pm2 restart morgan-pantry"` |
+| If app needs updating | Pull new code | `ssh pantry@SERVER_IP "cd /opt/morgan-pantry && git pull && npm ci && npm run check && npm run build && npm prune --omit=dev && pm2 restart morgan-pantry"` |
 
 ---
 

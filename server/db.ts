@@ -11,6 +11,7 @@
  */
 
 import Database from "better-sqlite3";
+import { randomUUID } from "crypto";
 import path from "path";
 import fs from "fs";
 
@@ -19,16 +20,19 @@ import fs from "fs";
 // zip the whole folder and the data goes with it.
 
 function getProjectRoot(): string {
-  // __dirname equivalent: server/ → go up one level to project root
-  return path.resolve(import.meta.dirname ?? path.join(process.cwd(), "server"), "..");
+  // Bundled production runs from dist/. Development runs from the project root.
+  return typeof __dirname === "string" ? path.resolve(__dirname, "..") : process.cwd();
 }
 
-function getDbDir(): string {
-  return path.join(getProjectRoot(), "data");
+function getDbPath(): string {
+  const configuredPath = process.env.DB_PATH || process.env.DATABASE_PATH;
+  return configuredPath
+    ? path.resolve(configuredPath)
+    : path.join(getProjectRoot(), "data", "app.db");
 }
 
-export const DB_DIR = getDbDir();
-export const DB_PATH = path.join(DB_DIR, "app.db");
+export const DB_PATH = getDbPath();
+export const DB_DIR = path.dirname(DB_PATH);
 
 // ─── Table DDL ──────────────────────────────────────────────────────────────
 
@@ -272,6 +276,22 @@ const CLIENT_MIGRATIONS = [
   "ALTER TABLE clients ADD COLUMN eligible_date TEXT",
   "ALTER TABLE clients ADD COLUMN certification_date TEXT",
   "ALTER TABLE clients ADD COLUMN status TEXT DEFAULT 'active'",
+  // Partners Hub: distinguish student clients from partner organizations
+  "ALTER TABLE clients ADD COLUMN client_type TEXT NOT NULL DEFAULT 'student'",
+  "ALTER TABLE clients ADD COLUMN organization TEXT",
+  "ALTER TABLE clients ADD COLUMN partnership_type TEXT",
+];
+
+// ─── Transaction column migrations (Emergency Shop Appointment flag) ────
+
+const TRANSACTION_MIGRATIONS = [
+  "ALTER TABLE transactions ADD COLUMN is_emergency INTEGER NOT NULL DEFAULT 0",
+];
+
+// ─── Request column migrations (student-submitted note) ─────────────────
+
+const REQUEST_TABLE_MIGRATIONS = [
+  "ALTER TABLE requests ADD COLUMN student_note TEXT",
 ];
 
 // ─── Initialize ─────────────────────────────────────────────────────────────
@@ -325,6 +345,30 @@ export function initDatabase(): Database.Database {
   }
   console.log(`[sqlite] Request system migrations complete`);
 
+  // 6b. Transaction ALTER TABLE migrations (Emergency flag)
+  for (const sql of TRANSACTION_MIGRATIONS) {
+    try {
+      db.exec(sql);
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate column")) {
+        console.warn(`[sqlite] Migration warning: ${err.message}`);
+      }
+    }
+  }
+  console.log(`[sqlite] Transaction migrations complete`);
+
+  // 6c. Request column ALTER TABLE migrations (student note)
+  for (const sql of REQUEST_TABLE_MIGRATIONS) {
+    try {
+      db.exec(sql);
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate column")) {
+        console.warn(`[sqlite] Migration warning: ${err.message}`);
+      }
+    }
+  }
+  console.log(`[sqlite] Request column migrations complete`);
+
   // 7. Donor system migrations
   const DONOR_MIGRATIONS = [
     "ALTER TABLE transactions ADD COLUMN donor_id TEXT",
@@ -343,7 +387,7 @@ export function initDatabase(): Database.Database {
     for (const row of uniqueDonors) {
       const existing = db.prepare("SELECT id FROM donors WHERE name = ?").get(row.donor) as any;
       if (!existing) {
-        const id = require("crypto").randomUUID();
+        const id = randomUUID();
         const now = new Date().toISOString();
         db.prepare("INSERT INTO donors (id, name, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)").run(id, row.donor, now, now);
         db.prepare("UPDATE transactions SET donor_id = ? WHERE donor = ? AND donor_id IS NULL").run(id, row.donor);
@@ -374,6 +418,10 @@ export function initDatabase(): Database.Database {
     "CREATE INDEX IF NOT EXISTS idx_transaction_items_inventory_item_id ON transaction_items(inventory_item_id)",
     // Inventory: category filter is common in UI
     "CREATE INDEX IF NOT EXISTS idx_inventory_items_category ON inventory_items(category)",
+    // Clients: split surface between students and partners
+    "CREATE INDEX IF NOT EXISTS idx_clients_client_type ON clients(client_type)",
+    // Emergency Shop Appointments: filtered/grouped on every emergency report
+    "CREATE INDEX IF NOT EXISTS idx_transactions_is_emergency ON transactions(is_emergency)",
     // Audit log: always joined on request_id
     "CREATE INDEX IF NOT EXISTS idx_request_audit_log_request_id ON request_audit_log(request_id)",
     // Notifications: queried by recipient

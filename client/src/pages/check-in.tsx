@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository, getCurrentLocation } from "@/lib/repository";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
+import { apiRequest } from "@/lib/queryClient";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,6 +10,22 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Import, SearchIcon, XIcon, Loader2, CheckCircle2, AlertCircle, Package, Scale, DollarSign, ShieldCheck } from "lucide-react";
+
+type DonorOption = {
+  id: string;
+  name: string;
+  organization?: string | null;
+  status?: string;
+  fromPartner?: boolean;
+};
+
+type ApiClientLite = {
+  id: string;
+  name: string;
+  organization?: string | null;
+  clientType?: string | null;
+  partnershipType?: string | null;
+};
 
 type ScanState =
   | { phase: "idle" }
@@ -19,15 +36,61 @@ type ScanState =
   | { phase: "error"; message: string };
 
 export default function CheckInPage() {
-  const { inventory, addOrUpdateItem, recordInbound, upsertBarcodeCache, sources, donors, addSource, addDonor, categories, addCategory } = useRepository();
+  const { inventory, addOrUpdateItem, recordInbound, upsertBarcodeCache, sources, donors: localDonors, addSource, addDonor, categories, addCategory } = useRepository();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+
+  // ─── Donor list: pull authoritative list from /api/donors so every donor shows up,
+  // not just the three hard-coded localStorage seeds.
+  const { data: apiDonors = [] } = useQuery<DonorOption[]>({
+    queryKey: ["/api/donors"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/donors");
+      return res.json();
+    },
+  });
+
+  // Partner organizations can also donate to the pantry — surface them in the same
+  // selector so staff don't have to add a parallel "donor" record for each partner.
+  const { data: apiPartners = [] } = useQuery<ApiClientLite[]>({
+    queryKey: ["/api/clients", "type=partner"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/clients?type=partner");
+      return res.json();
+    },
+  });
+
+  // Merge: API donors first, then partner orgs (de-duped by name), then any
+  // localStorage-only legacy names as a fallback.
+  const donorOptions = useMemo<DonorOption[]>(() => {
+    const seen = new Map<string, DonorOption>();
+    for (const d of apiDonors) {
+      if (!d?.name) continue;
+      seen.set(d.name, d);
+    }
+    for (const p of apiPartners) {
+      if (!p?.name || seen.has(p.name)) continue;
+      seen.set(p.name, {
+        id: `partner:${p.id}`,
+        name: p.name,
+        organization: p.organization ?? null,
+        fromPartner: true,
+      });
+    }
+    for (const name of localDonors || []) {
+      if (name && !seen.has(name)) {
+        seen.set(name, { id: `local:${name}`, name });
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [apiDonors, apiPartners, localDonors]);
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedId, setSelectedId] = useState<string | "">("");
   const [quantity, setQuantity] = useState<number>(0);
   const [source, setSource] = useState("");
   const [donor, setDonor] = useState("");
+  const [donorPartnerId, setDonorPartnerId] = useState<string | undefined>();
   const [isNewSource, setIsNewSource] = useState(false);
   const [isNewDonor, setIsNewDonor] = useState(false);
   const [isNewCategory, setIsNewCategory] = useState(false);
@@ -49,6 +112,17 @@ export default function CheckInPage() {
     () => [...inventory].sort((a, b) => a.name.localeCompare(b.name)),
     [inventory],
   );
+
+  const sourceOptions = useMemo(() => {
+    const next = [...(sources || [])];
+    if (apiPartners.length > 0 && !next.includes("Partner Donation")) {
+      const donationIndex = next.indexOf("Donation");
+      next.splice(donationIndex >= 0 ? donationIndex + 1 : next.length, 0, "Partner Donation");
+    }
+    return next;
+  }, [apiPartners.length, sources]);
+
+  const isDonationSource = source === "Donation" || source === "Partner Donation";
 
   // Get the currently selected item for enrichment display
   const selectedItem = useMemo(
@@ -73,11 +147,16 @@ export default function CheckInPage() {
       if (result.status === "exists") {
         const item = toInventoryItem(result.item as ApiInventoryItem);
         setMode("existing");
-        setSelectedId(item.id);
+        setSelectedId((prevId) => {
+          // Each scan of the same item bumps the to-receive quantity by 1 — staff can scan a
+          // case multiple times without re-typing numbers. Switching items resets to 1.
+          setQuantity((prevQty) => (prevId === item.id ? prevQty + 1 : 1));
+          return item.id;
+        });
         setScanState({ phase: "found-existing", itemName: item.name });
         toast({
-          title: "Item already exists",
-          description: `${item.name} is already in inventory (${item.quantity} on hand). Set quantity to add.`,
+          title: "Item already on file — merged",
+          description: `${item.name} (${item.quantity} on hand). Existing data populated. Scan again or confirm to record.`,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         setTimeout(() => quantityInputRef.current?.focus(), 100);
@@ -95,6 +174,8 @@ export default function CheckInPage() {
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         setMode("existing");
         setSelectedId(item.id);
+        // First-time scan of a new barcode: pre-fill quantity to 1.
+        setQuantity(1);
         setScanState({
           phase: "found-created",
           itemName: item.name,
@@ -103,7 +184,7 @@ export default function CheckInPage() {
         });
         toast({
           title: "New item added automatically",
-          description: `${item.name} found via ${result.product.winningSource} and added to inventory. Set quantity to receive.`,
+          description: `${item.name} found via ${result.product.winningSource}. Quantity preset to 1 — adjust or scan again to add more.`,
         });
         setTimeout(() => quantityInputRef.current?.focus(), 100);
         return;
@@ -180,8 +261,17 @@ export default function CheckInPage() {
     if (isNewSource && source.trim()) {
         addSource(source.trim());
     }
-    if (isNewDonor && donor.trim() && source === "Donation") {
-        addDonor(donor.trim());
+    if (isNewDonor && donor.trim() && isDonationSource) {
+        const donorName = donor.trim();
+        addDonor(donorName);
+        // Persist to /api/donors so it shows up on future check-ins and in the Donors page.
+        // Best effort: a duplicate-name failure is fine — the donor still gets used on this transaction.
+        try {
+          await apiRequest("POST", "/api/donors", { name: donorName, status: "active" });
+          queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
+        } catch {
+          // Server may return 400 for missing name or 500 for duplicate — ignore.
+        }
     }
 
     const location = await getCurrentLocation();
@@ -190,7 +280,8 @@ export default function CheckInPage() {
       itemId,
       quantity,
       source: source.trim() || undefined,
-      donor: (source === "Donation" ? (donor.trim() || undefined) : undefined),
+      donor: (isDonationSource ? (donor.trim() || undefined) : undefined),
+      donorClientId: isDonationSource ? donorPartnerId : undefined,
       location,
     });
 
@@ -517,13 +608,18 @@ export default function CheckInPage() {
                         setSource("");
                     } else {
                         setSource(val);
+                        if (val !== "Donation" && val !== "Partner Donation") {
+                          setDonor("");
+                          setDonorPartnerId(undefined);
+                          setIsNewDonor(false);
+                        }
                     }
                   }}>
                     <SelectTrigger id="source">
                         <SelectValue placeholder="Select Source" />
                     </SelectTrigger>
                     <SelectContent>
-                        {sources.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                        {sourceOptions.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                         <SelectItem value="new_source_custom">+ Add New Source</SelectItem>
                     </SelectContent>
                   </Select>
@@ -545,12 +641,12 @@ export default function CheckInPage() {
             </div>
           </div>
 
-          {source === "Donation" && (
+          {isDonationSource && (
               <div className="space-y-1.5 border-l-2 border-indigo-100 pl-4 mt-2">
                   <div className="relative">
                     <div className="absolute -left-[21px] top-[14px] w-4 h-px bg-indigo-200"></div>
                     <label className="text-sm font-medium" htmlFor="donor">
-                        Donor
+                        Donor / Partner
                     </label>
                   </div>
                   <div className="flex gap-2">
@@ -559,15 +655,26 @@ export default function CheckInPage() {
                             if (val === "new_donor_custom") {
                                 setIsNewDonor(true);
                                 setDonor("");
+                                setDonorPartnerId(undefined);
                             } else {
+                                const selected = donorOptions.find((d) => d.name === val);
                                 setDonor(val);
+                                setDonorPartnerId(selected?.fromPartner ? selected.id.replace(/^partner:/, "") : undefined);
                             }
                         }}>
                             <SelectTrigger id="donor">
                                 <SelectValue placeholder="Select Donor" />
                             </SelectTrigger>
                             <SelectContent>
-                                {donors.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                                {donorOptions.map((d) => {
+                                  const label = d.organization ? `${d.name} — ${d.organization}` : d.name;
+                                  return (
+                                    <SelectItem key={d.id} value={d.name}>
+                                      {label}
+                                      {d.fromPartner ? " · Partner org" : ""}
+                                    </SelectItem>
+                                  );
+                                })}
                                 <SelectItem value="new_donor_custom">+ Add New Donor</SelectItem>
                             </SelectContent>
                         </Select>
@@ -575,7 +682,10 @@ export default function CheckInPage() {
                         <div className="flex gap-1 w-full">
                             <Input
                                 value={donor}
-                                onChange={(e) => setDonor(e.target.value)}
+                                onChange={(e) => {
+                                  setDonor(e.target.value);
+                                  setDonorPartnerId(undefined);
+                                }}
                                 placeholder="Enter new donor"
                                 autoFocus
                             />

@@ -10,15 +10,20 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
-import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon } from "lucide-react";
+import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon, SirenIcon, ChevronsUpDownIcon, CheckIcon, Handshake } from "lucide-react";
 
 type ItemGroupItem = {
   id: string;
   groupId: string;
   inventoryItemId: string;
   name: string;
-  defaultQuantity: number;
+  quantity?: number;
+  defaultQuantity?: number;
 };
 
 type ItemGroup = {
@@ -38,7 +43,7 @@ type ReceiptData = {
 };
 
 export default function CheckOutPage() {
-  const { inventory, clients, recordOutbound, upsertBarcodeCache, addOrUpdateItem, categories } =
+  const { inventory, clients, transactions, recordOutbound, upsertBarcodeCache, addOrUpdateItem, categories } =
     useRepository();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -48,6 +53,17 @@ export default function CheckOutPage() {
   const [clientIdentifier, setClientIdentifier] = useState("");
   const [clientContact, setClientContact] = useState("");
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
+  const [isEmergency, setIsEmergency] = useState(false);
+  const [clientPickerOpen, setClientPickerOpen] = useState(false);
+
+  // Count previous Emergency Shop Appointments for the currently-selected client.
+  // Used to surface a "flagged student" badge when they've had more than one emergency.
+  const selectedClientEmergencyCount = useMemo(() => {
+    if (!clientId || clientId === "new") return 0;
+    return transactions.filter(
+      (t) => t.type === "OUT" && t.clientId === clientId && t.isEmergency,
+    ).length;
+  }, [transactions, clientId]);
 
   const [cart, setCart] = useState<{ itemId: string; quantity: number }[]>([]);
   const [barcode, setBarcode] = useState("");
@@ -151,7 +167,7 @@ export default function CheckOutPage() {
     for (const groupItem of group.items) {
       const invItem = inventory.find((i) => i.id === groupItem.inventoryItemId);
       if (invItem) {
-        performAddToCart(invItem.id, groupItem.defaultQuantity);
+        performAddToCart(invItem.id, groupItem.defaultQuantity ?? groupItem.quantity ?? 1);
         addedCount++;
       }
     }
@@ -299,6 +315,47 @@ export default function CheckOutPage() {
     // No stock validation — checkout always proceeds.
     // If inventory is insufficient, it will be auto-adjusted.
 
+    const receiptItems = cart
+      .map((c) => {
+        const item = inventory.find((i) => i.id === c.itemId);
+        return item ? { name: item.brand ? `${item.brand} - ${item.name}` : item.name, quantity: c.quantity } : null;
+      })
+      .filter(Boolean) as { name: string; quantity: number }[];
+
+    if (fulfillingRequestId) {
+      try {
+        await apiRequest("POST", `/api/requests/${fulfillingRequestId}/fulfill`);
+        queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+        setReceipt({
+          clientName: clientNameFinal,
+          clientIdentifier: identifierFinal,
+          items: receiptItems,
+          timestamp: new Date().toISOString(),
+        });
+        toast({
+          title: "Request fulfilled",
+          description: `Request marked as completed for ${clientNameFinal}.`,
+        });
+        setCart([]);
+        setIsEmergency(false);
+        setFulfillingRequestId(null);
+      } catch (e) {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to mark request as fulfilled:", e);
+        }
+        toast({
+          title: "Fulfillment failed",
+          description: "The request could not be completed. Check the Requests tab and try again.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
     const location = await getCurrentLocation();
 
     const result = recordOutbound({
@@ -310,17 +367,10 @@ export default function CheckOutPage() {
       },
       items: cart,
       location,
+      isEmergency,
     });
 
     if (result?.client) {
-      // Build receipt data before clearing the cart
-      const receiptItems = cart
-        .map((c) => {
-          const item = inventory.find((i) => i.id === c.itemId);
-          return item ? { name: item.brand ? `${item.brand} - ${item.name}` : item.name, quantity: c.quantity } : null;
-        })
-        .filter(Boolean) as { name: string; quantity: number }[];
-
       setReceipt({
         clientName: clientNameFinal,
         clientIdentifier: identifierFinal,
@@ -328,34 +378,13 @@ export default function CheckOutPage() {
         timestamp: new Date().toISOString(),
       });
 
-      // If this checkout fulfills an approved request, mark it completed
-      if (fulfillingRequestId) {
-        try {
-          await apiRequest("POST", `/api/requests/${fulfillingRequestId}/fulfill`);
-          queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
-          toast({
-            title: "Request fulfilled",
-            description: `Check-out recorded and request marked as completed for ${result.client.name}.`,
-          });
-        } catch (e) {
-          if (import.meta.env.DEV) {
-            // eslint-disable-next-line no-console
-            console.error("Failed to mark request as fulfilled:", e);
-          }
-          toast({
-            title: "Check-out recorded",
-            description: "Distribution recorded but request status may not have updated. Check the Requests tab.",
-            variant: "destructive",
-          });
-        }
-        setFulfillingRequestId(null);
-      } else {
-        toast({
-          title: "Check-out recorded",
-          description: `Distribution recorded for ${result.client.name}${location ? " with location" : ""}.`,
-        });
-      }
+      toast({
+        title: isEmergency ? "Emergency shop recorded" : "Check-out recorded",
+        description: `Distribution recorded for ${result.client.name}${isEmergency ? " (Emergency Shop Appointment)" : ""}${location ? " with location" : ""}.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       setCart([]);
+      setIsEmergency(false);
       setClientFromId(result.client.id);
     }
   }
@@ -375,24 +404,133 @@ export default function CheckOutPage() {
           <section className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="client-select" data-testid="label-client">
-                  Client
+                <label className="text-sm font-medium" htmlFor="client-search-trigger" data-testid="label-client">
+                  Client (type to search students + partners)
                 </label>
-                <Select value={clientId} onValueChange={setClientFromId}>
-                  <SelectTrigger id="client-select" data-testid="select-client">
-                    <SelectValue placeholder="Select client or choose New client" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="new" data-testid="option-client-new">
-                      + New client
-                    </SelectItem>
-                    {sortedClients.map((c) => (
-                      <SelectItem key={c.id} value={c.id} data-testid={`option-client-${c.id}`}>
-                        {c.name} • {c.identifier}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Popover open={clientPickerOpen} onOpenChange={setClientPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="client-search-trigger"
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={clientPickerOpen}
+                      className="w-full justify-between font-normal"
+                      data-testid="button-client-search"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        {clientId === "new" ? (
+                          <>+ New client</>
+                        ) : clientId ? (
+                          (() => {
+                            const c = clients.find((x) => x.id === clientId);
+                            if (!c) return "Select client or type a name...";
+                            return (
+                              <>
+                                <span className="truncate">{c.name}</span>
+                                <span className="text-muted-foreground text-xs truncate">· {c.identifier}</span>
+                                {c.clientType === "partner" && (
+                                  <Badge variant="secondary" className="text-[10px] h-4 px-1">
+                                    <Handshake className="h-2.5 w-2.5 mr-0.5" />
+                                    Partner
+                                  </Badge>
+                                )}
+                              </>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-muted-foreground">Select client or type a name...</span>
+                        )}
+                      </span>
+                      <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="p-0 w-[--radix-popover-trigger-width] min-w-[320px]" align="start">
+                    <Command
+                      filter={(value, search) => {
+                        // value is the option's `value` prop (we encode searchable text into it)
+                        return value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+                      }}
+                    >
+                      <CommandInput placeholder="Search by name, ID, email, phone, org..." data-testid="input-client-search" />
+                      <CommandList>
+                        <CommandEmpty>
+                          <div className="py-3 text-sm text-muted-foreground">
+                            No match. Use <strong>+ New client</strong> below to add them.
+                          </div>
+                        </CommandEmpty>
+                        <CommandGroup heading="Add">
+                          <CommandItem
+                            value="new client add"
+                            onSelect={() => {
+                              setClientFromId("new");
+                              setClientPickerOpen(false);
+                            }}
+                            data-testid="option-client-new"
+                          >
+                            <PlusCircle className="mr-2 h-4 w-4" />
+                            + New client
+                          </CommandItem>
+                        </CommandGroup>
+                        {(() => {
+                          const students = sortedClients.filter((c) => !c.clientType || c.clientType === "student");
+                          const partners = sortedClients.filter((c) => c.clientType === "partner");
+                          const renderRow = (c: typeof sortedClients[number]) => {
+                            // Pack every searchable field into the value so cmdk's fuzzy filter can match on it
+                            const haystack = [
+                              c.name,
+                              c.identifier,
+                              c.email ?? "",
+                              c.phone ?? "",
+                              c.contact ?? "",
+                              c.organization ?? "",
+                              c.partnershipType ?? "",
+                            ].join(" ");
+                            return (
+                              <CommandItem
+                                key={c.id}
+                                value={`${haystack} ${c.id}`}
+                                onSelect={() => {
+                                  setClientFromId(c.id);
+                                  setClientPickerOpen(false);
+                                }}
+                                data-testid={`option-client-${c.id}`}
+                              >
+                                <CheckIcon
+                                  className={`mr-2 h-4 w-4 ${clientId === c.id ? "opacity-100" : "opacity-0"}`}
+                                />
+                                <span className="truncate">{c.name}</span>
+                                <span className="text-muted-foreground text-xs ml-2 truncate">· {c.identifier}</span>
+                                {c.organization && (
+                                  <span className="text-muted-foreground text-xs ml-1 truncate">· {c.organization}</span>
+                                )}
+                                {c.clientType === "partner" && (
+                                  <Badge variant="secondary" className="text-[10px] h-4 px-1 ml-2">
+                                    Partner
+                                  </Badge>
+                                )}
+                              </CommandItem>
+                            );
+                          };
+                          return (
+                            <>
+                              {students.length > 0 && (
+                                <CommandGroup heading="Students">
+                                  {students.map(renderRow)}
+                                </CommandGroup>
+                              )}
+                              {partners.length > 0 && (
+                                <CommandGroup heading="Partner organizations">
+                                  {partners.map(renderRow)}
+                                </CommandGroup>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-name" data-testid="label-client-name">
@@ -408,7 +546,7 @@ export default function CheckOutPage() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-id" data-testid="label-client-identifier">
-                  BearCard number / ID / email
+                  Student ID / email
                 </label>
                 <Input
                   id="client-id"
@@ -427,6 +565,42 @@ export default function CheckOutPage() {
                   onChange={(e) => setClientContact(e.target.value)}
                   data-testid="input-client-contact"
                 />
+              </div>
+
+              {/* Emergency Shop Appointment toggle. When checked, this check-out is tagged
+                  separately in transaction history and counted in the Emergencies report. */}
+              <div
+                className={`flex items-start gap-2 rounded-md border px-3 py-2 ${
+                  isEmergency ? "border-red-300 bg-red-50/60" : "border-dashed border-border/70"
+                }`}
+              >
+                <Checkbox
+                  id="checkout-emergency"
+                  checked={isEmergency}
+                  onCheckedChange={(v) => setIsEmergency(v === true)}
+                  data-testid="checkbox-emergency-shop"
+                  className="mt-0.5"
+                />
+                <div className="flex-1 space-y-0.5">
+                  <label
+                    htmlFor="checkout-emergency"
+                    className="text-sm font-medium flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <SirenIcon className={`h-3.5 w-3.5 ${isEmergency ? "text-red-600" : "text-muted-foreground"}`} />
+                    Emergency Shop Appointment
+                  </label>
+                  <p className="text-[11px] text-muted-foreground">
+                    Tracks this visit separately in reports as an emergency distribution.
+                  </p>
+                  {selectedClientEmergencyCount > 0 && (
+                    <div className="pt-1">
+                      <Badge variant="destructive" className="text-[10px] h-5">
+                        <SirenIcon className="h-3 w-3 mr-1" />
+                        Flagged student · {selectedClientEmergencyCount} prior emergenc{selectedClientEmergencyCount === 1 ? "y" : "ies"}
+                      </Badge>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

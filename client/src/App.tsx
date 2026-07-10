@@ -19,6 +19,8 @@ import PublicRequestPage from "@/pages/public-request";
 import KioskPage from "@/pages/kiosk";
 import DonorsPage from "@/pages/donors";
 import DonorDetailPage from "@/pages/donor-detail";
+import PartnersPage from "@/pages/partners";
+import PartnerDetailPage from "@/pages/partner-detail";
 import { AppShell } from "@/components/layout/AppShell";
 import { RepositoryProvider } from "@/lib/repository";
 
@@ -33,6 +35,8 @@ function Router() {
       <Route path="/clients/:id" component={ClientDetailPage} />
       <Route path="/donors/:id" component={DonorDetailPage} />
       <Route path="/donors" component={DonorsPage} />
+      <Route path="/partners/:id" component={PartnerDetailPage} />
+      <Route path="/partners" component={PartnersPage} />
       <Route path="/item-groups" component={ItemGroupsPage} />
       <Route path="/requests" component={RequestsPage} />
       <Route path="/reports" component={ReportsPage} />

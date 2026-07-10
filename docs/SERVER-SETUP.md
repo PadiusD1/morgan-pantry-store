@@ -39,15 +39,20 @@ cd /opt/morgan-pantry
 # If using git:
 # git clone <your-repo-url> .
 
-# Install production dependencies only
-npm ci --omit=dev
+# Install dependencies, run checks, and build the production bundle
+npm ci
+npm run check
 
-# Build the production bundle
 npm run build
+
+# Keep only runtime dependencies after the build
+npm prune --omit=dev
 
 # Create required directories
 mkdir -p logs data backups
 ```
+
+Use a clean repository clone when possible. Do not copy `node_modules`, `dist`, or any nested backup copy of the project; `npm ci` and `npm run build` recreate what the server needs.
 
 ## 4. Configure Environment (Optional)
 
@@ -56,7 +61,7 @@ cp .env.example .env
 nano .env
 ```
 
-Default settings work out of the box. Edit if you need to change the port or add barcode API keys.
+Default settings work out of the box. Edit if you need to change the port, use a custom database path, or add barcode API keys.
 
 ## 5. Start the App
 
@@ -141,7 +146,7 @@ Browsers will show a one-time certificate warning (self-signed). Accept it and i
 | View logs (systemd) | `journalctl -u morgan-pantry -f` |
 | Restart | `pm2 restart morgan-pantry` or `sudo systemctl restart morgan-pantry` |
 | Stop | `pm2 stop morgan-pantry` or `sudo systemctl stop morgan-pantry` |
-| Update code | `cd /opt/morgan-pantry && git pull && npm ci --omit=dev && npm run build && pm2 restart morgan-pantry` |
+| Update code | `cd /opt/morgan-pantry && git pull && npm ci && npm run check && npm run build && npm prune --omit=dev && pm2 restart morgan-pantry` |
 | Run backup now | `/opt/morgan-pantry/scripts/backup-db.sh` |
 | Restore backup | `gunzip backups/app_YYYYMMDD.db.gz && cp backups/app_YYYYMMDD.db data/app.db && pm2 restart morgan-pantry` |
 | Check disk space | `df -h /opt/morgan-pantry` |

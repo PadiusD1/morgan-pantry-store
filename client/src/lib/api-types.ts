@@ -54,6 +54,9 @@ export type ApiClient = {
   eligibleDate: string | null;
   certificationDate: string | null;
   status: string | null;
+  clientType?: string | null;
+  organization?: string | null;
+  partnershipType?: string | null;
   allergies: string[];
   notes: string | null;
   createdAt: string;
@@ -78,6 +81,7 @@ export type ApiTransaction = {
   donor: string | null;
   clientId: string | null;
   clientName: string | null;
+  isEmergency?: boolean;
   latitude: number | null;
   longitude: number | null;
   accuracy: number | null;
@@ -134,6 +138,9 @@ export function toClientRecord(api: ApiClient): ClientRecord {
     eligibleDate: api.eligibleDate ?? undefined,
     certificationDate: api.certificationDate ?? undefined,
     status: api.status ?? "active",
+    clientType: (api.clientType as ClientRecord["clientType"]) ?? "student",
+    organization: api.organization ?? undefined,
+    partnershipType: api.partnershipType ?? undefined,
     allergies: api.allergies.length > 0 ? api.allergies : undefined,
     notes: api.notes ?? undefined,
     createdAt: api.createdAt,
@@ -166,6 +173,7 @@ export function toTransaction(api: ApiTransaction): Transaction {
     donor: api.donor ?? undefined,
     clientId: api.clientId ?? undefined,
     clientName: api.clientName ?? undefined,
+    isEmergency: Boolean(api.isEmergency),
     location,
   };
 }
@@ -211,6 +219,9 @@ export function toApiClientBody(client: Partial<ClientRecord>) {
   if (client.eligibleDate !== undefined) body.eligibleDate = client.eligibleDate || null;
   if (client.certificationDate !== undefined) body.certificationDate = client.certificationDate || null;
   if (client.status !== undefined) body.status = client.status || "active";
+  if (client.clientType !== undefined) body.clientType = client.clientType || "student";
+  if (client.organization !== undefined) body.organization = client.organization || null;
+  if (client.partnershipType !== undefined) body.partnershipType = client.partnershipType || null;
   if (client.allergies !== undefined) body.allergies = client.allergies ?? [];
   if (client.notes !== undefined) body.notes = client.notes || null;
   return body;
@@ -262,6 +273,9 @@ export type ApiRequest = {
   clientEmail: string | null;
   clientPhone: string | null;
   reason: string;
+  studentNote?: string | null;
+  // snake_case sibling for the SQL `student_note` column (returned by lookup endpoints)
+  student_note?: string | null;
   status: string;
   adminNote: string | null;
   reviewedBy: string | null;

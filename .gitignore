@@ -28,3 +28,10 @@ tmp/
 .eslintcache
 .swc/
 .turbo/
+# local junk
+Morgan-Pantry-Store/
+desktop.ini
+graphify-out/
+attached_assets/
+*.docx
+*.pptx

@@ -60,7 +60,7 @@ export type BarcodeLookupResult =
 const debugLog = (...args: unknown[]) => {
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
-    debugLog(...args);
+    console.log(...args);
   }
 };
 const debugError = (...args: unknown[]) => {

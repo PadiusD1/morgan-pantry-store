@@ -140,6 +140,9 @@ function rowToClient(r: any): Client {
     eligibleDate: r.eligible_date ?? null,
     certificationDate: r.certification_date ?? null,
     status: r.status ?? "active",
+    clientType: r.client_type ?? "student",
+    organization: r.organization ?? null,
+    partnershipType: r.partnership_type ?? null,
     allergies: toJsonArray(r.allergies),
     notes: r.notes ?? null,
     createdAt: toDate(r.created_at),
@@ -197,6 +200,7 @@ function rowToTransaction(r: any): Transaction {
     donor: r.donor ?? null,
     clientId: r.client_id ?? null,
     clientName: r.client_name ?? null,
+    isEmergency: toBool(r.is_emergency ?? 0),
     latitude: r.latitude ?? null,
     longitude: r.longitude ?? null,
     accuracy: r.accuracy ?? null,
@@ -532,8 +536,9 @@ export class SqliteStorage implements IStorage {
       .prepare(
         `INSERT INTO clients (id, name, identifier, contact, phone, email, address,
           date_of_birth, household_size, eligible_date, certification_date, status,
+          client_type, organization, partnership_type,
           allergies, notes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -548,6 +553,9 @@ export class SqliteStorage implements IStorage {
         insert.eligibleDate ?? null,
         insert.certificationDate ?? null,
         insert.status ?? "active",
+        (insert as any).clientType ?? "student",
+        (insert as any).organization ?? null,
+        (insert as any).partnershipType ?? null,
         fromJsonArray(insert.allergies),
         insert.notes ?? null,
         now,
@@ -577,6 +585,10 @@ export class SqliteStorage implements IStorage {
     if (partial.eligibleDate !== undefined) { sets.push("eligible_date = ?"); values.push(partial.eligibleDate ?? null); }
     if (partial.certificationDate !== undefined) { sets.push("certification_date = ?"); values.push(partial.certificationDate ?? null); }
     if (partial.status !== undefined) { sets.push("status = ?"); values.push(partial.status ?? "active"); }
+    const pAny = partial as any;
+    if (pAny.clientType !== undefined) { sets.push("client_type = ?"); values.push(pAny.clientType ?? "student"); }
+    if (pAny.organization !== undefined) { sets.push("organization = ?"); values.push(pAny.organization ?? null); }
+    if (pAny.partnershipType !== undefined) { sets.push("partnership_type = ?"); values.push(pAny.partnershipType ?? null); }
     if (partial.allergies !== undefined) { sets.push("allergies = ?"); values.push(fromJsonArray(partial.allergies)); }
     if (partial.notes !== undefined) { sets.push("notes = ?"); values.push(partial.notes ?? null); }
 
@@ -623,8 +635,8 @@ export class SqliteStorage implements IStorage {
     this.db
       .prepare(
         `INSERT INTO transactions (id, type, timestamp, source, donor, client_id, client_name,
-          latitude, longitude, accuracy, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          is_emergency, latitude, longitude, accuracy, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -634,6 +646,7 @@ export class SqliteStorage implements IStorage {
         insert.donor ?? null,
         insert.clientId ?? null,
         insert.clientName ?? null,
+        fromBool((insert as any).isEmergency),
         insert.latitude ?? null,
         insert.longitude ?? null,
         insert.accuracy ?? null,

@@ -15,6 +15,7 @@ type ItemGroupItem = {
   groupId: string;
   inventoryItemId: string;
   name: string;
+  quantity?: number;
   defaultQuantity: number;
 };
 
@@ -65,8 +66,7 @@ export default function ItemGroupsPage() {
       description: editing.description.trim() || null,
       items: editing.items.map((i) => ({
         inventoryItemId: i.inventoryItemId,
-        name: i.name,
-        defaultQuantity: i.defaultQuantity,
+        quantity: i.defaultQuantity,
       })),
     };
 
@@ -170,7 +170,7 @@ export default function ItemGroupsPage() {
                       <div className="flex flex-wrap gap-1">
                         {g.items.map((item) => (
                           <Badge key={item.id} variant="secondary" className="text-[10px]">
-                            {item.name} x{item.defaultQuantity}
+                            {item.name} x{item.defaultQuantity ?? item.quantity ?? 1}
                           </Badge>
                         ))}
                         {g.items.length === 0 && (
@@ -192,7 +192,7 @@ export default function ItemGroupsPage() {
                               items: g.items.map((i) => ({
                                 inventoryItemId: i.inventoryItemId,
                                 name: i.name,
-                                defaultQuantity: i.defaultQuantity,
+                                defaultQuantity: i.defaultQuantity ?? i.quantity ?? 1,
                               })),
                             })
                           }

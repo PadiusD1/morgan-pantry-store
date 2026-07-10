@@ -83,7 +83,7 @@ export function IdentificationStep({
 
           <div className="space-y-1.5">
             <label className={labelClass} htmlFor="req-client-id">
-              Student ID / BearCard Number *
+              Student ID *
             </label>
             <Input
               id="req-client-id"

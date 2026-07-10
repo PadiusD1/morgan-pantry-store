@@ -5,7 +5,6 @@ module.exports = {
     cwd: "/opt/morgan-pantry",
     env: {
       NODE_ENV: "production",
-      PORT: 5000,
     },
     max_restarts: 50,
     min_uptime: "10s",

@@ -50,6 +50,8 @@ export type InventoryItem = {
   updatedAt: string;
 };
 
+export type ClientType = "student" | "partner";
+
 export type ClientRecord = {
   id: string;
   name: string;
@@ -63,6 +65,9 @@ export type ClientRecord = {
   eligibleDate?: string;
   certificationDate?: string;
   status?: string;
+  clientType?: ClientType;
+  organization?: string;
+  partnershipType?: string;
   allergies?: string[];
   notes?: string;
   createdAt: string;
@@ -94,6 +99,7 @@ export type Transaction = {
   donor?: string;
   clientId?: string;
   clientName?: string;
+  isEmergency?: boolean;
   location?: GeoLocation;
 };
 
@@ -128,6 +134,7 @@ export type RepositoryContextValue = RepositoryState & {
     quantity: number;
     source?: string;
     donor?: string;
+    donorClientId?: string;
     timestamp?: string;
     location?: GeoLocation;
   }) => void;
@@ -136,6 +143,7 @@ export type RepositoryContextValue = RepositoryState & {
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
+    isEmergency?: boolean;
   }) => { client: ClientRecord } | undefined;
   upsertClient: (partial: Partial<ClientRecord> & { name: string; identifier: string }) => ClientRecord;
   updateSettings: (partial: Partial<Settings>) => void;
@@ -332,9 +340,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     const createPromise = apiRequest("POST", "/api/inventory", toApiInventoryBody(item))
       .then(async (res) => {
         const created: ApiInventoryItem = await res.json();
-        // Replace temp ID in cache with real data
+        // Replace temp ID in cache with real data. If a refetch removed the
+        // optimistic row while the create was in flight, append the server row.
         queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
-          (old ?? []).map((i) => (i.id === tempId ? created : i)),
+          upsertApiRow(old, tempId, created),
         );
         pendingCreates.current.delete(tempId);
         return created.id;
@@ -372,19 +381,38 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     const now = new Date().toISOString();
     const currentClients = (clientsQuery.data ?? []).map(toClientRecord);
 
-    // Only match by explicit ID — never merge different clients by identifier
+    // Bonding rule: same student info coming in twice should merge into one record.
+    // Prefer explicit id; otherwise match by normalized identifier (case-insensitive,
+    // trimmed) so re-typing a known ID merges with the existing record instead of
+    // creating a parallel duplicate. Scope by client_type so a partner identifier
+    // doesn't absorb a student record (and vice versa).
+    const normalize = (s: string | undefined | null) => (s ?? "").trim().toLowerCase();
+    const partialIdentifier = normalize(partial.identifier);
+    const partialType = partial.clientType ?? "student";
     const existing = partial.id
       ? currentClients.find((c) => c.id === partial.id)
-      : undefined;
+      : currentClients.find(
+          (c) =>
+            normalize(c.identifier) === partialIdentifier &&
+            (c.clientType ?? "student") === partialType,
+        );
 
     if (existing) {
-      const updated: ClientRecord = { ...existing, ...partial, updatedAt: now };
+      // Merge: keep existing values for any field the caller didn't supply, so
+      // partial check-out submissions don't blow away phone/email/etc.
+      const merged: Partial<ClientRecord> = {};
+      for (const [key, value] of Object.entries(partial)) {
+        if (value !== undefined && value !== null && value !== "") {
+          (merged as Record<string, unknown>)[key] = value;
+        }
+      }
+      const updated: ClientRecord = { ...existing, ...merged, updatedAt: now };
 
       queryClient.setQueryData<ApiClient[]>(["/api/clients"], (old) =>
         (old ?? []).map((c) => (c.id === existing.id ? toOptimisticApiClient(updated) : c)),
       );
 
-      apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(partial))
+      apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(merged))
         .then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }));
 
       return updated;
@@ -404,6 +432,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       eligibleDate: partial.eligibleDate,
       certificationDate: partial.certificationDate,
       status: partial.status ?? "active",
+      // Carry partner-specific + emergency fields through so the POST body
+      // and the optimistic cache both reflect what the caller passed in.
+      clientType: partial.clientType ?? "student",
+      organization: partial.organization,
+      partnershipType: partial.partnershipType,
       allergies: partial.allergies,
       notes: partial.notes,
       createdAt: now,
@@ -419,14 +452,30 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     const createPromise = apiRequest("POST", "/api/clients", toApiClientBody(client))
       .then(async (res) => {
         if (!res.ok) {
-          // Server rejected (e.g. duplicate identifier) — revert optimistic add
+          // Server rejected. Most common reason here is a 409 (duplicate identifier)
+          // — that means a real record already exists, so refetch and let the
+          // caller use that record going forward.
           queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
           pendingClientCreates.current.delete(tempId);
+          if (res.status === 409) {
+            // Best-effort: look up the canonical client by identifier and surface its id.
+            try {
+              const lookup = await apiRequest(
+                "GET",
+                `/api/clients?type=${client.clientType === "partner" ? "partner" : "student"}`,
+              );
+              const list: ApiClient[] = await lookup.json();
+              const dup = list.find((c) => normalize(c.identifier) === partialIdentifier);
+              if (dup) return dup.id;
+            } catch {
+              // fall through to tempId
+            }
+          }
           return tempId;
         }
         const created: ApiClient = await res.json();
         queryClient.setQueryData<ApiClient[]>(["/api/clients"], (old) =>
-          (old ?? []).map((c) => (c.id === tempId ? created : c)),
+          upsertApiRow(old, tempId, created),
         );
         pendingClientCreates.current.delete(tempId);
         return created.id;
@@ -447,10 +496,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     quantity: number;
     source?: string;
     donor?: string;
+    donorClientId?: string;
     timestamp?: string;
     location?: GeoLocation;
   }) {
-    const { itemId, quantity, source, donor, location } = options;
+    const { itemId, quantity, source, donor, donorClientId, location } = options;
     const timestamp = options.timestamp ?? new Date().toISOString();
 
     if (!quantity || quantity <= 0) return;
@@ -482,8 +532,8 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       timestamp,
       source: source ?? null,
       donor: donor ?? null,
-      clientId: null,
-      clientName: null,
+      clientId: donorClientId ?? null,
+      clientName: donorClientId ? donor ?? null : null,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
       accuracy: location?.accuracy ?? null,
@@ -523,6 +573,8 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         timestamp,
         source: source ?? null,
         donor: donor ?? null,
+        clientId: donorClientId ?? null,
+        clientName: donorClientId ? donor ?? null : null,
         latitude: location?.latitude ?? null,
         longitude: location?.longitude ?? null,
         accuracy: location?.accuracy ?? null,
@@ -545,8 +597,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
+    isEmergency?: boolean;
   }): { client: ClientRecord } | undefined {
     const timestamp = options.timestamp ?? new Date().toISOString();
+    const isEmergency = Boolean(options.isEmergency);
     if (!options.items.length) return undefined;
 
     const client = upsertClient({
@@ -596,6 +650,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       donor: null,
       clientId: client.id,
       clientName: client.name,
+      isEmergency,
       latitude: options.location?.latitude ?? null,
       longitude: options.location?.longitude ?? null,
       accuracy: options.location?.accuracy ?? null,
@@ -656,6 +711,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         timestamp,
         clientId: realClientId,
         clientName: client.name,
+        isEmergency,
         latitude: options.location?.latitude ?? null,
         longitude: options.location?.longitude ?? null,
         accuracy: options.location?.accuracy ?? null,
@@ -891,6 +947,22 @@ export function suggestCategory(itemName: string): { category: string; confidenc
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function upsertApiRow<T extends { id: string }>(
+  old: T[] | undefined,
+  tempId: string,
+  created: T,
+): T[] {
+  const rows = old ?? [];
+  let foundTemp = false;
+  const replaced = rows.map((row) => {
+    if (row.id !== tempId) return row;
+    foundTemp = true;
+    return created;
+  });
+  if (foundTemp) return replaced;
+  return rows.some((row) => row.id === created.id) ? rows : [...rows, created];
+}
+
 function toOptimisticApiItem(item: InventoryItem): ApiInventoryItem {
   return {
     id: item.id,
@@ -941,6 +1013,9 @@ function toOptimisticApiClient(client: ClientRecord): ApiClient {
     eligibleDate: client.eligibleDate ?? null,
     certificationDate: client.certificationDate ?? null,
     status: client.status ?? "active",
+    clientType: client.clientType ?? "student",
+    organization: client.organization ?? null,
+    partnershipType: client.partnershipType ?? null,
     allergies: client.allergies ?? [],
     notes: client.notes ?? null,
     createdAt: client.createdAt,

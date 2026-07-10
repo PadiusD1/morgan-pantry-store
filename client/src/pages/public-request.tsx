@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { IdentificationStep } from "@/components/request/IdentificationStep";
 import { ItemBrowser } from "@/components/request/ItemBrowser";
@@ -16,10 +17,12 @@ type CartEntry = { item: any; quantity: number };
 
 export default function PublicRequestPage({ variant = "default" }: { variant?: "default" | "kiosk" }) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [step, setStep] = useState<"welcome" | "identify" | "browse" | "reason" | "confirm" | "success" | "history">("welcome");
   const [clientData, setClientData] = useState<ClientData | null>(null);
   const [cart, setCart] = useState<Map<string, CartEntry>>(new Map());
   const [reason, setReason] = useState("");
+  const [studentNote, setStudentNote] = useState("");
   const [requestId, setRequestId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [items, setItems] = useState<any[]>([]);
@@ -80,6 +83,7 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
         clientPhone: clientData.clientPhone || undefined,
         clientId: clientData.clientId || undefined,
         reason: reason.trim(),
+        studentNote: studentNote.trim() || undefined,
         items: Array.from(cart.entries()).map(([id, entry]) => ({
           inventoryItemId: id,
           itemName: entry.item.name,
@@ -93,6 +97,8 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
         throw new Error(err.message || "Submit failed");
       }
       const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       setRequestId(data.id);
       setStep("success");
     } catch (e: any) {
@@ -126,6 +132,7 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
     setClientData(null);
     setCart(new Map());
     setReason("");
+    setStudentNote("");
     setRequestId("");
     setHistoryData(null);
     setHistoryId("");
@@ -205,6 +212,8 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
               cart={cart}
               reason={reason}
               onReasonChange={setReason}
+              studentNote={studentNote}
+              onStudentNoteChange={setStudentNote}
               onSubmit={() => setStep("confirm")}
               onBack={() => setStep("browse")}
               submitting={false}
@@ -237,6 +246,12 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
                   <p className="text-xs font-medium text-muted-foreground uppercase">Reason</p>
                   <p className="text-sm">{reason}</p>
                 </div>
+                {studentNote.trim() && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground uppercase">Your Note</p>
+                    <p className="text-sm whitespace-pre-wrap">{studentNote}</p>
+                  </div>
+                )}
                 <Button className="w-full" size="lg" disabled={submitting} onClick={handleSubmit}>
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   Confirm and Submit
@@ -271,17 +286,28 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
                     <Card key={r.id} className="glass-panel">
                       <CardContent className="py-3 px-4 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(r.createdAt ?? r.created_at).toLocaleString()}
+                          </span>
                           <StatusBadge status={r.status as RequestStatus} />
                         </div>
                         <p className="text-sm">{r.reason}</p>
                         {r.items?.map((item: any) => (
                           <div key={item.id} className="flex justify-between text-xs text-muted-foreground">
-                            <span>{item.item_name}</span>
-                            <span>Qty: {item.requested_quantity}{item.approved_quantity != null ? ` (Approved: ${item.approved_quantity})` : ""}</span>
+                            <span>{item.itemName ?? item.item_name}</span>
+                            <span>
+                              Qty: {item.requestedQuantity ?? item.requested_quantity}
+                              {(item.approvedQuantity ?? item.approved_quantity) != null
+                                ? ` (Approved: ${item.approvedQuantity ?? item.approved_quantity})`
+                                : ""}
+                            </span>
                           </div>
                         ))}
-                        {r.admin_note && <p className="text-xs border-l-2 border-muted pl-2 text-muted-foreground">Admin: {r.admin_note}</p>}
+                        {(r.adminNote ?? r.admin_note) && (
+                          <p className="text-xs border-l-2 border-muted pl-2 text-muted-foreground">
+                            Admin: {r.adminNote ?? r.admin_note}
+                          </p>
+                        )}
                       </CardContent>
                     </Card>
                   ))}

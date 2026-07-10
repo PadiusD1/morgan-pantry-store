@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
 import { apiRequest } from "@/lib/queryClient";
 import { toApiInventoryBody, toApiClientBody } from "@/lib/api-types";
@@ -8,7 +8,23 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { SirenIcon, CalendarDaysIcon } from "lucide-react";
+
+type EmergencyClient = {
+  client_id: string;
+  client_name: string;
+  client_identifier: string;
+  emergency_count: number;
+  last_emergency_at: string | null;
+};
+
+type EmergencyReport = {
+  totalEmergencies: number;
+  flaggedStudents: EmergencyClient[];
+  perClient: EmergencyClient[];
+};
 
 export default function ReportsPage() {
   const repo = useRepository();
@@ -16,6 +32,26 @@ export default function ReportsPage() {
   const { toast } = useToast();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [monthlyYear, setMonthlyYear] = useState<string>(String(new Date().getFullYear()));
+
+  const { data: emergencyReport } = useQuery<EmergencyReport>({
+    queryKey: ["/api/reports/emergencies"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/reports/emergencies");
+      return res.json();
+    },
+  });
+
+  const yearsWithData = useMemo(() => {
+    const set = new Set<number>();
+    for (const tx of repo.transactions) {
+      if (tx.type !== "OUT") continue;
+      const d = new Date(tx.timestamp);
+      if (!Number.isNaN(d.getTime())) set.add(d.getFullYear());
+    }
+    if (set.size === 0) set.add(new Date().getFullYear());
+    return Array.from(set).sort((a, b) => b - a);
+  }, [repo.transactions]);
 
   const rangeTx = useMemo(() => {
     return repo.transactions.filter((tx) => {
@@ -66,6 +102,45 @@ export default function ReportsPage() {
     }
     return { totalWeight, totalValue };
   }, [rangeTx]);
+
+  const emergencyRangeStats = useMemo(() => {
+    const emergencyTxs = rangeTx.filter((t) => t.isEmergency);
+    let units = 0;
+    let value = 0;
+    for (const tx of emergencyTxs) {
+      for (const item of tx.items) {
+        units += item.quantity;
+        value += item.valuePerUnitUsd * item.quantity;
+      }
+    }
+    return { count: emergencyTxs.length, units, value };
+  }, [rangeTx]);
+
+  async function downloadMonthlyCsv(opts: { emergencyOnly?: boolean }) {
+    try {
+      const params = new URLSearchParams();
+      if (monthlyYear) params.set("year", monthlyYear);
+      if (opts.emergencyOnly) params.set("emergency", "1");
+      const url = `/api/reports/monthly-csv?${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `frc-monthly-summary-${monthlyYear}${opts.emergencyOnly ? "-emergencies" : ""}.csv`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast({
+        title: "Monthly summary exported",
+        description: opts.emergencyOnly
+          ? "Emergency-only monthly summary CSV downloaded."
+          : "Monthly summary CSV downloaded.",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Monthly CSV export failed";
+      toast({ title: "Export failed", description: message, variant: "destructive" });
+    }
+  }
 
   function exportJson() {
     const payload = JSON.stringify(repo, null, 2);
@@ -234,6 +309,56 @@ export default function ReportsPage() {
         </CardContent>
       </Card>
 
+      {/* Monthly summary CSV exporter — keeps the existing detailed CSV intact and adds
+          a separate, month-grouped summary report with category subtotals and a year total. */}
+      <Card className="glass-panel" data-testid="card-report-monthly-summary">
+        <CardHeader className="py-3 px-4 border-b border-border/80">
+          <CardTitle className="section-heading flex items-center gap-1.5">
+            <CalendarDaysIcon className="h-4 w-4" />
+            Monthly summary CSV
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 py-4 px-4 md:grid-cols-[160px_minmax(0,1fr)] md:items-end">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium" htmlFor="monthly-year">Year</label>
+            <select
+              id="monthly-year"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              value={monthlyYear}
+              onChange={(e) => setMonthlyYear(e.target.value)}
+              data-testid="select-monthly-year"
+            >
+              {yearsWithData.map((y) => (
+                <option key={y} value={String(y)}>{y}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => downloadMonthlyCsv({ emergencyOnly: false })}
+              data-testid="button-export-monthly-csv"
+            >
+              Export Monthly Summary CSV
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => downloadMonthlyCsv({ emergencyOnly: true })}
+              data-testid="button-export-monthly-emergency-csv"
+            >
+              <SirenIcon className="h-4 w-4 mr-1" />
+              Emergencies only (monthly)
+            </Button>
+            <p className="text-[11px] text-muted-foreground self-center">
+              Items, unit cost, category subtotals, monthly totals, and a year grand total.
+              The detailed CSV above stays untouched.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 md:grid-cols-2">
         <Card className="glass-panel" data-testid="card-report-inventory-summary">
           <CardHeader className="py-3 px-4 border-b border-border/80">
@@ -297,6 +422,76 @@ export default function ReportsPage() {
                 <TableRow key={row.id} data-testid={`row-report-item-${row.id}`}>
                   <TableCell>{row.name}</TableCell>
                   <TableCell className="text-right text-sm">{row.quantity}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Emergency Shop Appointments — own category in reports + flagged students */}
+      <Card className="glass-panel border-red-200/70" data-testid="card-report-emergencies">
+        <CardHeader className="py-3 px-4 border-b border-border/80">
+          <CardTitle className="section-heading flex items-center gap-1.5">
+            <SirenIcon className="h-4 w-4 text-red-600" />
+            Emergency Shop Appointments
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="grid grid-cols-3 gap-3 px-4 py-3 border-b border-border/60 bg-red-50/40">
+            <div data-testid="text-emergency-range-count">
+              <p className="text-2xl font-semibold">{emergencyRangeStats.count}</p>
+              <p className="text-xs text-muted-foreground">Emergency visits in range</p>
+            </div>
+            <div data-testid="text-emergency-range-units">
+              <p className="text-2xl font-semibold">{emergencyRangeStats.units}</p>
+              <p className="text-xs text-muted-foreground">Units distributed (emergency)</p>
+            </div>
+            <div data-testid="text-emergency-total">
+              <p className="text-2xl font-semibold">{emergencyReport?.totalEmergencies ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Lifetime emergency visits</p>
+            </div>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Student / client</TableHead>
+                <TableHead>Identifier</TableHead>
+                <TableHead className="text-right">Emergency count</TableHead>
+                <TableHead>Last emergency</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(emergencyReport?.perClient?.length ?? 0) === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="py-6 text-center text-sm text-muted-foreground"
+                    data-testid="text-no-emergencies"
+                  >
+                    No Emergency Shop Appointments recorded yet.
+                  </TableCell>
+                </TableRow>
+              )}
+              {emergencyReport?.perClient?.map((row) => (
+                <TableRow key={row.client_id || row.client_name} data-testid={`row-emergency-${row.client_id || row.client_name}`}>
+                  <TableCell className="text-sm">{row.client_name}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{row.client_identifier || "—"}</TableCell>
+                  <TableCell className="text-sm text-right font-medium">{row.emergency_count}</TableCell>
+                  <TableCell className="text-xs">
+                    {row.last_emergency_at ? new Date(row.last_emergency_at).toLocaleString() : "—"}
+                  </TableCell>
+                  <TableCell>
+                    {row.emergency_count > 1 ? (
+                      <Badge variant="destructive" className="text-[10px] h-5">
+                        <SirenIcon className="h-3 w-3 mr-1" />
+                        Flagged
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-[10px] h-5">Single visit</Badge>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

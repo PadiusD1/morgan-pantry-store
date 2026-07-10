@@ -19,7 +19,10 @@ const STATUS_FILTERS = ["all", "pending", "under_review", "approved", "partially
 export default function RequestsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>(() => {
+    const initial = new URLSearchParams(window.location.search).get("status");
+    return initial && STATUS_FILTERS.includes(initial as any) ? initial : "all";
+  });
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [approveTarget, setApproveTarget] = useState<ApiRequest | null>(null);
@@ -32,6 +35,13 @@ export default function RequestsPage() {
   const { data: requests = [], isLoading } = useQuery<ApiRequest[]>({
     queryKey: ["/api/requests", statusFilter],
     queryFn: async () => {
+      if (statusFilter === "pending") {
+        const pendingRes = await apiRequest("GET", "/api/requests?status=pending");
+        const pending = await pendingRes.json();
+        const reviewRes = await apiRequest("GET", "/api/requests?status=under_review");
+        const review = await reviewRes.json();
+        return [...pending, ...review];
+      }
       const params = statusFilter !== "all" ? `?status=${statusFilter}` : "";
       const res = await apiRequest("GET", `/api/requests${params}`);
       return res.json();
@@ -65,6 +75,7 @@ export default function RequestsPage() {
         throw new Error(err.message || "Action failed");
       }
       queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({ title: "Success", description: `Request ${action} completed.` });
     } catch (e: any) {
       toast({ title: "Error", description: e.message });
@@ -331,6 +342,17 @@ function ExpandedDetail({ request }: { request: ApiRequest }) {
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Reason</h4>
           <p className="text-sm">{request.reason}</p>
         </div>
+        {(() => {
+          // Server returns snake_case from raw SQL; the typed API uses camelCase.
+          const note = (request as any).studentNote ?? (request as any).student_note;
+          if (!note) return null;
+          return (
+            <div>
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Student Note</h4>
+              <p className="text-sm whitespace-pre-wrap">{note}</p>
+            </div>
+          );
+        })()}
         {request.adminNote && (
           <div>
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Admin Note</h4>

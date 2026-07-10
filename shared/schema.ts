@@ -134,6 +134,10 @@ export const clients = pgTable("clients", {
   eligibleDate: date("eligible_date"),
   certificationDate: date("certification_date"),
   status: text("status").default("active"),
+  // Partners Hub: "student" (default) or "partner" — partner orgs receive bulk distributions
+  clientType: text("client_type").notNull().default("student"),
+  organization: text("organization"),
+  partnershipType: text("partnership_type"),
   allergies: text("allergies")
     .array()
     .notNull()
@@ -223,6 +227,8 @@ export const transactions = pgTable("transactions", {
   donor: text("donor"),
   clientId: uuid("client_id").references(() => clients.id),
   clientName: text("client_name"),
+  // Emergency Shop Appointment flag: tracks emergency check-outs separately in reports
+  isEmergency: boolean("is_emergency").notNull().default(false),
   latitude: doublePrecision("latitude"),
   longitude: doublePrecision("longitude"),
   accuracy: doublePrecision("accuracy"),
@@ -433,6 +439,8 @@ export const requests = pgTable("requests", {
   clientEmail: text("client_email"),
   clientPhone: text("client_phone"),
   reason: text("reason").notNull(),
+  // Free-form note from the student/requester submitted alongside their request
+  studentNote: text("student_note"),
   status: text("status").notNull().default("pending"),
   adminNote: text("admin_note"),
   reviewedBy: text("reviewed_by"),

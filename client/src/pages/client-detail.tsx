@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeftIcon, CalendarIcon, PackageIcon, ClipboardListIcon, UserIcon } from "lucide-react";
+import { ArrowLeftIcon, CalendarIcon, PackageIcon, ClipboardListIcon, UserIcon, SirenIcon } from "lucide-react";
 
 export default function ClientDetailPage() {
   const [, params] = useRoute<{ id: string }>("/clients/:id");
@@ -42,6 +42,9 @@ export default function ClientDetailPage() {
 
   const totalItems = visits.reduce((sum, tx) => sum + tx.items.reduce((s: number, i: any) => s + i.quantity, 0), 0);
   const lastVisit = visits[0]?.timestamp ? new Date(visits[0].timestamp).toLocaleDateString() : "Never";
+  const emergencyVisits = visits.filter((v) => v.isEmergency);
+  const emergencyCount = emergencyVisits.length;
+  const isFlagged = emergencyCount > 1;
 
   return (
     <div className="space-y-4">
@@ -51,8 +54,24 @@ export default function ClientDetailPage() {
         </Link>
       </Button>
 
+      {isFlagged && (
+        <Card className="glass-panel border-red-300 bg-red-50/60" data-testid="card-client-flagged">
+          <CardContent className="py-3 px-4 flex items-center gap-3">
+            <SirenIcon className="h-5 w-5 text-red-600" />
+            <div>
+              <p className="text-sm font-semibold text-red-700">
+                Flagged student — {emergencyCount} Emergency Shop Appointments
+              </p>
+              <p className="text-xs text-muted-foreground">
+                More than one emergency on record. Review their notes and consider connecting them with case-management support.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         <Card className="glass-panel">
           <CardContent className="py-3 px-4">
             <p className="text-2xl font-semibold">{visits.length}</p>
@@ -69,6 +88,12 @@ export default function ClientDetailPage() {
           <CardContent className="py-3 px-4">
             <p className="text-2xl font-semibold">{requests.length}</p>
             <p className="text-xs text-muted-foreground">Requests</p>
+          </CardContent>
+        </Card>
+        <Card className={`glass-panel ${isFlagged ? "border-red-300" : ""}`} data-testid="card-client-emergency-count">
+          <CardContent className="py-3 px-4">
+            <p className={`text-2xl font-semibold ${isFlagged ? "text-red-700" : ""}`}>{emergencyCount}</p>
+            <p className="text-xs text-muted-foreground">Emergency Shops</p>
           </CardContent>
         </Card>
         <Card className="glass-panel">
@@ -149,9 +174,19 @@ export default function ClientDetailPage() {
                 const extra = tx.items.length - 1;
                 const date = new Date(tx.timestamp);
                 return (
-                  <TableRow key={tx.id} data-testid={`row-client-visit-${tx.id}`}>
+                  <TableRow
+                    key={tx.id}
+                    data-testid={`row-client-visit-${tx.id}`}
+                    className={tx.isEmergency ? "bg-red-50/40" : undefined}
+                  >
                     <TableCell className="text-xs">
                       {date.toLocaleDateString()} · {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {tx.isEmergency && (
+                        <Badge variant="destructive" className="ml-2 text-[10px] h-5">
+                          <SirenIcon className="h-3 w-3 mr-1" />
+                          Emergency
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm">
                       {first?.name}
@@ -189,7 +224,7 @@ export default function ClientDetailPage() {
               </TableHeader>
               <TableBody>
                 {requests.map((r: any) => {
-                  const date = new Date(r.created_at);
+                  const date = new Date(r.createdAt ?? r.created_at);
                   const itemCount = r.items?.length ?? 0;
                   return (
                     <TableRow key={r.id}>
