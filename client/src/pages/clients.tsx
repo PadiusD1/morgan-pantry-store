@@ -12,6 +12,25 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { useToast } from "@/hooks/use-toast";
 import { PlusIcon, SearchIcon, XIcon, Trash2Icon, SirenIcon } from "lucide-react";
 
+// Safely highlight query matches inside a note. Renders plain React text nodes
+// (React escapes them automatically) and wraps matches in <mark> — never uses
+// dangerouslySetInnerHTML, so a malicious note body cannot inject markup.
+function highlightNote(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return parts.map((part, i) =>
+    part.toLowerCase() === q.toLowerCase() ? (
+      <mark key={i} className="bg-yellow-200 rounded px-0.5">
+        {part}
+      </mark>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    ),
+  );
+}
+
 export default function ClientsPage() {
   const { clients: allClients, upsertClient, transactions, settings } = useRepository();
   // The Clients page is for student clients only — partner orgs live under /partners.
@@ -67,7 +86,10 @@ export default function ClientsPage() {
 
   function handleSave() {
     if (!editing) return;
-    if (!editing.name.trim() || !editing.identifier.trim()) return;
+    if (!editing.name.trim() || !editing.identifier.trim()) {
+      toast({ title: "Missing required fields", description: "Name and identifier are required." });
+      return;
+    }
     const client = upsertClient({
       id: editing.id,
       name: editing.name.trim(),
@@ -178,12 +200,12 @@ export default function ClientsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Identifier</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead>Household</TableHead>
-                <TableHead>Notes</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last visit</TableHead>
+                <TableHead className="hidden md:table-cell">Identifier</TableHead>
+                <TableHead className="hidden md:table-cell">Contact</TableHead>
+                <TableHead className="hidden md:table-cell">Household</TableHead>
+                <TableHead className="hidden md:table-cell">Notes</TableHead>
+                <TableHead className="hidden md:table-cell">Status</TableHead>
+                <TableHead className="hidden md:table-cell">Last visit</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -207,22 +229,21 @@ export default function ClientsPage() {
                     <TableCell className="text-sm font-medium" data-testid={`text-client-name-${c.id}`}>
                       {c.name}
                     </TableCell>
-                    <TableCell className="text-xs" data-testid={`text-client-identifier-${c.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs" data-testid={`text-client-identifier-${c.id}`}>
                       {c.identifier}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground" data-testid={`text-client-contact-${c.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-client-contact-${c.id}`}>
                       {c.phone || c.email || c.contact || "—"}
                     </TableCell>
-                    <TableCell className="text-xs text-center" data-testid={`text-client-household-${c.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs text-center" data-testid={`text-client-household-${c.id}`}>
                       {c.householdSize ?? 1}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate" title={c.notes || ""}>
-                      {c.notes ? (query.trim() && c.notes.toLowerCase().includes(query.trim().toLowerCase())
-                        ? <span dangerouslySetInnerHTML={{ __html: c.notes.substring(0, 50).replace(new RegExp(`(${query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark class="bg-yellow-200 rounded px-0.5">$1</mark>') }} />
-                        : c.notes.substring(0, 50) + (c.notes.length > 50 ? "..." : "")
-                      ) : ""}
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground max-w-[150px] truncate" title={c.notes || ""}>
+                      {c.notes
+                        ? highlightNote(c.notes.substring(0, 50) + (c.notes.length > 50 ? "..." : ""), query)
+                        : ""}
                     </TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell className="hidden md:table-cell text-xs">
                       <div className="flex flex-col gap-1">
                         <Badge
                           variant={c.status === "active" ? "default" : "secondary"}
@@ -242,7 +263,7 @@ export default function ClientsPage() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-xs" data-testid={`text-client-last-visit-${c.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs" data-testid={`text-client-last-visit-${c.id}`}>
                       {last ? last.toLocaleDateString() : "No visits yet"}
                       {warning && (
                         <div className="text-[11px] text-amber-700" data-testid={`status-client-frequency-${c.id}`}>
@@ -256,7 +277,7 @@ export default function ClientsPage() {
                           asChild
                           variant="outline"
                           size="sm"
-                          className="h-7 px-2 text-xs"
+                          className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                           data-testid={`button-view-client-${c.id}`}
                         >
                           <Link href={`/clients/${c.id}`} data-testid={`link-client-${c.id}`}>
@@ -267,7 +288,7 @@ export default function ClientsPage() {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 px-2 text-xs"
+                          className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                           onClick={() => setEditing({ id: c.id, name: c.name, identifier: c.identifier, contact: c.contact, phone: c.phone, email: c.email, address: c.address, dateOfBirth: c.dateOfBirth, householdSize: c.householdSize ?? 1, status: c.status ?? "active", allergies: c.allergies || [], notes: c.notes })}
                           data-testid={`button-edit-client-${c.id}`}
                         >
@@ -277,7 +298,7 @@ export default function ClientsPage() {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                          className="h-7 px-2 text-xs text-destructive hover:text-destructive max-md:min-h-[40px] max-md:px-3"
                           onClick={() => setDeleteConfirm({ id: c.id, name: c.name })}
                           data-testid={`button-delete-client-${c.id}`}
                         >
@@ -344,7 +365,7 @@ export default function ClientsPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="client-phone-edit">Phone</label>
                   <Input
@@ -372,7 +393,7 @@ export default function ClientsPage() {
                   onChange={(e) => setEditing((p) => (p ? { ...p, address: e.target.value } : p))}
                 />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="client-dob-edit">Date of birth</label>
                   <Input

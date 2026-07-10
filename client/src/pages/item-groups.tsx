@@ -33,7 +33,7 @@ export default function ItemGroupsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: groups = [], isLoading } = useQuery<ItemGroup[]>({
+  const { data: groups = [], isLoading, isError, refetch } = useQuery<ItemGroup[]>({
     queryKey: ["/api/item-groups"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/item-groups");
@@ -59,7 +59,11 @@ export default function ItemGroupsPage() {
     : [];
 
   async function handleSave() {
-    if (!editing || !editing.name.trim()) return;
+    if (!editing) return;
+    if (!editing.name.trim()) {
+      toast({ title: "Group name is required", description: "Enter a name before saving this group." });
+      return;
+    }
 
     const body = {
       name: editing.name.trim(),
@@ -138,6 +142,11 @@ export default function ItemGroupsPage() {
         <CardContent className="p-0">
           {isLoading ? (
             <div className="py-6 text-center text-sm text-muted-foreground">Loading...</div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-6 text-center">
+              <p className="text-sm text-destructive">Could not load item groups.</p>
+              <Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>
+            </div>
           ) : (
             <Table>
               <TableHeader>

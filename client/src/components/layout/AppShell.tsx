@@ -125,6 +125,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <SidebarRail />
       </Sidebar>
       <SidebarInset className="relative overflow-hidden">
+        {/* Mobile top bar — the ONLY way to reach navigation on phones,
+            since the sidebar is an off-canvas sheet below md. */}
+        <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-border/70 bg-background/95 px-3 py-2 backdrop-blur md:hidden">
+          <SidebarTrigger
+            className="h-9 w-9"
+            aria-label="Open navigation menu"
+            data-testid="button-mobile-menu"
+          />
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground text-[10px] font-semibold">
+              FRC
+            </div>
+            <span className="truncate text-sm font-semibold tracking-tight">
+              {pageTitleForPath(location)}
+            </span>
+          </div>
+        </div>
         <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-4 px-4 pb-8 pt-4 md:px-6">
           <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div className="space-y-1">

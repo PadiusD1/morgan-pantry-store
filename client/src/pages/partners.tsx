@@ -219,13 +219,13 @@ export default function PartnersPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Organization</TableHead>
-                <TableHead>Partnership type</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead className="text-right">Gave us</TableHead>
-                <TableHead className="text-right">Received from us</TableHead>
-                <TableHead>Last activity</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="hidden md:table-cell">Organization</TableHead>
+                <TableHead className="hidden md:table-cell">Partnership type</TableHead>
+                <TableHead className="hidden md:table-cell">Contact</TableHead>
+                <TableHead className="hidden md:table-cell text-right">Gave us</TableHead>
+                <TableHead className="hidden md:table-cell text-right">Received from us</TableHead>
+                <TableHead className="hidden md:table-cell">Last activity</TableHead>
+                <TableHead className="hidden md:table-cell">Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -250,27 +250,27 @@ export default function PartnersPage() {
                         {p.name}
                       </Link>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground" data-testid={`text-partner-org-${p.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-partner-org-${p.id}`}>
                       {p.organization || "-"}
                     </TableCell>
-                    <TableCell className="text-xs" data-testid={`text-partner-type-${p.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs" data-testid={`text-partner-type-${p.id}`}>
                       {p.partnershipType || "-"}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground" data-testid={`text-partner-contact-${p.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-partner-contact-${p.id}`}>
                       {p.phone || p.email || p.contact || "-"}
                     </TableCell>
-                    <TableCell className="text-xs text-right" data-testid={`text-partner-gave-us-${p.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs text-right" data-testid={`text-partner-gave-us-${p.id}`}>
                       <div className="font-medium">{totalUnitsGiven(p)} units</div>
                       <div className="text-muted-foreground">${totalValueGiven(p).toFixed(2)}</div>
                     </TableCell>
-                    <TableCell className="text-xs text-right" data-testid={`text-partner-received-${p.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs text-right" data-testid={`text-partner-received-${p.id}`}>
                       <div className="font-medium">{totalUnitsDistributed(p.id)} units</div>
                       <div className="text-muted-foreground">${totalValueDistributed(p.id).toFixed(2)}</div>
                     </TableCell>
-                    <TableCell className="text-xs" data-testid={`text-partner-last-${p.id}`}>
+                    <TableCell className="hidden md:table-cell text-xs" data-testid={`text-partner-last-${p.id}`}>
                       {last ? last.toLocaleDateString() : "Never"}
                     </TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell className="hidden md:table-cell text-xs">
                       <Badge
                         variant={p.status === "active" ? "default" : "secondary"}
                         className="text-[10px] h-5 px-1.5"
@@ -284,7 +284,7 @@ export default function PartnersPage() {
                           asChild
                           variant="outline"
                           size="sm"
-                          className="h-7 px-2 text-xs"
+                          className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                           data-testid={`button-view-partner-${p.id}`}
                         >
                           <Link href={`/partners/${p.id}`}>View</Link>
@@ -293,7 +293,7 @@ export default function PartnersPage() {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 px-2 text-xs"
+                          className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                           onClick={() =>
                             setEditing({
                               id: p.id,
@@ -317,7 +317,7 @@ export default function PartnersPage() {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                          className="h-7 px-2 text-xs text-destructive hover:text-destructive max-md:min-h-[40px] max-md:px-3"
                           onClick={() => setDeleteConfirm({ id: p.id, name: p.name })}
                           data-testid={`button-delete-partner-${p.id}`}
                         >
@@ -334,7 +334,7 @@ export default function PartnersPage() {
       </Card>
 
       <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle data-testid="text-edit-partner-heading">
               {editing?.id ? "Edit partner" : "Add new partner"}
@@ -353,7 +353,7 @@ export default function PartnersPage() {
               }}
               className="space-y-3"
             >
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="partner-name">Partner name *</label>
                   <Input
@@ -377,7 +377,7 @@ export default function PartnersPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="partner-org">Organization</label>
                   <Input
@@ -406,7 +406,7 @@ export default function PartnersPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="partner-contact">Contact name</label>
                   <Input
@@ -428,7 +428,7 @@ export default function PartnersPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="partner-email">Email</label>
                   <Input

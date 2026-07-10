@@ -35,8 +35,22 @@ export async function createApp(): Promise<Express> {
 
   // Vercel terminates TLS at the proxy; req.ip must come from x-forwarded-for
   app.set("trust proxy", 1);
+  app.disable("x-powered-by");
 
-  app.use(express.json({ limit: "5mb" }));
+  // Security headers on API responses (the static document also gets them via
+  // vercel.json; this covers the /api function directly, defense in depth).
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Cache-Control", "no-store");
+    if (process.env.NODE_ENV === "production") {
+      res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+    }
+    next();
+  });
+
+  app.use(express.json({ limit: "256kb" }));
   app.use(express.urlencoded({ extended: false }));
 
   // Same-origin deployment: no cross-origin API access unless explicitly
@@ -48,13 +62,15 @@ export async function createApp(): Promise<Express> {
 
   app.use((req, res, next) => {
     const origin = req.headers.origin;
+    // Only advertise CORS capabilities to allow-listed origins; a non-listed
+    // cross-origin caller gets no ACAO/methods/headers and is blocked by the browser.
     if (origin && allowedOrigins.includes(origin)) {
       res.header("Access-Control-Allow-Origin", origin);
       res.header("Access-Control-Allow-Credentials", "true");
       res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
-    res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (req.method === "OPTIONS") {
       return res.sendStatus(204);
     }

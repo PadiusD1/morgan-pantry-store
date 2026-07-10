@@ -1,4 +1,6 @@
 import type { Express } from "express";
+import { z } from "zod";
+import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import { pool } from "./pg";
 import { lookupBarcode } from "./barcode-lookup";
@@ -38,6 +40,74 @@ const ALLOWED_SETTING_KEYS = new Set([
 function actorName(req: { user?: { name?: string; email?: string } }): string {
   return req.user?.name || req.user?.email || "staff";
 }
+
+/**
+ * Shape zod validation errors for an API response.
+ * Only leaks the raw field errors outside production; in production the client
+ * gets a bare `undefined` so validation internals aren't disclosed.
+ */
+function zodErrors(error: { flatten: () => { fieldErrors: unknown } }): unknown {
+  return process.env.NODE_ENV !== "production"
+    ? error.flatten().fieldErrors
+    : undefined;
+}
+
+/** Map a raw `transactions` DB row to the camelCase shape the storage getter returns. */
+function mapTransactionRow(row: any) {
+  return {
+    id: row.id,
+    type: row.type,
+    timestamp: row.timestamp,
+    source: row.source,
+    donor: row.donor,
+    clientId: row.client_id,
+    clientName: row.client_name,
+    donorId: row.donor_id,
+    isEmergency: row.is_emergency,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    accuracy: row.accuracy,
+    createdAt: row.created_at,
+  };
+}
+
+/** Map a raw `transaction_items` DB row to the camelCase shape the storage getter returns. */
+function mapTransactionItemRow(row: any) {
+  return {
+    id: row.id,
+    transactionId: row.transaction_id,
+    inventoryItemId: row.inventory_item_id,
+    name: row.name,
+    quantity: row.quantity,
+    weightPerUnitLbs: row.weight_per_unit_lbs,
+    valuePerUnitUsd: row.value_per_unit_usd,
+  };
+}
+
+/** Body validation for POST /api/requests/:id/approve */
+const approveBodySchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        approvedQuantity: z.number().int().min(0),
+      }),
+    )
+    .optional(),
+  adminNote: z.string().max(2000).nullish(),
+});
+
+/** Body validation for POST /api/requests/:id/fulfill */
+const fulfillBodySchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        fulfilledQuantity: z.number().int().min(0),
+      }),
+    )
+    .optional(),
+});
 
 async function getHydratedItemGroupItems(groupId: string) {
   const { rows } = await pool.query(
@@ -92,6 +162,9 @@ export async function registerRoutes(app: Express): Promise<void> {
   app.get("/api/barcode-lookup/:code", async (req, res) => {
     const code = req.params.code?.trim();
     if (!code) return res.status(400).json({ message: "Barcode is required" });
+    if (!/^[0-9]{6,14}$/.test(code)) {
+      return res.status(400).json({ message: "Invalid barcode format" });
+    }
 
     const existing = await storage.getInventoryItemByBarcode(code);
     if (existing) {
@@ -110,7 +183,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.json({
         status: "not_found",
         barcode: code,
-        logs: [{ api: "all", status: "error", latencyMs: 0, error: String(err) }],
+        logs: [{ api: "all", status: "error", latencyMs: 0, error: "lookup failed" }],
       });
     }
 
@@ -224,7 +297,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.success) {
       return res
         .status(400)
-        .json({ message: "Invalid data", errors: result.error.errors });
+        .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const item = await storage.createInventoryItem(result.data);
     res.status(201).json(item);
@@ -235,7 +308,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.success) {
       return res
         .status(400)
-        .json({ message: "Invalid data", errors: result.error.errors });
+        .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const updated = await storage.updateInventoryItem(
       req.params.id,
@@ -272,7 +345,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.success) {
       return res
         .status(400)
-        .json({ message: "Invalid data", errors: result.error.errors });
+        .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
 
     try {
@@ -293,7 +366,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.success) {
       return res
         .status(400)
-        .json({ message: "Invalid data", errors: result.error.errors });
+        .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const updated = await storage.updateClient(req.params.id, result.data);
     if (!updated) return res.status(404).json({ message: "Not found" });
@@ -308,14 +381,57 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   // ─── Transactions ────────────────────────────────────────────────────
 
-  app.get("/api/transactions", async (_req, res) => {
-    const transactions = await storage.getTransactions();
-    const withItems = await Promise.all(
-      transactions.map(async (tx) => {
-        const items = await storage.getTransactionItems(tx.id);
-        return { ...tx, items };
-      }),
-    );
+  app.get("/api/transactions", async (req, res) => {
+    // Optional bounds; default behavior returns ALL transactions (newest first).
+    const limitRaw =
+      typeof req.query.limit === "string" ? parseInt(req.query.limit, 10) : NaN;
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : null;
+    const since = typeof req.query.since === "string" ? req.query.since : null;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (since) {
+      params.push(since);
+      conditions.push(`timestamp >= $${params.length}::timestamptz`);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    let limitClause = "";
+    if (limit != null) {
+      params.push(limit);
+      limitClause = ` LIMIT $${params.length}`;
+    }
+
+    // Query 1: transactions. Query 2: every item for those transactions.
+    // Stitch in JS — constant number of round-trips, never N+1.
+    const txRows = (
+      await pool.query(
+        `SELECT * FROM transactions${where} ORDER BY timestamp DESC${limitClause}`,
+        params,
+      )
+    ).rows;
+
+    const itemsByTx = new Map<string, any[]>();
+    if (txRows.length > 0) {
+      const txIds = txRows.map((r) => r.id);
+      const itemRows = (
+        await pool.query(
+          `SELECT * FROM transaction_items WHERE transaction_id = ANY($1::uuid[])`,
+          [txIds],
+        )
+      ).rows;
+      for (const ir of itemRows) {
+        const mapped = mapTransactionItemRow(ir);
+        const arr = itemsByTx.get(ir.transaction_id);
+        if (arr) arr.push(mapped);
+        else itemsByTx.set(ir.transaction_id, [mapped]);
+      }
+    }
+
+    const withItems = txRows.map((r) => ({
+      ...mapTransactionRow(r),
+      items: itemsByTx.get(r.id) ?? [],
+    }));
     res.json(withItems);
   });
 
@@ -330,52 +446,104 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!txResult.success) {
       return res
         .status(400)
-        .json({ message: "Invalid data", errors: txResult.error.errors });
+        .json({ message: "Invalid data", errors: zodErrors(txResult.error) });
     }
 
-    const transaction = await storage.createTransaction(txResult.data);
-
-    const createdItems = [];
+    // Generate the id up front so we can fully validate every item BEFORE
+    // opening the DB transaction — validation failures never leave a half-write.
+    const txId = randomUUID();
+    const parsedItems: Array<z.infer<typeof insertTransactionItemSchema>> = [];
     if (Array.isArray(rawItems)) {
       for (const rawItem of rawItems) {
-        // For OUT transactions: auto-create missing inventory items
-        // and auto-adjust insufficient quantities
-        if (txResult.data.type === "OUT" && rawItem.inventoryItemId) {
-          try {
-            const invItem = await storage.getInventoryItem(rawItem.inventoryItemId);
-            if (!invItem) {
-              await storage.createInventoryItem({
-                name: rawItem.name || "Unknown Item",
-                category: "Uncategorized",
-                quantity: rawItem.quantity || 1,
-                weightPerUnitLbs: rawItem.weightPerUnitLbs || "0",
-                valuePerUnitUsd: rawItem.valuePerUnitUsd || "0",
-              });
-            } else if (invItem.quantity < (rawItem.quantity || 0)) {
-              await storage.updateInventoryItem(invItem.id, {
-                quantity: rawItem.quantity,
-              });
-            }
-          } catch {
-            // Ignore auto-adjust errors (e.g. race conditions) — let the transaction continue
-          }
-        }
-
         const itemResult = insertTransactionItemSchema.safeParse({
           ...rawItem,
-          transactionId: transaction.id,
+          transactionId: txId,
         });
         if (!itemResult.success) {
           return res
             .status(400)
-            .json({ message: "Invalid item data", errors: itemResult.error.errors });
+            .json({ message: "Invalid item data", errors: zodErrors(itemResult.error) });
         }
-        const created = await storage.createTransactionItem(itemResult.data);
-        createdItems.push(created);
+        parsedItems.push(itemResult.data);
       }
     }
 
-    res.status(201).json({ ...transaction, items: createdItems });
+    const d = txResult.data;
+
+    // Atomic: the transaction insert, its items, AND the inventory deltas all
+    // commit together (or roll back together). The server is the single source
+    // of truth for stock — IN adds, OUT subtracts (never below zero).
+    let responsePayload: Record<string, unknown>;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const txRow = (
+        await client.query(
+          `INSERT INTO transactions
+             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy)
+           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12)
+           RETURNING *`,
+          [
+            txId,
+            d.type,
+            (d as any).timestamp ?? null,
+            (d as any).source ?? null,
+            (d as any).donor ?? null,
+            (d as any).clientId ?? null,
+            (d as any).clientName ?? null,
+            (d as any).donorId ?? null,
+            (d as any).isEmergency ?? null,
+            (d as any).latitude ?? null,
+            (d as any).longitude ?? null,
+            (d as any).accuracy ?? null,
+          ],
+        )
+      ).rows[0];
+
+      const createdItems: Array<ReturnType<typeof mapTransactionItemRow>> = [];
+      for (const it of parsedItems) {
+        const insertedItem = (
+          await client.query(
+            `INSERT INTO transaction_items
+               (transaction_id, inventory_item_id, name, quantity, weight_per_unit_lbs, value_per_unit_usd)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING *`,
+            [
+              txId,
+              it.inventoryItemId,
+              it.name,
+              it.quantity,
+              it.weightPerUnitLbs,
+              it.valuePerUnitUsd,
+            ],
+          )
+        ).rows[0];
+        createdItems.push(mapTransactionItemRow(insertedItem));
+
+        if (d.type === "IN") {
+          await client.query(
+            `UPDATE inventory_items SET quantity = quantity + $1 WHERE id = $2`,
+            [it.quantity, it.inventoryItemId],
+          );
+        } else if (d.type === "OUT") {
+          await client.query(
+            `UPDATE inventory_items SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
+            [it.quantity, it.inventoryItemId],
+          );
+        }
+      }
+
+      await client.query("COMMIT");
+      responsePayload = { ...mapTransactionRow(txRow), items: createdItems };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.status(201).json(responsePayload);
   });
 
   app.get("/api/transactions/:id/items", async (req, res) => {
@@ -400,7 +568,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       clientId: req.params.id,
     });
     if (!result.success) {
-      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+      return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const member = await storage.createHouseholdMember(result.data);
     res.status(201).json(member);
@@ -432,7 +600,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     const { items: rawItems, ...groupBody } = req.body;
     const result = insertItemGroupSchema.safeParse(groupBody);
     if (!result.success) {
-      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+      return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const group = await storage.createItemGroup(result.data);
 
@@ -452,7 +620,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     const { items: rawItems, ...groupBody } = req.body;
     const result = insertItemGroupSchema.partial().safeParse(groupBody);
     if (!result.success) {
-      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+      return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const updated = await storage.updateItemGroup(req.params.id, result.data);
     if (!updated) return res.status(404).json({ message: "Not found" });
@@ -503,7 +671,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       groupId: req.params.id,
     });
     if (!result.success) {
-      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+      return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const item = await storage.createItemGroupItem(result.data);
     const hydrated = (await getHydratedItemGroupItems(group.id)).find((i) => i.id === item.id) ?? item;
@@ -852,8 +1020,15 @@ export async function registerRoutes(app: Express): Promise<void> {
         return res.status(400).json({ message: `Cannot approve request with status '${request.status}'` });
       }
 
+      const bodyResult = approveBodySchema.safeParse(req.body ?? {});
+      if (!bodyResult.success) {
+        return res
+          .status(400)
+          .json({ message: "Invalid data", errors: zodErrors(bodyResult.error) });
+      }
+      const { items: bodyItems, adminNote } = bodyResult.data;
+
       const requestItems = await storage.getRequestItems(req.params.id);
-      const { items: bodyItems, adminNote } = req.body;
       const actor = actorName(req);
 
       const approvalMap = new Map<string, number>();
@@ -1018,7 +1193,13 @@ export async function registerRoutes(app: Express): Promise<void> {
       (ri: any) => (ri.approvedQuantity ?? 0) > 0,
     );
 
-    const { items: bodyItems } = req.body || {};
+    const bodyResult = fulfillBodySchema.safeParse(req.body ?? {});
+    if (!bodyResult.success) {
+      return res
+        .status(400)
+        .json({ message: "Invalid data", errors: zodErrors(bodyResult.error) });
+    }
+    const { items: bodyItems } = bodyResult.data;
     const fulfillMap = new Map<string, number>();
     if (Array.isArray(bodyItems)) {
       for (const bi of bodyItems) {
@@ -1040,7 +1221,10 @@ export async function registerRoutes(app: Express): Promise<void> {
       txId = txResult.rows[0].id;
 
       for (const ri of requestItems) {
-        const fulfilledQty = fulfillMap.has(ri.id) ? fulfillMap.get(ri.id)! : ri.approvedQuantity;
+        const approvedQty = ri.approvedQuantity ?? 0;
+        const requestedFulfill = fulfillMap.has(ri.id) ? fulfillMap.get(ri.id)! : approvedQty;
+        // Never distribute more than was approved, and never negative.
+        const fulfilledQty = Math.max(0, Math.min(requestedFulfill, approvedQty));
 
         await client.query(
           "UPDATE inventory_items SET quantity = GREATEST(0, quantity - $1) WHERE id = $2",
@@ -1321,33 +1505,74 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   app.get("/api/donors", async (_req, res) => {
     const donors = await storage.getDonors();
-    const withStats = await Promise.all(
-      donors.map(async (d: any) => {
-        const txRows = await donorTransactions(d.id, d.name);
-        let totalItems = 0;
-        let totalWeight = 0;
-        let totalValue = 0;
-        for (const tx of txRows) {
-          const items = await transactionItemsFor(tx.id);
-          for (const item of items) {
-            totalItems += item.quantity || 0;
-            totalWeight += (parseFloat(item.weight_per_unit_lbs) || 0) * (item.quantity || 0);
-            totalValue += (parseFloat(item.value_per_unit_usd) || 0) * (item.quantity || 0);
-          }
+
+    // Single aggregate query: one row per IN transaction with its item totals.
+    // We match to donors in JS by donor_id OR donor name (the same OR the old
+    // per-donor query used) — no nested donors×transactions×items round-trips.
+    const aggRows = (
+      await pool.query(
+        `SELECT
+           t.id        AS tx_id,
+           t.donor_id  AS donor_id,
+           t.donor     AS donor_name,
+           t.timestamp AS ts,
+           COALESCE(SUM(ti.quantity), 0)::int AS items,
+           COALESCE(SUM(COALESCE(ti.weight_per_unit_lbs, 0) * ti.quantity), 0)::float AS weight,
+           COALESCE(SUM(COALESCE(ti.value_per_unit_usd, 0) * ti.quantity), 0)::float AS value
+         FROM transactions t
+         LEFT JOIN transaction_items ti ON ti.transaction_id = t.id
+         WHERE t.type = 'IN'
+         GROUP BY t.id, t.donor_id, t.donor, t.timestamp`,
+      )
+    ).rows;
+
+    const byId = new Map<string, any[]>();
+    const byName = new Map<string, any[]>();
+    for (const r of aggRows) {
+      if (r.donor_id) {
+        const arr = byId.get(r.donor_id);
+        if (arr) arr.push(r);
+        else byId.set(r.donor_id, [r]);
+      }
+      if (r.donor_name) {
+        const arr = byName.get(r.donor_name);
+        if (arr) arr.push(r);
+        else byName.set(r.donor_name, [r]);
+      }
+    }
+
+    const withStats = donors.map((d: any) => {
+      const seen = new Set<string>();
+      let totalItems = 0;
+      let totalWeight = 0;
+      let totalValue = 0;
+      let totalDonations = 0;
+      let lastTimestamp: any = null;
+
+      const candidates = [...(byId.get(d.id) ?? []), ...(byName.get(d.name) ?? [])];
+      for (const r of candidates) {
+        if (seen.has(r.tx_id)) continue; // dedupe when a tx matches by both id and name
+        seen.add(r.tx_id);
+        totalDonations += 1;
+        totalItems += r.items || 0;
+        totalWeight += r.weight || 0;
+        totalValue += r.value || 0;
+        if (r.ts && (!lastTimestamp || new Date(r.ts) > new Date(lastTimestamp))) {
+          lastTimestamp = r.ts;
         }
-        const lastTimestamp = txRows[0]?.timestamp ?? null;
-        return {
-          ...d,
-          totalDonations: txRows.length,
-          totalItems,
-          lastDonation: lastTimestamp,
-          totalItemsDonated: totalItems,
-          totalWeightDonated: Math.round(totalWeight * 100) / 100,
-          totalValueDonated: Math.round(totalValue * 100) / 100,
-          lastDonationDate: lastTimestamp,
-        };
-      }),
-    );
+      }
+
+      return {
+        ...d,
+        totalDonations,
+        totalItems,
+        lastDonation: lastTimestamp,
+        totalItemsDonated: totalItems,
+        totalWeightDonated: Math.round(totalWeight * 100) / 100,
+        totalValueDonated: Math.round(totalValue * 100) / 100,
+        lastDonationDate: lastTimestamp,
+      };
+    });
     res.json(withStats);
   });
 
@@ -1464,7 +1689,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   app.post("/api/donors", async (req, res) => {
     const result = insertDonorSchema.safeParse(req.body);
     if (!result.success) {
-      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+      return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     if (!result.data.name?.trim()) {
       return res.status(400).json({ message: "Donor name is required" });
@@ -1476,7 +1701,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   app.patch("/api/donors/:id", async (req, res) => {
     const result = insertDonorSchema.partial().safeParse(req.body);
     if (!result.success) {
-      return res.status(400).json({ message: "Invalid data", errors: result.error.errors });
+      return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     const updated = await storage.updateDonor(req.params.id, result.data);
     if (!updated) return res.status(404).json({ message: "Donor not found" });

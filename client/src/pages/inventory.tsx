@@ -175,10 +175,10 @@ export default function InventoryPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Barcode</TableHead>
+                <TableHead className="hidden md:table-cell">Category</TableHead>
+                <TableHead className="hidden md:table-cell">Barcode</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
-                <TableHead className="text-right">Weight / Value</TableHead>
+                <TableHead className="hidden md:table-cell text-right">Weight / Value</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -212,16 +212,16 @@ export default function InventoryPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground" data-testid={`text-item-category-${item.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-item-category-${item.id}`}>
                     {item.category || "Uncategorized"}
                   </TableCell>
-                  <TableCell className="text-xs" data-testid={`text-item-barcode-${item.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs" data-testid={`text-item-barcode-${item.id}`}>
                     {item.barcode || <span className="text-muted-foreground">None</span>}
                   </TableCell>
                   <TableCell className="text-right text-sm font-semibold" data-testid={`text-item-quantity-${item.id}`}>
                     {item.quantity}
                   </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground" data-testid={`text-item-weight-value-${item.id}`}>
+                  <TableCell className="hidden md:table-cell text-right text-xs text-muted-foreground" data-testid={`text-item-weight-value-${item.id}`}>
                     {item.weightPerUnitLbs ? `${item.weightPerUnitLbs.toFixed(2)} lbs` : "-"} •
                     {" "}
                     {item.valuePerUnitUsd ? `$${item.valuePerUnitUsd.toFixed(2)}` : "-"}
@@ -231,7 +231,7 @@ export default function InventoryPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 px-2 text-xs"
+                        className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                         onClick={() => adjustItemQuantity(item.id, -1)}
                         data-testid={`button-decrement-${item.id}`}
                       >
@@ -240,7 +240,7 @@ export default function InventoryPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 px-2 text-xs"
+                        className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                         onClick={() => adjustItemQuantity(item.id, 1)}
                         data-testid={`button-increment-${item.id}`}
                       >
@@ -249,7 +249,7 @@ export default function InventoryPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs"
+                        className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                         onClick={() => setEditingItem(item)}
                         data-testid={`button-edit-item-${item.id}`}
                       >
@@ -372,7 +372,10 @@ function InventoryEditDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim()) return;
+    if (!form.name.trim()) {
+      toast({ title: "Item name is required", description: "Enter a name before saving this item." });
+      return;
+    }
     const finalCategory = form.category.trim() || "Uncategorized";
     // Learn the association so future items with similar names get this category
     if (finalCategory !== "Uncategorized") {
@@ -389,7 +392,7 @@ function InventoryEditDialog({
   }
 
   return (
-    <DialogContent className="max-w-lg" data-testid="dialog-edit-item">
+    <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-item">
       <DialogHeader>
         <DialogTitle data-testid="text-edit-item-heading">
           {item.id ? "Edit item" : "Add new item"}
@@ -557,7 +560,7 @@ function InventoryEditDialog({
                             placeholder="Enter new source"
                             autoFocus
                         />
-                        <Button type="button" variant="ghost" size="icon" onClick={() => setIsNewSource(false)}>
+                        <Button type="button" variant="ghost" size="icon" aria-label="Cancel new source" onClick={() => setIsNewSource(false)}>
                             <span className="sr-only">Cancel</span>
                             <XIcon className="h-4 w-4" />
                         </Button>
@@ -600,7 +603,7 @@ function InventoryEditDialog({
                                     placeholder="Enter new donor"
                                     autoFocus
                                 />
-                                <Button type="button" variant="ghost" size="icon" onClick={() => setIsNewDonor(false)}>
+                                <Button type="button" variant="ghost" size="icon" aria-label="Cancel new donor" onClick={() => setIsNewDonor(false)}>
                                     <span className="sr-only">Cancel</span>
                                     <XIcon className="h-4 w-4" />
                                 </Button>

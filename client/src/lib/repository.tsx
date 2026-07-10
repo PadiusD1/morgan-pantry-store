@@ -137,14 +137,14 @@ export type RepositoryContextValue = RepositoryState & {
     donorClientId?: string;
     timestamp?: string;
     location?: GeoLocation;
-  }) => void;
+  }) => Promise<void>;
   recordOutbound: (options: {
     client: { id?: string; name: string; identifier: string; contact?: string };
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
-  }) => { client: ClientRecord } | undefined;
+  }) => Promise<{ client: ClientRecord }>;
   upsertClient: (partial: Partial<ClientRecord> & { name: string; identifier: string }) => ClientRecord;
   updateSettings: (partial: Partial<Settings>) => void;
   upsertBarcodeCache: (barcode: string, entry: Omit<BarcodeCacheEntry, "cachedAt">) => void;
@@ -290,9 +290,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         (old ?? []).map((i) => (i.id === existing.id ? { ...i, ...toOptimisticApiItem(updated) } : i)),
       );
 
-      // Fire API
+      // Fire API. On failure, invalidate to roll the optimistic edit back to the
+      // server's truth instead of silently leaving a phantom change in the cache.
       apiRequest("PATCH", `/api/inventory/${existing.id}`, toApiInventoryBody(partial))
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }));
+        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
+        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }));
 
       return updated;
     }
@@ -336,7 +338,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       toOptimisticApiItem(item),
     ]);
 
-    // Track pending create
+    // Track pending create. On success it resolves to the real server ID; on
+    // failure it REJECTS so any awaiter (recordInbound / recordOutbound) can
+    // surface the error instead of silently POSTing a transaction against a
+    // temp ID the server never stored.
     const createPromise = apiRequest("POST", "/api/inventory", toApiInventoryBody(item))
       .then(async (res) => {
         const created: ApiInventoryItem = await res.json();
@@ -348,13 +353,18 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         pendingCreates.current.delete(tempId);
         return created.id;
       })
-      .catch(() => {
+      .catch((err) => {
+        // Roll the optimistic row back to server truth, then propagate.
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         pendingCreates.current.delete(tempId);
-        return tempId;
+        throw err instanceof Error ? err : new Error(String(err));
       });
 
     pendingCreates.current.set(tempId, createPromise);
+    // Standalone callers (CSV import, inventory add) don't await this promise —
+    // swallow the rejection here so it isn't reported as unhandled. Awaiters
+    // still observe the rejection through their own `await`.
+    createPromise.catch(() => {});
 
     return item;
   }
@@ -368,12 +378,14 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       }),
     );
 
-    // Fire API: read current quantity from cache to compute new value
+    // Fire API: read current quantity from cache to compute new value.
     const current = (inventoryQuery.data ?? []).find((i) => i.id === itemId);
     if (current) {
       const newQty = Math.max(0, current.quantity + delta);
       apiRequest("PATCH", `/api/inventory/${itemId}`, { quantity: newQty })
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }));
+        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
+        // On failure, invalidate to roll the optimistic +/- back to server truth.
+        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }));
     }
   }
 
@@ -413,7 +425,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       );
 
       apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(merged))
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }));
+        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }))
+        // On failure, invalidate to roll the optimistic merge back to server truth.
+        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }));
 
       return updated;
     }
@@ -448,31 +462,13 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       toOptimisticApiClient(client),
     ]);
 
-    // Track pending client create so recordOutbound can await the real ID
+    // Track pending client create so recordOutbound can await the real ID.
+    // A 409 (duplicate identifier) is NOT a failure — a real record already
+    // exists, so we resolve to that record's id. Any other non-OK status, or a
+    // network error, REJECTS so recordOutbound can surface the failure and
+    // avoid POSTing a transaction against a client the server never stored.
     const createPromise = apiRequest("POST", "/api/clients", toApiClientBody(client))
       .then(async (res) => {
-        if (!res.ok) {
-          // Server rejected. Most common reason here is a 409 (duplicate identifier)
-          // — that means a real record already exists, so refetch and let the
-          // caller use that record going forward.
-          queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-          pendingClientCreates.current.delete(tempId);
-          if (res.status === 409) {
-            // Best-effort: look up the canonical client by identifier and surface its id.
-            try {
-              const lookup = await apiRequest(
-                "GET",
-                `/api/clients?type=${client.clientType === "partner" ? "partner" : "student"}`,
-              );
-              const list: ApiClient[] = await lookup.json();
-              const dup = list.find((c) => normalize(c.identifier) === partialIdentifier);
-              if (dup) return dup.id;
-            } catch {
-              // fall through to tempId
-            }
-          }
-          return tempId;
-        }
         const created: ApiClient = await res.json();
         queryClient.setQueryData<ApiClient[]>(["/api/clients"], (old) =>
           upsertApiRow(old, tempId, created),
@@ -480,18 +476,43 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         pendingClientCreates.current.delete(tempId);
         return created.id;
       })
-      .catch(() => {
+      .catch(async (err) => {
+        // apiRequest throws `Error("{status}: {body}")`. A 409 means the client
+        // already exists — recover its canonical id instead of failing.
+        const status = err instanceof Error ? parseInt(err.message, 10) : NaN;
+        if (status === 409) {
+          queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+          pendingClientCreates.current.delete(tempId);
+          try {
+            const lookup = await apiRequest(
+              "GET",
+              `/api/clients?type=${client.clientType === "partner" ? "partner" : "student"}`,
+            );
+            const list: ApiClient[] = await lookup.json();
+            const dup = list.find((c) => normalize(c.identifier) === partialIdentifier);
+            if (dup) return dup.id;
+          } catch {
+            // fall through to reject below
+          }
+          // Duplicate exists but we couldn't resolve its id — treat as failure.
+          throw err instanceof Error ? err : new Error(String(err));
+        }
+        // Genuine failure (network / 4xx / 5xx): roll back and propagate.
         queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
         pendingClientCreates.current.delete(tempId);
-        return tempId;
+        throw err instanceof Error ? err : new Error(String(err));
       });
 
     pendingClientCreates.current.set(tempId, createPromise);
+    // Standalone callers (Clients / Partners pages) don't await this promise —
+    // swallow the rejection here so it isn't reported as unhandled. Awaiters
+    // (recordOutbound) still observe the rejection through their own `await`.
+    createPromise.catch(() => {});
 
     return client;
   }
 
-  function recordInbound(options: {
+  async function recordInbound(options: {
     itemId: string;
     quantity: number;
     source?: string;
@@ -499,7 +520,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     donorClientId?: string;
     timestamp?: string;
     location?: GeoLocation;
-  }) {
+  }): Promise<void> {
     const { itemId, quantity, source, donor, donorClientId, location } = options;
     const timestamp = options.timestamp ?? new Date().toISOString();
 
@@ -509,7 +530,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     const item = currentInventory.find((i) => i.id === itemId);
     if (!item) return;
 
-    // Optimistic inventory update
+    // Optimistic inventory update. The SERVER is the source of truth for stock —
+    // it applies the +received delta atomically when the IN transaction is posted
+    // (see cross-agent contract). This is only a hint for instant UI feedback and
+    // is reconciled by the invalidation below.
     queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
       (old ?? []).map((i) =>
         i.id === itemId ? { ...i, quantity: i.quantity + quantity, updatedAt: timestamp } : i,
@@ -554,20 +578,15 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       ...(old ?? []),
     ]);
 
-    // Fire API
-    (async () => {
+    try {
+      // Resolve the real inventory item ID. For a brand-new item, the page called
+      // addOrUpdateItem (which creates it with quantity 0) just before this, so
+      // its create POST may still be in flight — await it here to get the real id.
+      // If that create failed, this rejects and we roll back below.
       const realItemId = await resolveItemId(itemId);
 
-      // Update inventory on server
-      const currentItem = (queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"]) ?? [])
-        .find((i) => i.id === realItemId);
-      if (currentItem) {
-        await apiRequest("PATCH", `/api/inventory/${realItemId}`, {
-          quantity: currentItem.quantity,
-        });
-      }
-
-      // Create transaction
+      // Create the IN transaction. The server applies the inventory delta inside
+      // the same DB transaction — do NOT PATCH inventory quantity here.
       await apiRequest("POST", "/api/transactions", {
         type: "IN",
         timestamp,
@@ -587,21 +606,32 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         }],
       });
 
+      // Confirmed — reconcile the optimistic cache with the server's truth.
       queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
-    })();
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    } catch (err) {
+      // Roll back every optimistic mutation to the server's truth, then rethrow
+      // so the page can surface an error toast and skip the success receipt.
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      throw err instanceof Error ? err : new Error(String(err));
+    }
   }
 
-  function recordOutbound(options: {
+  async function recordOutbound(options: {
     client: { id?: string; name: string; identifier: string; contact?: string };
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
-  }): { client: ClientRecord } | undefined {
+  }): Promise<{ client: ClientRecord }> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const isEmergency = Boolean(options.isEmergency);
-    if (!options.items.length) return undefined;
+    if (!options.items.length) {
+      throw new Error("Check-out requires at least one item.");
+    }
 
     const client = upsertClient({
       id: options.client.id,
@@ -612,7 +642,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
     const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
 
-    // Optimistic inventory update — auto-adjust if insufficient, never block
+    // Optimistic inventory update — auto-adjust if insufficient, never block. The
+    // SERVER is the source of truth: it subtracts the given quantity (clamped at 0)
+    // atomically when the OUT transaction is posted (see cross-agent contract).
     queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
       (old ?? []).map((apiItem) => {
         const cartItem = options.items.find((i) => i.itemId === apiItem.id);
@@ -637,8 +669,6 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         };
       })
       .filter(Boolean) as TransactionItem[];
-
-    if (!txItems.length) return { client };
 
     // Optimistic transaction
     const tempTxId = uuid();
@@ -666,64 +696,63 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       })),
     };
 
-    queryClient.setQueryData<ApiTransaction[]>(["/api/transactions"], (old) => [
-      optimisticTx,
-      ...(old ?? []),
-    ]);
+    if (txItems.length) {
+      queryClient.setQueryData<ApiTransaction[]>(["/api/transactions"], (old) => [
+        optimisticTx,
+        ...(old ?? []),
+      ]);
+    }
 
-    // Fire API
-    (async () => {
-      // CRITICAL: Resolve the real client ID before posting the transaction.
-      // If this is a new client, the server POST may still be in-flight.
-      // We must await it so the transaction links to the correct server client ID.
+    try {
+      // CRITICAL: resolve the real client ID before posting the transaction. For a
+      // new client the create POST may still be in flight — await it so the
+      // transaction links to the correct server client ID (and so a client-create
+      // failure surfaces here rather than being silently dropped).
       const realClientId = await resolveClientId(client.id);
 
-      // Patch each inventory item on server — auto-adjust if insufficient
-      for (const cartItem of options.items) {
-        const realId = await resolveItemId(cartItem.itemId);
-        const current = (queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"]) ?? [])
-          .find((i) => i.id === realId);
-        if (current) {
-          // Server-side: ensure quantity covers checkout, then subtract
-          const serverQty = Math.max(0, current.quantity);
-          await apiRequest("PATCH", `/api/inventory/${realId}`, {
-            quantity: serverQty,
-          });
-        }
-      }
-
-      // Resolve item IDs for transaction items
-      const apiItems = await Promise.all(
-        txItems.map(async (ti) => {
-          const realId = await resolveItemId(ti.itemId);
-          return {
-            inventoryItemId: realId,
+      if (txItems.length) {
+        // Resolve item IDs (awaiting any in-flight item creates), then post the
+        // OUT transaction. The server subtracts stock atomically — do NOT PATCH
+        // inventory quantity here.
+        const apiItems = await Promise.all(
+          txItems.map(async (ti) => ({
+            inventoryItemId: await resolveItemId(ti.itemId),
             name: ti.name,
             quantity: ti.quantity,
             weightPerUnitLbs: String(ti.weightPerUnitLbs),
             valuePerUnitUsd: String(ti.valuePerUnitUsd),
-          };
-        }),
-      );
+          })),
+        );
 
-      await apiRequest("POST", "/api/transactions", {
-        type: "OUT",
-        timestamp,
-        clientId: realClientId,
-        clientName: client.name,
-        isEmergency,
-        latitude: options.location?.latitude ?? null,
-        longitude: options.location?.longitude ?? null,
-        accuracy: options.location?.accuracy ?? null,
-        items: apiItems,
-      });
+        await apiRequest("POST", "/api/transactions", {
+          type: "OUT",
+          timestamp,
+          clientId: realClientId,
+          clientName: client.name,
+          isEmergency,
+          latitude: options.location?.latitude ?? null,
+          longitude: options.location?.longitude ?? null,
+          accuracy: options.location?.accuracy ?? null,
+          items: apiItems,
+        });
+      }
 
+      // Confirmed — reconcile the optimistic cache with the server's truth.
       queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-    })();
 
-    return { client };
+      // Return the client carrying its resolved (real) server id so the caller
+      // can select the persisted record for the receipt.
+      return { client: { ...client, id: realClientId } };
+    } catch (err) {
+      // Roll back every optimistic mutation to the server's truth, then rethrow
+      // so the page can surface an error toast and skip the success receipt.
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      throw err instanceof Error ? err : new Error(String(err));
+    }
   }
 
   function updateSettings(partial: Partial<Settings>) {

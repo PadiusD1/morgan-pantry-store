@@ -105,7 +105,7 @@ export default function RequestsPage() {
           <div>
             <p className="text-sm font-medium">Student Request Portal</p>
             <p className="text-xs text-muted-foreground">
-              Share this link with students: <code className="bg-muted px-1 rounded text-[11px]">{window.location.origin}/portal</code>
+              Share this link with students: <code className="bg-muted px-1 rounded text-[11px] break-all">{window.location.origin}/portal</code>
             </p>
           </div>
           <div className="flex gap-2">
@@ -197,15 +197,15 @@ export default function RequestsPage() {
                       <TableCell className="text-right space-x-1">
                         {(r.status === "pending" || r.status === "under_review") && (
                           <>
-                            <Button size="sm" variant="outline" className="text-xs h-7" onClick={(e) => { e.stopPropagation(); setApproveTarget(r); }}>Approve</Button>
-                            <Button size="sm" variant="outline" className="text-xs h-7 text-red-600" onClick={(e) => { e.stopPropagation(); setDenyTarget(r); }}>Deny</Button>
+                            <Button size="sm" variant="outline" className="text-xs h-7 max-md:min-h-[40px] max-md:px-3" onClick={(e) => { e.stopPropagation(); setApproveTarget(r); }}>Approve</Button>
+                            <Button size="sm" variant="outline" className="text-xs h-7 text-red-600 max-md:min-h-[40px] max-md:px-3" onClick={(e) => { e.stopPropagation(); setDenyTarget(r); }}>Deny</Button>
                           </>
                         )}
                         {["approved", "partially_approved", "ready_for_pickup"].includes(r.status) && (
                           <>
-                            <Button size="sm" variant="outline" className="text-xs h-7 text-green-700" onClick={(e) => { e.stopPropagation(); setFulfillTarget(r); }}>Fulfill</Button>
-                            <Button size="sm" variant="ghost" className="text-xs h-7" onClick={(e) => { e.stopPropagation(); doAction(r.id, "no-show"); }}>No-Show</Button>
-                            <Button size="sm" variant="ghost" className="text-xs h-7 text-slate-500" onClick={(e) => { e.stopPropagation(); doAction(r.id, "cancel"); }}>Cancel</Button>
+                            <Button size="sm" variant="outline" className="text-xs h-7 text-green-700 max-md:min-h-[40px] max-md:px-3" onClick={(e) => { e.stopPropagation(); setFulfillTarget(r); }}>Fulfill</Button>
+                            <Button size="sm" variant="ghost" className="text-xs h-7 max-md:min-h-[40px] max-md:px-3" onClick={(e) => { e.stopPropagation(); doAction(r.id, "no-show"); }}>No-Show</Button>
+                            <Button size="sm" variant="ghost" className="text-xs h-7 text-slate-500 max-md:min-h-[40px] max-md:px-3" onClick={(e) => { e.stopPropagation(); doAction(r.id, "cancel"); }}>Cancel</Button>
                           </>
                         )}
                       </TableCell>

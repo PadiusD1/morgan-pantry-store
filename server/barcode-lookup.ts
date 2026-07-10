@@ -172,7 +172,7 @@ async function withRetry<T>(
 
 async function lookupOpenFoodFacts(barcode: string): Promise<ProviderResult | null> {
   const res = await fetch(
-    `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`,
+    `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(barcode)}.json`,
   );
   if (!res.ok) return null;
   const data = await res.json();
@@ -228,9 +228,9 @@ async function lookupUpcItemDb(barcode: string): Promise<ProviderResult | null> 
   let endpoint: string;
   if (apiKey) {
     headers["user_key"] = apiKey;
-    endpoint = `https://api.upcitemdb.com/prod/v1/lookup?upc=${barcode}`;
+    endpoint = `https://api.upcitemdb.com/prod/v1/lookup?upc=${encodeURIComponent(barcode)}`;
   } else {
-    endpoint = `https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`;
+    endpoint = `https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(barcode)}`;
   }
 
   const res = await fetch(endpoint, { headers });
@@ -289,7 +289,7 @@ async function lookupNutritionix(barcode: string): Promise<ProviderResult | null
   if (!appId || !appKey) return null;
 
   const res = await fetch(
-    `https://trackapi.nutritionix.com/v2/search/item?upc=${barcode}`,
+    `https://trackapi.nutritionix.com/v2/search/item?upc=${encodeURIComponent(barcode)}`,
     {
       headers: {
         "x-app-id": appId,
@@ -328,7 +328,7 @@ async function lookupUsda(barcode: string): Promise<ProviderResult | null> {
   const apiKey = process.env.USDA_API_KEY || "DEMO_KEY";
 
   const res = await fetch(
-    `https://api.nal.usda.gov/fdc/v1/foods/search?query=${barcode}&dataType=Branded&pageSize=1&api_key=${apiKey}`,
+    `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(barcode)}&dataType=Branded&pageSize=1&api_key=${apiKey}`,
   );
   if (!res.ok) return null;
   const data = await res.json();

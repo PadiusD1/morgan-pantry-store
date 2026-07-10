@@ -18,11 +18,13 @@ import type { Express, NextFunction, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { z } from "zod";
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
 import { storage } from "./storage";
 import type { User } from "@shared/schema";
 
 const SESSION_COOKIE = "frc_session";
-const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12 hours
 const MORGAN_EMAIL_RE = /^[A-Za-z0-9._%+-]+@morgan\.edu$/i;
 const BCRYPT_ROUNDS = 10;
 
@@ -82,7 +84,9 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 function sessionCookie(token: string, maxAgeSeconds: number): string {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  // Secure by default; opt out only for local HTTP dev via COOKIE_SECURE=false.
+  // SameSite stays Lax because the login flow relies on top-level navigation.
+  const secure = process.env.COOKIE_SECURE === "false" ? "" : "; Secure";
   return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
 }
 
@@ -101,7 +105,11 @@ function clearSession(res: Response): void {
   res.append("Set-Cookie", sessionCookie("", 0));
 }
 
-// ─── Login rate limiting (per warm instance; primary abuse brake) ───────────
+// ─── Rate limiting ──────────────────────────────────────────────────────────
+//
+// Primary: distributed sliding-window via Upstash Redis, so limits hold across
+// every serverless instance. Fallback: an in-memory per-instance brake used
+// when the Upstash env vars are absent (local dev) or Redis is unreachable.
 
 const attempts = new Map<string, { count: number; windowStart: number }>();
 const WINDOW_MS = 15 * 60 * 1000;
@@ -118,6 +126,49 @@ function rateLimited(key: string): boolean {
   return entry.count > MAX_ATTEMPTS;
 }
 
+// Build the distributed limiters if Upstash is configured. Redis.fromEnv()
+// throws when UPSTASH_REDIS_REST_URL / _TOKEN are missing — swallow that and
+// leave the limiters null so we fall back to the in-memory brake above.
+let loginLimiter: Ratelimit | null = null;
+let signupLimiter: Ratelimit | null = null;
+try {
+  const redis = Redis.fromEnv();
+  loginLimiter = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(10, "15 m"),
+    prefix: "frc:rl:login",
+  });
+  signupLimiter = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(5, "15 m"),
+    prefix: "frc:rl:signup",
+  });
+} catch {
+  loginLimiter = null;
+  signupLimiter = null;
+}
+
+/**
+ * Returns true when the request should be blocked. Prefers the distributed
+ * limiter; on any Redis error (or when unconfigured) it degrades to the
+ * in-memory brake using the supplied fallback keys.
+ */
+async function isRateLimited(
+  limiter: Ratelimit | null,
+  distributedKeys: string[],
+  fallbackKeys: string[],
+): Promise<boolean> {
+  if (limiter) {
+    try {
+      const results = await Promise.all(distributedKeys.map((k) => limiter.limit(k)));
+      return results.some((r) => !r.success);
+    } catch {
+      // Redis hiccup — fall through to the in-memory brake.
+    }
+  }
+  return fallbackKeys.some((k) => rateLimited(k));
+}
+
 // ─── Middleware ──────────────────────────────────────────────────────────────
 
 /** Populates req.user from the session cookie; never rejects. */
@@ -128,13 +179,15 @@ export function authenticate() {
       try {
         const { payload } = await jwtVerify(token, getSecret());
         if (payload.sub && payload.email && payload.role) {
-          req.user = {
-            id: String(payload.sub),
-            email: String(payload.email),
-            name: String(payload.name ?? ""),
-            role: payload.role as SessionUser["role"],
-            studentId: (payload.studentId as string | null) ?? null,
-          };
+          // Re-check the account against storage every request so offboarding
+          // (deleted user) and demotions (changed role) take effect immediately
+          // rather than lingering until the JWT expires. One indexed PK read.
+          const dbUser = await storage.getUser(String(payload.sub));
+          if (dbUser) {
+            // Role/identity come from the DB row, never the token.
+            req.user = toSessionUser(dbUser);
+          }
+          // If the user no longer exists, req.user stays undefined (anonymous).
         }
       } catch {
         // invalid/expired token — treat as anonymous
@@ -162,6 +215,17 @@ const ADMIN_RULES: PathRule[] = [
   { method: "DELETE", pattern: /^\/api\/clients\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/api\/donors\/[^/]+$/ },
   { pattern: /^\/api\/users(\/|$)/ },
+];
+
+// Actions reserved for admin + staff (volunteers are read/light-write only):
+// CSV/data exports, request approve/deny/fulfill decisions, and any deletion.
+const STAFF_WRITE_RULES: PathRule[] = [
+  { method: "GET", pattern: /^\/api\/reports\/monthly-csv$/ },
+  { method: "GET", pattern: /^\/api\/donors\/[^/]+\/export$/ },
+  { method: "POST", pattern: /^\/api\/requests\/[^/]+\/approve$/ },
+  { method: "POST", pattern: /^\/api\/requests\/[^/]+\/deny$/ },
+  { method: "POST", pattern: /^\/api\/requests\/[^/]+\/fulfill$/ },
+  { method: "DELETE", pattern: /^\/api\// },
 ];
 
 function matches(rules: PathRule[], method: string, path: string): boolean {
@@ -192,6 +256,11 @@ export function apiGuard() {
 
     if (!STAFF_ROLES.has(user.role)) {
       return res.status(403).json({ message: "Insufficient permissions" });
+    }
+
+    // Volunteers are least-privilege: no exports, no request decisions, no deletes.
+    if (user.role === "volunteer" && matches(STAFF_WRITE_RULES, req.method, path)) {
+      return res.status(403).json({ message: "This action requires staff access" });
     }
 
     if (matches(ADMIN_RULES, req.method, path) && user.role !== "admin") {
@@ -293,7 +362,12 @@ export function registerAuthRoutes(app: Express): void {
     const { email, password } = parsed.data;
 
     const ip = req.ip ?? "unknown";
-    if (rateLimited(`login:${ip}`) || rateLimited(`login:${email}`)) {
+    const loginBlocked = await isRateLimited(
+      loginLimiter,
+      [`ip:${ip}`, `email:${email}`],
+      [`login:${ip}`, `login:${email}`],
+    );
+    if (loginBlocked) {
       return res.status(429).json({ message: "Too many attempts. Try again in a few minutes." });
     }
 
@@ -320,7 +394,12 @@ export function registerAuthRoutes(app: Express): void {
     const { email, password, name, studentId, phone } = parsed.data;
 
     const ip = req.ip ?? "unknown";
-    if (rateLimited(`signup:${ip}`)) {
+    const signupBlocked = await isRateLimited(
+      signupLimiter,
+      [`ip:${ip}`],
+      [`signup:${ip}`],
+    );
+    if (signupBlocked) {
       return res.status(429).json({ message: "Too many attempts. Try again in a few minutes." });
     }
 

@@ -17,12 +17,27 @@ function createPool(): Pool {
   if (!url) {
     throw new Error("DATABASE_URL is not set");
   }
+  // TLS to Supabase. The Supavisor pooler presents a self-signed certificate
+  // (not chained to a public CA), so strict verification fails the handshake
+  // and takes the whole app offline — this is the documented default for
+  // Supabase pooler connections. We therefore encrypt in transit but do not
+  // verify the server cert by default. To harden (verify against Supabase's
+  // downloaded CA), set PGSSL_REJECT_UNAUTHORIZED=true AND provide the CA via
+  // PGSSL_CA. localhost stays exempt (no TLS).
+  const reject = process.env.PGSSL_REJECT_UNAUTHORIZED === "true";
+  const ssl = url.includes("localhost")
+    ? undefined
+    : {
+        rejectUnauthorized: reject,
+        ...(process.env.PGSSL_CA ? { ca: process.env.PGSSL_CA } : {}),
+      };
+
   return new Pool({
     connectionString: url,
     max: 4,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
-    ssl: url.includes("localhost") ? undefined : { rejectUnauthorized: false },
+    ssl,
   });
 }
 

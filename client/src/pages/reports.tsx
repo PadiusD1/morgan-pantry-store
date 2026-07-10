@@ -34,7 +34,7 @@ export default function ReportsPage() {
   const [to, setTo] = useState("");
   const [monthlyYear, setMonthlyYear] = useState<string>(String(new Date().getFullYear()));
 
-  const { data: emergencyReport } = useQuery<EmergencyReport>({
+  const { data: emergencyReport, isError: emergencyError, refetch: refetchEmergencies } = useQuery<EmergencyReport>({
     queryKey: ["/api/reports/emergencies"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/reports/emergencies");
@@ -438,6 +438,12 @@ export default function ReportsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
+          {emergencyError && (
+            <div className="flex flex-col items-center gap-2 py-6 text-center border-b border-border/60">
+              <p className="text-sm text-destructive">Could not load the emergency report.</p>
+              <Button size="sm" variant="outline" onClick={() => refetchEmergencies()}>Retry</Button>
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-3 px-4 py-3 border-b border-border/60 bg-red-50/40">
             <div data-testid="text-emergency-range-count">
               <p className="text-2xl font-semibold">{emergencyRangeStats.count}</p>
@@ -456,9 +462,9 @@ export default function ReportsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Student / client</TableHead>
-                <TableHead>Identifier</TableHead>
+                <TableHead className="hidden md:table-cell">Identifier</TableHead>
                 <TableHead className="text-right">Emergency count</TableHead>
-                <TableHead>Last emergency</TableHead>
+                <TableHead className="hidden md:table-cell">Last emergency</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -477,9 +483,9 @@ export default function ReportsPage() {
               {emergencyReport?.perClient?.map((row) => (
                 <TableRow key={row.client_id || row.client_name} data-testid={`row-emergency-${row.client_id || row.client_name}`}>
                   <TableCell className="text-sm">{row.client_name}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{row.client_identifier || "—"}</TableCell>
+                  <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{row.client_identifier || "—"}</TableCell>
                   <TableCell className="text-sm text-right font-medium">{row.emergency_count}</TableCell>
-                  <TableCell className="text-xs">
+                  <TableCell className="hidden md:table-cell text-xs">
                     {row.last_emergency_at ? new Date(row.last_emergency_at).toLocaleString() : "—"}
                   </TableCell>
                   <TableCell>

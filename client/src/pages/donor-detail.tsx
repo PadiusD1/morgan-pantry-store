@@ -42,12 +42,12 @@ export default function DonorDetailPage() {
   const [, navigate] = useLocation();
   const donorId = params?.id;
 
-  const { data: donor, isLoading: loadingDonor } = useQuery<Donor>({
+  const { data: donor, isLoading: loadingDonor, isError: donorError, refetch: refetchDonor } = useQuery<Donor>({
     queryKey: ["/api/donors", donorId],
     enabled: !!donorId,
   });
 
-  const { data: history = [], isLoading: loadingHistory } = useQuery<DonationHistoryItem[]>({
+  const { data: history = [], isLoading: loadingHistory, isError: historyError, refetch: refetchHistory } = useQuery<DonationHistoryItem[]>({
     queryKey: [`/api/donors/${donorId}/history`],
     enabled: !!donorId,
   });
@@ -71,6 +71,20 @@ export default function DonorDetailPage() {
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
+
+  if (donorError) {
+    return (
+      <Card className="glass-panel" data-testid="card-donor-error">
+        <CardHeader>
+          <CardTitle className="section-heading">Could not load donor</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => refetchDonor()}>Retry</Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/donors")}>Back to donors</Button>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -218,6 +232,11 @@ export default function DonorDetailPage() {
           {loadingHistory ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : historyError ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+              <p className="text-sm text-destructive">Could not load donation history.</p>
+              <Button size="sm" variant="outline" onClick={() => refetchHistory()}>Retry</Button>
             </div>
           ) : (
             <Table>

@@ -93,6 +93,9 @@ export default function CheckOutPage() {
 
   // Track which approved request is being fulfilled through checkout
   const [fulfillingRequestId, setFulfillingRequestId] = useState<string | null>(null);
+  // Map inventory item id -> the request's line-item id, so a fulfill call can
+  // honor edited cart quantities per approved request item.
+  const [requestItemIdByInventoryId, setRequestItemIdByInventoryId] = useState<Record<string, string>>({});
 
   // Allergy warning state
   const [allergyWarning, setAllergyWarning] = useState<{
@@ -324,7 +327,16 @@ export default function CheckOutPage() {
 
     if (fulfillingRequestId) {
       try {
-        await apiRequest("POST", `/api/requests/${fulfillingRequestId}/fulfill`);
+        // Honor any quantities the staff edited in the cart by mapping each cart
+        // line back to its originating request item id.
+        const fulfillItems = cart
+          .map((c) => ({ id: requestItemIdByInventoryId[c.itemId], fulfilledQuantity: c.quantity }))
+          .filter((it): it is { id: string; fulfilledQuantity: number } => Boolean(it.id));
+        await apiRequest(
+          "POST",
+          `/api/requests/${fulfillingRequestId}/fulfill`,
+          fulfillItems.length > 0 ? { items: fulfillItems } : undefined,
+        );
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
         queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
@@ -342,6 +354,7 @@ export default function CheckOutPage() {
         setCart([]);
         setIsEmergency(false);
         setFulfillingRequestId(null);
+        setRequestItemIdByInventoryId({});
       } catch (e) {
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
@@ -358,17 +371,31 @@ export default function CheckOutPage() {
 
     const location = await getCurrentLocation();
 
-    const result = recordOutbound({
-      client: {
-        id: clientId && clientId !== "new" ? clientId : undefined,
-        name: clientNameFinal,
-        identifier: identifierFinal,
-        contact: clientContact.trim() || undefined,
-      },
-      items: cart,
-      location,
-      isEmergency,
-    });
+    let result: { client: typeof clients[number] };
+    try {
+      result = await recordOutbound({
+        client: {
+          id: clientId && clientId !== "new" ? clientId : undefined,
+          name: clientNameFinal,
+          identifier: identifierFinal,
+          contact: clientContact.trim() || undefined,
+        },
+        items: cart,
+        location,
+        isEmergency,
+      });
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to record check-out:", e);
+      }
+      toast({
+        title: "Check-out failed",
+        description: "The distribution could not be recorded. Please try again.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (result?.client) {
       setReceipt({
@@ -618,14 +645,19 @@ export default function CheckOutPage() {
                     setClientIdentifier(req.clientIdentifier || "");
                     setClientContact("");
                   }
-                  // Auto-fill cart from approved items
+                  // Auto-fill cart from approved items, and remember each cart line's
+                  // originating request-item id so edited quantities can be sent on fulfill.
                   const newCart: { itemId: string; quantity: number }[] = [];
+                  const reqItemMap: Record<string, string> = {};
                   for (const item of (req.items || [])) {
                     if (item.approvedQuantity > 0 || item.approved_quantity > 0) {
-                      newCart.push({ itemId: item.inventoryItemId || item.inventory_item_id, quantity: item.approvedQuantity || item.approved_quantity });
+                      const invId = item.inventoryItemId || item.inventory_item_id;
+                      newCart.push({ itemId: invId, quantity: item.approvedQuantity || item.approved_quantity });
+                      if (invId && item.id) reqItemMap[invId] = item.id;
                     }
                   }
                   setCart(newCart);
+                  setRequestItemIdByInventoryId(reqItemMap);
                   setFulfillingRequestId(req.id);
                   toast({ title: "Request loaded", description: `${req.clientName || req.client_name}'s approved items loaded into cart. Will be marked fulfilled after checkout.` });
                 }}
@@ -663,9 +695,9 @@ export default function CheckOutPage() {
                 <label className="text-sm font-medium" htmlFor="item-select" data-testid="label-add-item">
                   Add item to cart
                 </label>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Select onValueChange={(id) => addToCart(id)}>
-                    <SelectTrigger id="item-select" data-testid="select-cart-item">
+                    <SelectTrigger id="item-select" className="min-w-0 flex-1" data-testid="select-cart-item">
                       <SelectValue placeholder="Choose item" />
                     </SelectTrigger>
                     <SelectContent>
@@ -676,7 +708,7 @@ export default function CheckOutPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <div className="flex gap-2 relative">
+                  <div className="flex gap-2 relative w-full sm:w-auto">
                     <Input
                       ref={barcodeInputRef}
                       type="text"
@@ -692,7 +724,7 @@ export default function CheckOutPage() {
                           }
                         }
                       }}
-                      className="w-40"
+                      className="w-full sm:w-40 min-w-0"
                       disabled={scanLoading}
                       autoFocus
                       data-testid="input-barcode"
@@ -848,7 +880,7 @@ export default function CheckOutPage() {
 
         {/* Receipt Dialog */}
         <Dialog open={!!receipt} onOpenChange={(open) => { if (!open) setReceipt(null); }}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <PrinterIcon className="h-5 w-5" />

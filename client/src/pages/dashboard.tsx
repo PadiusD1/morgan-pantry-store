@@ -6,6 +6,7 @@ import { useRepository, useInventorySummary, isLowStock } from "@/lib/repository
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ArrowDownRightIcon, ArrowUpRightIcon, ClockIcon, InboxIcon, PackageIcon, UsersIcon, WeightIcon, BarChart3Icon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 
@@ -332,7 +333,7 @@ export default function DashboardPage() {
 }
 
 function RequestMetrics() {
-  const { data: stats } = useQuery<any>({
+  const { data: stats, isError, refetch } = useQuery<any>({
     queryKey: ["/api/dashboard/stats"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/dashboard/stats");
@@ -341,6 +342,17 @@ function RequestMetrics() {
     staleTime: 0,
     refetchOnMount: "always",
   });
+
+  if (isError) {
+    return (
+      <Card className="glass-panel">
+        <CardContent className="py-3 px-4 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-destructive">Could not load request metrics.</p>
+          <Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (!stats || stats.pendingRequests === undefined) return null;
 

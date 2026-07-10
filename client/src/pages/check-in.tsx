@@ -276,14 +276,27 @@ export default function CheckInPage() {
 
     const location = await getCurrentLocation();
 
-    recordInbound({
-      itemId,
-      quantity,
-      source: source.trim() || undefined,
-      donor: (isDonationSource ? (donor.trim() || undefined) : undefined),
-      donorClientId: isDonationSource ? donorPartnerId : undefined,
-      location,
-    });
+    try {
+      await recordInbound({
+        itemId,
+        quantity,
+        source: source.trim() || undefined,
+        donor: (isDonationSource ? (donor.trim() || undefined) : undefined),
+        donorClientId: isDonationSource ? donorPartnerId : undefined,
+        location,
+      });
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to record check-in:", err);
+      }
+      toast({
+        title: "Check-in failed",
+        description: "The stock could not be recorded. Please try again.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     toast({
       title: "Stock received",
@@ -520,6 +533,7 @@ export default function CheckInPage() {
                         type="button"
                         variant="ghost"
                         size="icon"
+                        aria-label="Cancel new category"
                         onClick={() => {
                           if (customCategory.trim()) {
                             setNewItem((p) => ({ ...p, category: customCategory.trim() }));
@@ -631,7 +645,7 @@ export default function CheckInPage() {
                             placeholder="Enter new source"
                             autoFocus
                         />
-                        <Button type="button" variant="ghost" size="icon" onClick={() => setIsNewSource(false)}>
+                        <Button type="button" variant="ghost" size="icon" aria-label="Cancel new source" onClick={() => setIsNewSource(false)}>
                             <span className="sr-only">Cancel</span>
                             <XIcon className="h-4 w-4" />
                         </Button>
@@ -689,7 +703,7 @@ export default function CheckInPage() {
                                 placeholder="Enter new donor"
                                 autoFocus
                             />
-                            <Button type="button" variant="ghost" size="icon" onClick={() => setIsNewDonor(false)}>
+                            <Button type="button" variant="ghost" size="icon" aria-label="Cancel new donor" onClick={() => setIsNewDonor(false)}>
                                 <span className="sr-only">Cancel</span>
                                 <XIcon className="h-4 w-4" />
                             </Button>

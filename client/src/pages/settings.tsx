@@ -130,7 +130,7 @@ export default function SettingsPage() {
                 data-testid="input-org-address"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="org-phone">
                   Phone
@@ -159,7 +159,7 @@ export default function SettingsPage() {
 
             <div className="border-t border-border/80 pt-4 mt-4">
               <h3 className="text-sm font-semibold mb-3">Visit & Distribution Policies</h3>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="visit-warning-days">
                     Visit frequency warning (days)

@@ -61,7 +61,7 @@ export default function DonorsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const { data: donors = [], isLoading } = useQuery<Donor[]>({
+  const { data: donors = [], isLoading, isError, refetch } = useQuery<Donor[]>({
     queryKey: ["/api/donors"],
   });
 
@@ -78,7 +78,10 @@ export default function DonorsPage() {
 
   async function handleSave() {
     if (!editing) return;
-    if (!editing.name.trim()) return;
+    if (!editing.name.trim()) {
+      toast({ title: "Donor name is required", description: "Enter a name before saving this donor." });
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -141,6 +144,15 @@ export default function DonorsPage() {
     );
   }
 
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
+        <p className="text-sm text-destructive">Could not load donors.</p>
+        <Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <Card className="glass-panel" data-testid="card-donors-filters">
@@ -184,12 +196,12 @@ export default function DonorsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Organization</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead className="text-right">Total Donations</TableHead>
-                <TableHead className="text-right">Total Items</TableHead>
-                <TableHead>Last Donation</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="hidden md:table-cell">Organization</TableHead>
+                <TableHead className="hidden md:table-cell">Contact</TableHead>
+                <TableHead className="hidden md:table-cell text-right">Total Donations</TableHead>
+                <TableHead className="hidden md:table-cell text-right">Total Items</TableHead>
+                <TableHead className="hidden md:table-cell">Last Donation</TableHead>
+                <TableHead className="hidden md:table-cell">Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -215,24 +227,24 @@ export default function DonorsPage() {
                   <TableCell className="text-sm font-medium" data-testid={`text-donor-name-${d.id}`}>
                     {d.name}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground" data-testid={`text-donor-org-${d.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-donor-org-${d.id}`}>
                     {d.organization || "\u2014"}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground" data-testid={`text-donor-contact-${d.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-donor-contact-${d.id}`}>
                     {d.phone || d.email || d.contactName || "\u2014"}
                   </TableCell>
-                  <TableCell className="text-xs text-right" data-testid={`text-donor-total-donations-${d.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs text-right" data-testid={`text-donor-total-donations-${d.id}`}>
                     {d.totalDonations ?? 0}
                   </TableCell>
-                  <TableCell className="text-xs text-right" data-testid={`text-donor-total-items-${d.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs text-right" data-testid={`text-donor-total-items-${d.id}`}>
                     {d.totalItems ?? 0}
                   </TableCell>
-                  <TableCell className="text-xs" data-testid={`text-donor-last-donation-${d.id}`}>
+                  <TableCell className="hidden md:table-cell text-xs" data-testid={`text-donor-last-donation-${d.id}`}>
                     {d.lastDonation
                       ? new Date(d.lastDonation).toLocaleDateString()
                       : "No donations yet"}
                   </TableCell>
-                  <TableCell className="text-xs">
+                  <TableCell className="hidden md:table-cell text-xs">
                     <Badge
                       variant={d.status === "active" ? "default" : "secondary"}
                       className="text-[10px] h-5 px-1.5"
@@ -246,7 +258,7 @@ export default function DonorsPage() {
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs"
+                        className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                         onClick={() => openEdit(d)}
                         data-testid={`button-edit-donor-${d.id}`}
                       >
@@ -256,7 +268,7 @@ export default function DonorsPage() {
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                        className="h-7 px-2 text-xs text-destructive hover:text-destructive max-md:min-h-[40px] max-md:px-3"
                         onClick={() => setDeleteConfirm({ id: d.id, name: d.name })}
                         data-testid={`button-delete-donor-${d.id}`}
                       >
@@ -272,7 +284,7 @@ export default function DonorsPage() {
       </Card>
 
       <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle data-testid="text-edit-donor-heading">
               {editing?.id ? "Edit donor" : "Add new donor"}
@@ -324,7 +336,7 @@ export default function DonorsPage() {
                 data-testid="input-edit-donor-contact"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="donor-phone-edit">Phone</label>
                 <Input
