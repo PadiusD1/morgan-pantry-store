@@ -1,0 +1,96 @@
+# Morgan State Food Resource Center — https://morgan-frc.vercel.app
+# Public pages are crawlable; the authenticated app and API are not.
+# AI/answer-engine crawlers are explicitly welcome on public pages.
+
+User-agent: *
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+Disallow: /inventory
+Disallow: /check-in
+Disallow: /check-out
+Disallow: /clients
+Disallow: /donors
+Disallow: /partners
+Disallow: /item-groups
+Disallow: /requests
+Disallow: /reports
+Disallow: /activity
+Disallow: /settings
+Disallow: /portal
+Disallow: /kiosk
+
+User-agent: GPTBot
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+Disallow: /portal
+Disallow: /kiosk
+Disallow: /inventory
+Disallow: /settings
+
+User-agent: OAI-SearchBot
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+Disallow: /portal
+Disallow: /kiosk
+
+User-agent: ClaudeBot
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+Disallow: /portal
+Disallow: /kiosk
+
+User-agent: anthropic-ai
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+
+User-agent: PerplexityBot
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+
+User-agent: Google-Extended
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+
+User-agent: CCBot
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+
+User-agent: Applebot-Extended
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+
+User-agent: meta-externalagent
+Allow: /$
+Allow: /login
+Allow: /signup
+Allow: /llms.txt
+Disallow: /api/
+
+Sitemap: https://morgan-frc.vercel.app/sitemap.xml

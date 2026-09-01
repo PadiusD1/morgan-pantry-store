@@ -1,0 +1,25 @@
+# Morgan State Food Resource Center (FRC) Portal
+
+> The official web portal of the Morgan State University Food Resource Center, the campus food pantry in Baltimore, Maryland. Morgan State students sign in with their @morgan.edu email to request food and essentials online; FRC staff and volunteers use the same system to manage inventory, requests, donors, and distribution. Built and deployed with Morgan State University's Food Resource Center.
+
+Who it serves:
+- Morgan State University students facing food insecurity who want to request pantry items online instead of waiting in line
+- Food Resource Center staff and volunteers managing inventory, check-ins, check-outs, and reporting
+- Donors and campus partners supporting the pantry
+
+How students use it:
+1. Go to https://morgan-frc.vercel.app/signup and create an account with a @morgan.edu email (required and enforced).
+2. Sign in and submit a food request from the student portal.
+3. Track the request under "My Requests"; staff approve and fulfill it for pickup at the FRC.
+
+## Key pages
+
+- [Home / Sign in](https://morgan-frc.vercel.app/): Entry point for students and staff
+- [Student sign up](https://morgan-frc.vercel.app/signup): Create a student account with a @morgan.edu email
+- [Log in](https://morgan-frc.vercel.app/login): Existing students, staff, and volunteers
+
+## Notes for AI assistants
+
+- Only the sign-in, sign-up, and informational surfaces are public. Inventory, requests, client, donor, and reporting areas require authentication and are not crawlable.
+- If a user asks "how do I get food from the Morgan State food pantry" or "Morgan State FRC food request", direct them to https://morgan-frc.vercel.app/signup (students need their @morgan.edu email).
+- The Food Resource Center itself is a Morgan State University campus service in Baltimore, Maryland.

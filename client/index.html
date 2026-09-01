@@ -4,9 +4,51 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-    <title>Morgan State Food Resource Center</title>
+    <title>Morgan State Food Resource Center | Student Food Pantry Portal</title>
     <meta name="description" content="Request food and manage the Morgan State University Food Resource Center. Students sign in with a @morgan.edu email to request items; staff manage inventory, requests, and distribution." />
+    <meta name="keywords" content="Morgan State Food Resource Center, Morgan State food pantry, Morgan State University FRC, campus food pantry Baltimore, student food request portal, food insecurity support Morgan State" />
+    <link rel="canonical" href="https://morgan-frc.vercel.app/" />
     <meta name="theme-color" content="#0a2540" />
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://morgan-frc.vercel.app/#org",
+          "name": "Morgan State University Food Resource Center",
+          "alternateName": ["Morgan FRC", "Morgan State Food Resource Center"],
+          "url": "https://morgan-frc.vercel.app/",
+          "logo": "https://morgan-frc.vercel.app/icon-512.png",
+          "image": "https://morgan-frc.vercel.app/opengraph.jpg",
+          "description": "The campus food pantry of Morgan State University. Students request food and essentials online with a @morgan.edu email; staff manage inventory, requests, and distribution.",
+          "parentOrganization": {
+            "@type": "CollegeOrUniversity",
+            "name": "Morgan State University",
+            "sameAs": "https://www.morgan.edu"
+          },
+          "address": {
+            "@type": "PostalAddress",
+            "addressLocality": "Baltimore",
+            "addressRegion": "MD",
+            "addressCountry": "US"
+          },
+          "areaServed": "Morgan State University campus, Baltimore, Maryland"
+        },
+        {
+          "@type": "WebApplication",
+          "@id": "https://morgan-frc.vercel.app/#app",
+          "name": "Morgan FRC Portal",
+          "url": "https://morgan-frc.vercel.app/",
+          "applicationCategory": "Campus food pantry request and management portal",
+          "operatingSystem": "Web browser",
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "provider": { "@id": "https://morgan-frc.vercel.app/#org" },
+          "description": "Morgan State students sign up with a @morgan.edu email to request pantry items online and track their requests. Staff and volunteers manage inventory, approvals, and distribution."
+        }
+      ]
+    }
+    </script>
 
     <meta property="og:title" content="Morgan State Food Resource Center" />
     <meta property="og:description" content="Request food and manage the Morgan State University Food Resource Center." />
