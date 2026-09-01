@@ -24,6 +24,23 @@ import {
 
 const PG_UNIQUE_VIOLATION = "23505";
 
+/**
+ * Drizzle wraps driver failures in a DrizzleQueryError whose own `code` is
+ * undefined — the Postgres SQLSTATE lives on the nested `cause`. Reading
+ * `err.code` directly therefore never matches, and an expected duplicate
+ * (a student who already self-registered, a barcode already in stock) escapes
+ * as an opaque 500. Walk the cause chain instead.
+ */
+function pgErrorCode(err: unknown): string | undefined {
+  let current: unknown = err;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 /** Settings keys the admin UI may write; everything else is rejected. */
 const ALLOWED_SETTING_KEYS = new Set([
   "orgName",
@@ -221,7 +238,7 @@ export async function registerRoutes(app: Express): Promise<void> {
           rawPayload: p.rawPayload,
         });
       } catch (err: any) {
-        if (err?.code === PG_UNIQUE_VIOLATION) {
+        if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
           const existingItem = await storage.getInventoryItemByBarcode(code);
           if (existingItem) {
             return res.json({
@@ -352,7 +369,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       const client = await storage.createClient(result.data);
       res.status(201).json(client);
     } catch (err: any) {
-      if (err?.code === PG_UNIQUE_VIOLATION) {
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         return res.status(409).json({
           message: `A client with identifier "${result.data.identifier}" already exists. Use a different identifier.`,
         });
