@@ -13,7 +13,8 @@
     "build:vm": "tsx script/build.ts",
     "start": "cross-env NODE_ENV=production node dist/index.cjs",
     "db:generate": "drizzle-kit generate",
-    "check": "tsc"
+    "check": "tsc",
+    "audit:e2e": "node scripts/frc-audit.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
