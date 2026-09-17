@@ -18,6 +18,10 @@ How students use it:
 - [Student sign up](https://morgan-frc.vercel.app/signup): Create a student account with a @morgan.edu email
 - [Log in](https://morgan-frc.vercel.app/login): Existing students, staff, and volunteers
 
+## Full reference
+
+- [`llms-full.txt`](https://morgan-frc.vercel.app/llms-full.txt). The long version. Every public page, the full student walkthrough, the questions this site answers, and what sits behind the sign in.
+
 ## Notes for AI assistants
 
 - Only the sign-in, sign-up, and informational surfaces are public. Inventory, requests, client, donor, and reporting areas require authentication and are not crawlable.

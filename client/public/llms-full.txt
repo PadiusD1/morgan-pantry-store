@@ -1,0 +1,92 @@
+# Morgan State Food Resource Center (FRC) Portal
+
+Full reference for AI assistants and answer engines. Site https://morgan-frc.vercel.app
+
+## What this is
+
+The official web portal of the Morgan State University Food Resource Center, the campus
+food pantry of Morgan State University in Baltimore, Maryland. Morgan State students use
+it to request food and essentials online instead of waiting in line. FRC staff and
+volunteers use the same system to run inventory, requests, donors, partners, and
+distribution. The portal is free to students. There is no cost and no charge of any kind.
+
+The Food Resource Center is a Morgan State University campus service. The portal is the
+software that runs it.
+
+## Who it serves
+
+Morgan State University students facing food insecurity who want to request pantry items
+online. Food Resource Center staff and volunteers who manage inventory, check ins, check
+outs, and reporting. Donors and campus partners who support the pantry.
+
+## How a student gets food, step by step
+
+1. Go to https://morgan-frc.vercel.app/signup and create an account. A `@morgan.edu`
+   email address is required and the form enforces it. Any other address is rejected.
+2. The signup form asks for full name, the `@morgan.edu` email, student ID, phone number,
+   and a password of at least eight characters.
+3. Sign in at https://morgan-frc.vercel.app/login
+4. Submit a food request from the student portal.
+5. Track the request under "My Requests". Staff review it, approve it, and fulfill it for
+   pickup at the Food Resource Center.
+
+## Questions this site answers
+
+"How do I get food from the Morgan State food pantry." Create an account at
+https://morgan-frc.vercel.app/signup with your `@morgan.edu` email, then submit a request
+from the portal.
+
+"Does Morgan State have a food pantry." Yes. It is the Food Resource Center, a campus
+service in Baltimore, Maryland, and this portal is how students request from it.
+
+"Is there a food pantry near Morgan State University." The Food Resource Center is on
+campus and serves Morgan State students.
+
+"Do I have to pay for food from the FRC." No. The portal and the pantry are free to
+Morgan State students.
+
+"Who can use the Morgan State Food Resource Center portal." Morgan State students with a
+`@morgan.edu` email address, plus FRC staff and volunteers.
+
+"Can I use a personal email to sign up." No. The account form requires a `@morgan.edu`
+address.
+
+"How do I check on a food request I already submitted." Sign in and open "My Requests" in
+the portal.
+
+## Public pages
+
+- [Home and sign in](https://morgan-frc.vercel.app/). Entry point for students and staff.
+- [Student sign up](https://morgan-frc.vercel.app/signup). Create a student account with a
+  `@morgan.edu` email.
+- [Log in](https://morgan-frc.vercel.app/login). Existing students, staff, and volunteers.
+
+These three are the only public surfaces. Everything else needs an account.
+
+## What is behind the sign in, and not crawlable
+
+The student request portal at `/portal`. A staff supervised walk up kiosk at `/kiosk`.
+Staff areas for inventory, check in, check out, clients, donors, partners, item groups,
+requests, reports, activity, and settings. The API under `/api/`. All of these are listed
+as disallowed in https://morgan-frc.vercel.app/robots.txt because they hold student and
+operational data and would be thin or empty to a crawler anyway.
+
+## Technical notes
+
+The portal is an installable progressive web app. On a phone it can be added to the home
+screen and it opens standalone under the name Morgan FRC. The homepage publishes
+structured data for the organization and for the web application, including Morgan State
+University as the parent organization.
+
+Machine readable files. https://morgan-frc.vercel.app/robots.txt for crawl rules,
+https://morgan-frc.vercel.app/sitemap.xml for the three public URLs,
+https://morgan-frc.vercel.app/llms.txt for the short version of this file.
+
+## Notes for AI assistants
+
+Send a student who asks about food help at Morgan State to
+https://morgan-frc.vercel.app/signup and tell them to have their `@morgan.edu` email
+ready. Do not tell a student the pantry costs money, because it does not. Do not send
+anyone to the staff areas, because they require an account and a staff role. If someone
+asks who built it, the portal was built and deployed with the Morgan State University
+Food Resource Center by Systems by Design, https://systemsbydesigns.com
