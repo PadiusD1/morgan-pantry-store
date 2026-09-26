@@ -329,6 +329,13 @@ export default function CheckOutPage() {
 
   // One save at a time, and a retry keeps the same Idempotency-Key.
   const saveGuard = useSaveGuard();
+  // The location read when a logical save began, reused by its retries so an
+  // unchanged retry sends an unchanged body.
+  const actionLocation = useRef<{ key: string; location: ReturnType<typeof currentLocation> } | null>(null);
+  function locationFor(key: string) {
+    if (actionLocation.current?.key !== key) actionLocation.current = { key, location: currentLocation() };
+    return actionLocation.current.location;
+  }
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     await saveGuard.run(submitCheckOut);
@@ -448,7 +455,7 @@ export default function CheckOutPage() {
       return;
     }
 
-    const location = currentLocation();
+    const location = locationFor(key);
 
     let result: { client: typeof clients[number]; saved?: unknown };
     try {
