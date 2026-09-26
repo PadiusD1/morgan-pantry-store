@@ -15,6 +15,7 @@ import {
   type ApiTransaction,
 } from "./api-types";
 import { findCachedItem } from "./inventory-cache";
+import { trackCreate } from "./item-action";
 import { newClientRecord } from "./new-client";
 import { sendClientUpdate } from "./client-update";
 import { loadGate } from "./load-gate";
@@ -135,6 +136,8 @@ export type RepositoryState = {
 
 export type RepositoryContextValue = RepositoryState & {
   addOrUpdateItem: (partial: ItemChange, options?: ItemChangeOptions) => InventoryItem;
+  /** Resolves the canonical id once the item's create or edit is confirmed, rejects when it failed. */
+  itemSaved: (id: string) => Promise<string>;
   adjustItemQuantity: (itemId: string, delta: number) => void;
   recordInbound: (options: {
     itemId: string;
@@ -288,6 +291,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   // ── Pending item creates: temp ID → Promise<server ID> ─────────────────
   const pendingCreates = useRef<Map<string, Promise<string>>>(new Map());
+  const pendingSaves = useRef<Map<string, Promise<string>>>(new Map());
 
   // ── Pending client creates: temp ID → Promise<server ID> ──────────────
   const pendingClientCreates = useRef<Map<string, Promise<string>>>(new Map());
@@ -328,17 +332,24 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Fire API. On failure, invalidate to roll the optimistic edit back to the
       // server's truth instead of silently leaving a phantom change in the cache.
-      apiRequest("PATCH", `/api/inventory/${existing.id}`, body)
+      // A caller with a key awaits this save through itemSaved and shows the
+      // failure itself, and a retry of its action reuses the same keys.
+      const key = options?.idempotencyKey;
+      const save = apiRequest("PATCH", `/api/inventory/${existing.id}`, body, { idempotencyKey: key ?? uuid() })
         .then(() =>
           adds > 0
-            ? apiRequest("POST", `/api/inventory/${existing.id}/adjust`, { delta: adds, reason: "import" }, { idempotencyKey: uuid() })
+            ? apiRequest("POST", `/api/inventory/${existing.id}/adjust`, { delta: adds, reason: "import" }, { idempotencyKey: key ? `${key}.stock` : uuid() })
             : undefined,
         )
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
-        .catch((e) => {
-          showStockRefusal(e);
-          return queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+          return existing.id;
         });
+      pendingSaves.current.set(existing.id, save);
+      save.catch((e) => {
+        if (!key) showStockRefusal(e);
+        return queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+      });
 
       return updated;
     }
@@ -396,23 +407,27 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
           upsertApiRow(old, tempId, created),
         );
-        pendingCreates.current.delete(tempId);
         return created.id;
       })
       .catch((err) => {
         // Roll the optimistic row back to server truth, then propagate.
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        pendingCreates.current.delete(tempId);
         throw err instanceof Error ? err : new Error(String(err));
       });
 
-    pendingCreates.current.set(tempId, createPromise);
+    // The temporary id keeps resolving to the canonical id after the create
+    // finishes, so a handler still awaiting an inline donor posts its stock.
+    trackCreate(pendingCreates.current, tempId, createPromise);
     // Standalone callers (CSV import, inventory add) don't await this promise —
     // swallow the rejection here so it isn't reported as unhandled. Awaiters
     // still observe the rejection through their own `await`.
     createPromise.catch(() => {});
 
     return item;
+  }
+
+  function itemSaved(id: string): Promise<string> {
+    return pendingSaves.current.get(id) ?? pendingCreates.current.get(id) ?? Promise.resolve(id);
   }
 
   // A refused stock change is shown, never dropped.
@@ -582,8 +597,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
     // The live cache, not this render's snapshot, so an item the page created a
     // moment ago is found. A missing item throws, the caller says nothing was recorded.
+    // A temporary id resolves to the canonical one first, since the created
+    // row replaced the temporary row in the cache when the create answered.
+    const resolvedId = await resolveItemId(itemId);
     const cached = queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"]) ?? inventoryQuery.data;
-    const item = toInventoryItem(findCachedItem(cached, itemId));
+    const item = toInventoryItem(findCachedItem(cached, resolvedId));
 
     // Optimistic inventory update. The SERVER is the source of truth for stock —
     // it applies the +received delta atomically when the IN transaction is posted
@@ -591,7 +609,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     // is reconciled by the invalidation below.
     queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
       (old ?? []).map((i) =>
-        i.id === itemId ? { ...i, quantity: i.quantity + quantity, updatedAt: timestamp } : i,
+        i.id === resolvedId ? { ...i, quantity: i.quantity + quantity, updatedAt: timestamp } : i,
       ),
     );
 
@@ -887,6 +905,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     sources: local.sources,
     categories: local.categories,
     addOrUpdateItem,
+    itemSaved,
     adjustItemQuantity,
     recordInbound,
     recordOutbound,
