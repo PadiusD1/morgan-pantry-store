@@ -118,6 +118,8 @@ describe("Idempotency-Key on release one write routes", () => {
     const second = await post("/api/transactions", checkIn(itemId, 4), "key-diff-1");
     expect(first.status).toBe(201);
     expect(second.status).toBe(422);
+    // The client keeps its first body for a retry only on this mark.
+    expect(second.headers.get("idempotency-key-status")).toBe("held");
     expect(
       await count(`SELECT quantity AS n FROM inventory_items WHERE id = $1`, [itemId]),
     ).toBe(11);

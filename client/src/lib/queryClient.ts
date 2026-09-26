@@ -141,9 +141,11 @@ export async function apiRequest(
     body,
     credentials: "include",
   });
-  // A plain refusal rolled back on the server and freed the key, so the next
-  // try sends the form as it is then. A 409 or 422 may mean the key is held.
-  if (key && res.status >= 400 && res.status < 500 && res.status !== 409 && res.status !== 422) {
+  // A refusal rolled back on the server and freed the key, a duplicate person
+  // included, so the next try sends the form as it is then. Only an answer the
+  // server marks as holding the key (a save still running, or the key already
+  // used for another body) keeps the first body for the retry.
+  if (key && res.status >= 400 && res.status < 500 && res.headers.get("Idempotency-Key-Status") !== "held") {
     sentBodies.delete(key);
   }
 

@@ -127,10 +127,13 @@ export function sendClaim(res: Response, claim: Claim | { kind: "invalid" }): vo
   if (claim.kind === "replay") {
     res.status(claim.status).json(claim.body);
   } else if (claim.kind === "mismatch") {
+    // The client keeps its first body only when told the key is still held.
+    res.setHeader("Idempotency-Key-Status", "held");
     res.status(422).json({ message: "This key was already used for a different request" });
   } else if (claim.kind === "invalid") {
     res.status(400).json({ message: "Invalid Idempotency-Key header" });
   } else {
+    res.setHeader("Idempotency-Key-Status", "held");
     res.status(409).json({ message: "This request is still being saved" });
   }
 }
