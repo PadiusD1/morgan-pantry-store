@@ -221,6 +221,34 @@ function uuid() {
 
 const RepositoryContext = createContext<RepositoryContextValue | null>(null);
 
+// A failed refetch over loaded data. The shell shows RefreshNotice above the
+// page content, in the page flow, so the notice covers no control.
+type RefreshNoticeValue = { staleError: Error | null; retry: () => void };
+const RefreshNoticeContext = createContext<RefreshNoticeValue>({ staleError: null, retry: () => {} });
+
+export function RefreshNotice() {
+  const { staleError, retry } = useContext(RefreshNoticeContext);
+  if (!staleError) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2 text-sm shadow-sm"
+      data-testid="notice-refresh-failed"
+    >
+      <span>Could not refresh data</span>
+      <button
+        type="button"
+        className="font-medium text-primary hover:underline"
+        onClick={retry}
+        data-testid="button-refresh-retry"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export function RepositoryProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
 
@@ -849,28 +877,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <RepositoryContext.Provider value={value}>
-      {children}
-      {/* Bottom centre on phones, where toasts sit at the top, and top centre
-          below the mobile bar from sm up, where toasts sit at the bottom, so it
-          never covers a toast or the Sign out button in the sidebar footer. */}
-      {gate.staleError && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="fixed bottom-4 left-1/2 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-md border bg-background px-3 py-2 text-sm shadow-md sm:bottom-auto sm:top-16"
-          data-testid="notice-refresh-failed"
-        >
-          <span>Could not refresh data</span>
-          <button
-            type="button"
-            className="font-medium text-primary hover:underline"
-            onClick={retryLoad}
-            data-testid="button-refresh-retry"
-          >
-            Retry
-          </button>
-        </div>
-      )}
+      <RefreshNoticeContext.Provider value={{ staleError: gate.staleError, retry: retryLoad }}>
+        {children}
+      </RefreshNoticeContext.Provider>
     </RepositoryContext.Provider>
   );
 }

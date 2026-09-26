@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { RefreshNotice } from "@/lib/repository";
 import { BoxesIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, Handshake, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, LogOutIcon, MonitorIcon, PackageIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
 
 const navItems = [
@@ -170,6 +171,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Button>
             </div>
           </header>
+          <RefreshNotice />
           <main className="flex-1 min-h-0">
             {children}
           </main>
