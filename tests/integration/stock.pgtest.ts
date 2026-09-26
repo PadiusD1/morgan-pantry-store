@@ -165,3 +165,24 @@ describe("stock changes travel as a difference", () => {
     ).toBe(0);
   });
 });
+
+describe("a line above the quantity limit is refused", () => {
+  it("answers 400 for 10001 units and for a scanner code, writes nothing, and takes 10000", async () => {
+    const id = await newItem("Test Oats One", 12);
+    for (const [quantity, key] of [
+      [10001, "limit-over-1"],
+      [52000000200029, "limit-over-2"],
+    ] as const) {
+      const res = await send("POST", "/api/transactions", checkIn(id, quantity), key);
+      expect(res.status).toBe(400);
+      expect((await res.json()).message).toContain("10000");
+    }
+    expect(await stock(id)).toBe(12);
+    expect(
+      await count(`SELECT count(*) AS n FROM transaction_items WHERE inventory_item_id = $1`, [id]),
+    ).toBe(0);
+    const ok = await send("POST", "/api/transactions", checkIn(id, 10000), "limit-at-1");
+    expect(ok.status).toBeLessThan(300);
+    expect(await stock(id)).toBe(10012);
+  });
+});

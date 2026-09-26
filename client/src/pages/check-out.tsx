@@ -7,6 +7,7 @@ import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
+import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -336,6 +337,14 @@ export default function CheckOutPage() {
       toast({
         title: "No items in cart",
         description: "Add at least one item before completing check-out.",
+      });
+      return;
+    }
+    if (findOverLimitLine(cart)) {
+      toast({
+        title: "Quantity too large",
+        description: LINE_QUANTITY_LIMIT_MESSAGE,
+        variant: "destructive",
       });
       return;
     }
