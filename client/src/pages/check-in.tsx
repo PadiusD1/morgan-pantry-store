@@ -4,7 +4,8 @@ import { useRepository } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, withIdempotencyKey } from "@/lib/queryClient";
+import { useSaveGuard } from "@/lib/save-guard";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -216,8 +217,14 @@ export default function CheckInPage() {
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
   useScanner(scanQueue.push);
 
+  // One save at a time, and a retry keeps the same Idempotency-Key.
+  const saveGuard = useSaveGuard();
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    await saveGuard.run(submitCheckIn);
+  }
+
+  async function submitCheckIn(key: string): Promise<boolean | void> {
     if (!quantity || quantity <= 0) {
       toast({
         title: "Quantity required",
@@ -284,14 +291,14 @@ export default function CheckInPage() {
     const location = currentLocation();
 
     try {
-      await recordInbound({
+      await withIdempotencyKey(key, () => recordInbound({
         itemId,
         quantity,
         source: source.trim() || undefined,
         donor: (isDonationSource ? (donor.trim() || undefined) : undefined),
         donorClientId: isDonationSource ? donorPartnerId : undefined,
         location,
-      });
+      }));
     } catch (err) {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
@@ -327,6 +334,7 @@ export default function CheckInPage() {
       setIsNewCategory(false);
       setCustomCategory("");
     }
+    return true;
   }
 
   return (

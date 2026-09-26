@@ -5,7 +5,8 @@ import { currentLocation } from "@/lib/location";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, withIdempotencyKey } from "@/lib/queryClient";
+import { useSaveGuard } from "@/lib/save-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -269,7 +270,13 @@ export default function CheckOutPage() {
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
   useScanner(scanQueue.push);
 
+  // The Enter key and the Add button share one lock.
+  const addGuard = useSaveGuard();
   function handleAddNewItem() {
+    void addGuard.run(addNewItem);
+  }
+
+  function addNewItem(): boolean | void {
     if (!newItemForm) return;
     if (!newItemForm.name.trim()) {
       toast({
@@ -302,10 +309,17 @@ export default function CheckOutPage() {
       description: `${newItemForm.name.trim()} saved and added to cart.`,
     });
     setTimeout(() => barcodeInputRef.current?.focus(), 100);
+    return true;
   }
 
+  // One save at a time, and a retry keeps the same Idempotency-Key.
+  const saveGuard = useSaveGuard();
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    await saveGuard.run(submitCheckOut);
+  }
+
+  async function submitCheckOut(key: string): Promise<boolean | void> {
     if (!cart.length) {
       toast({
         title: "No items in cart",
@@ -382,7 +396,7 @@ export default function CheckOutPage() {
 
     let result: { client: typeof clients[number] };
     try {
-      result = await recordOutbound({
+      result = await withIdempotencyKey(key, () => recordOutbound({
         client: {
           id: clientId && clientId !== "new" ? clientId : undefined,
           name: clientNameFinal,
@@ -392,7 +406,7 @@ export default function CheckOutPage() {
         items: cart,
         location,
         isEmergency,
-      });
+      }));
     } catch (e) {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
@@ -422,6 +436,7 @@ export default function CheckOutPage() {
       setCart([]);
       setIsEmergency(false);
       setClientFromId(result.client.id);
+      return true;
     }
   }
 

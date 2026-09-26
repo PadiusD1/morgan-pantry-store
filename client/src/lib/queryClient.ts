@@ -36,14 +36,54 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// The writes that carry an Idempotency-Key, one key per logical action.
+const IDEMPOTENT_WRITES = ["POST /api/transactions"];
+let actionKey: string | null = null;
+
+export type ApiRequestOptions = { idempotencyKey?: string };
+
+function requestPath(url: string): string {
+  return url.replace(/^[a-z]+:\/\/[^/]+/i, "").split(/[?#]/)[0];
+}
+
+/**
+ * Runs one logical save with its key. Inside it, the transaction write that
+ * apiRequest sends carries the key, so a retry sends the same key.
+ */
+export async function withIdempotencyKey<T>(key: string, run: () => Promise<T>): Promise<T> {
+  actionKey = key;
+  try {
+    return await run();
+  } finally {
+    if (actionKey === key) actionKey = null;
+  }
+}
+
+export function idempotencyHeaders(
+  method: string,
+  url: string,
+  options?: ApiRequestOptions,
+): Record<string, string> {
+  const key =
+    options?.idempotencyKey ??
+    (actionKey && IDEMPOTENT_WRITES.includes(`${method.toUpperCase()} ${requestPath(url)}`)
+      ? actionKey
+      : undefined);
+  return key ? { "Idempotency-Key": key } : {};
+}
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  options?: ApiRequestOptions,
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers: {
+      ...(data ? { "Content-Type": "application/json" } : {}),
+      ...idempotencyHeaders(method, url, options),
+    },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
