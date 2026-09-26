@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALREADY_ON_FILE_MESSAGE,
   CLASSIFICATIONS,
+  ID_CHANGE_MESSAGE,
+  ID_EMAIL_CONFLICT_MESSAGE,
+  ID_TAKEN_MESSAGE,
   buildCheckoutClient,
   findReturningClient,
   generateIdentifier,
   inputsFromClient,
   isClassification,
   isGeneratedIdentifier,
+  resolveCheckoutIdentity,
   validateIdentityInputs,
 } from "@shared/checkout-identity";
 
@@ -162,5 +167,100 @@ describe("retry and returning classification", () => {
     const existing = { id: "c4", name: "Test Student Four", identifier: "E4444444", classification: "Sophomore" };
     expect(buildCheckoutClient({ existing, name: "Test Student Four" }).classification).toBe("Sophomore");
     expect(buildCheckoutClient({ existing, name: "Test Student Four", classification: "Junior" }).classification).toBe("Junior");
+  });
+});
+
+describe("resolveCheckoutIdentity, finding 1", () => {
+  const alice = { id: "a1", name: "Synthetic Alice", identifier: "IDALICE", email: "shared@example.invalid", clientType: "student" };
+  const carol = { id: "c9", name: "Synthetic Carol", identifier: "IDCAROL", email: "carol@example.invalid", clientType: "student" };
+  const dana = { id: "d4", name: "Synthetic Dana", identifier: "FRC3F2A9C1B7D", email: "dana@example.invalid", clientType: "student" };
+  const erin = { id: "e5", name: "Synthetic Erin", identifier: "erin@example.invalid", email: null, clientType: "student" };
+  const partner = { id: "p2", name: "Synthetic Partner", identifier: "IDPART", email: "shared@example.invalid", clientType: "partner" };
+  const people = [alice, carol, dana, erin, partner];
+  const random = () => "3f2a9c1b-7d4e-4a00-9b00-000000000000";
+
+  it("makes Bob a new person sharing Alice's email and leaves Alice with IDALICE", () => {
+    const r = resolveCheckoutIdentity(people, { studentId: "IDBOB", email: "shared@example.invalid", name: "Synthetic Bob" });
+    expect(r).toEqual({ ok: true, existing: undefined, name: "Synthetic Bob" });
+    if (!r.ok) throw new Error("refused");
+    const payload = buildCheckoutClient({ existing: r.existing, name: r.name, studentId: "IDBOB", email: "shared@example.invalid", random });
+    expect(payload).toEqual({ name: "Synthetic Bob", identifier: "IDBOB", email: "shared@example.invalid" });
+    expect(alice.identifier).toBe("IDALICE");
+  });
+
+  it("refuses an ID of one person with an email of another", () => {
+    expect(resolveCheckoutIdentity(people, { studentId: "IDALICE", email: "carol@example.invalid", name: "Synthetic Alice" }))
+      .toEqual({ ok: false, message: ID_EMAIL_CONFLICT_MESSAGE });
+  });
+
+  it("uses the person the ID matches when the email is theirs, new or empty", () => {
+    for (const email of ["shared@example.invalid", "new@example.invalid", ""]) {
+      const r = resolveCheckoutIdentity(people, { studentId: " idalice ", email, name: "Someone Else" });
+      expect(r).toEqual({ ok: true, existing: alice, name: "Synthetic Alice" });
+    }
+  });
+
+  it("never changes the ID of the person the ID matches", () => {
+    const payload = buildCheckoutClient({ existing: alice, name: "Synthetic Alice", studentId: "idalice", random });
+    expect(payload.identifier).toBe("IDALICE");
+    expect(payload.id).toBe("a1");
+  });
+
+  it("never pairs a person's row with a different typed ID", () => {
+    const payload = buildCheckoutClient({ existing: alice, name: "Synthetic Alice", studentId: "IDBOB", email: "shared@example.invalid", random });
+    expect(payload).toEqual({ id: "a1", name: "Synthetic Alice", identifier: "IDALICE", email: "shared@example.invalid" });
+  });
+
+  it("refuses the same name on the email when that person has a different stored ID", () => {
+    expect(resolveCheckoutIdentity(people, { studentId: "IDNEW", email: "shared@example.invalid", name: "  synthetic   ALICE " }))
+      .toEqual({ ok: false, message: ALREADY_ON_FILE_MESSAGE });
+  });
+
+  it("fills the ID of the same named person on the email who has no stored ID", () => {
+    for (const q of [dana, erin]) {
+      const r = resolveCheckoutIdentity(people, { studentId: "IDFILL", email: q === dana ? "dana@example.invalid" : "erin@example.invalid", name: q.name });
+      expect(r).toEqual({ ok: true, existing: q, name: q.name });
+      if (!r.ok) throw new Error("refused");
+      const payload = buildCheckoutClient({ existing: r.existing, name: r.name, studentId: "IDFILL", random });
+      expect(payload.id).toBe(q.id);
+      expect(payload.identifier).toBe("IDFILL");
+    }
+  });
+
+  it("makes a new person when the name differs from the one with no stored ID", () => {
+    expect(resolveCheckoutIdentity(people, { studentId: "IDFRANK", email: "dana@example.invalid", name: "Synthetic Frank" }))
+      .toEqual({ ok: true, existing: undefined, name: "Synthetic Frank" });
+  });
+
+  it("uses the email match when no ID is typed", () => {
+    expect(resolveCheckoutIdentity(people, { email: "CAROL@example.invalid ", name: "Typed Name" }))
+      .toEqual({ ok: true, existing: carol, name: "Synthetic Carol" });
+    expect(resolveCheckoutIdentity(people, { email: "erin@example.invalid", name: "Typed Name" }))
+      .toEqual({ ok: true, existing: erin, name: "Synthetic Erin" });
+  });
+
+  it("makes a new person when nothing matches and never matches a partner", () => {
+    expect(resolveCheckoutIdentity(people, { studentId: "IDNOONE", email: "none@example.invalid", name: "Synthetic Gus" }))
+      .toEqual({ ok: true, existing: undefined, name: "Synthetic Gus" });
+    expect(resolveCheckoutIdentity([partner], { studentId: "IDPART", email: "shared@example.invalid", name: "Synthetic Hal" }))
+      .toEqual({ ok: true, existing: undefined, name: "Synthetic Hal" });
+  });
+
+  it("keeps a picked person only with their own ID or none", () => {
+    expect(resolveCheckoutIdentity(people, { selected: alice, studentId: "IDALICE", email: "shared@example.invalid", name: "Synthetic Alice" }))
+      .toEqual({ ok: true, existing: alice, name: "Synthetic Alice" });
+    expect(resolveCheckoutIdentity(people, { selected: dana, studentId: "IDDANA", name: "Synthetic Dana" }))
+      .toEqual({ ok: true, existing: dana, name: "Synthetic Dana" });
+    expect(resolveCheckoutIdentity(people, { selected: alice, studentId: "IDCAROL", name: "Synthetic Alice" }))
+      .toEqual({ ok: false, message: ID_TAKEN_MESSAGE });
+    expect(resolveCheckoutIdentity(people, { selected: alice, studentId: "IDOTHER", name: "Synthetic Alice" }))
+      .toEqual({ ok: false, message: ID_CHANGE_MESSAGE });
+  });
+
+  it("keeps the refusal messages free of colons, semicolons and dashes", () => {
+    for (const msg of [ID_EMAIL_CONFLICT_MESSAGE, ALREADY_ON_FILE_MESSAGE, ID_TAKEN_MESSAGE, ID_CHANGE_MESSAGE]) {
+      expect(msg).toBeTruthy();
+      expect(msg).not.toMatch(/[:;]|\s[-–—]\s/);
+    }
   });
 });
