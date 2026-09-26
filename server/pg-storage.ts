@@ -752,6 +752,15 @@ export class PgStorage implements IStorage {
     return row;
   }
 
+  // key is normaliseName from shared/identity.ts, lowercase with collapsed spaces
+  async findDonorsByNormalisedName(key: string): Promise<Donor[]> {
+    return db
+      .select()
+      .from(donors)
+      .where(sql`lower(btrim(regexp_replace(${donors.name}, '\\s+', ' ', 'g'))) = ${key}`)
+      .orderBy(asc(donors.createdAt));
+  }
+
   async createDonor(data: InsertDonor): Promise<Donor> {
     const [row] = await db.insert(donors).values(data).returning();
     return row;

@@ -142,6 +142,7 @@ export interface IStorage {
   getDonors(): Promise<Donor[]>;
   getDonor(id: string): Promise<Donor | undefined>;
   getDonorByName(name: string): Promise<Donor | undefined>;
+  findDonorsByNormalisedName(key: string): Promise<Donor[]>;
   createDonor(data: InsertDonor): Promise<Donor>;
   updateDonor(id: string, data: Partial<InsertDonor>): Promise<Donor | undefined>;
   deleteDonor(id: string): Promise<boolean>;
