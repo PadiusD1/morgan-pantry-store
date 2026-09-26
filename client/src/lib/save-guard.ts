@@ -16,15 +16,25 @@ function randomKey(): string {
  * trailing Enter handled by the old render, whose form still holds the values
  * just saved, cannot save them again with a new key.
  */
-export function createSaveGuard(newKey: () => string = randomKey, onHold?: () => void) {
+export function createSaveGuard(
+  newKey: () => string = randomKey,
+  onHold?: () => void,
+  now: () => string = () => new Date().toISOString(),
+) {
   let locked = false;
   let key: string | null = null;
+  // When the logical save began. A retry under the same key sends the same
+  // time, so an unchanged retry sends an unchanged body.
+  let startedAt: string | null = null;
   let holding = false;
 
   function begin(): string | null {
     if (locked) return null;
     locked = true;
-    if (!key) key = newKey();
+    if (!key) {
+      key = newKey();
+      startedAt = now();
+    }
     return key;
   }
 
@@ -32,6 +42,7 @@ export function createSaveGuard(newKey: () => string = randomKey, onHold?: () =>
     if (succeeded) {
       if (key) forgetSentBody(key);
       key = null;
+      startedAt = null;
       if (onHold) {
         holding = true;
         onHold();
@@ -49,12 +60,14 @@ export function createSaveGuard(newKey: () => string = randomKey, onHold?: () =>
   }
 
   /** Runs the action unless one is running. The action returns true on success. */
-  async function run(action: (key: string) => Promise<boolean | void> | boolean | void): Promise<void> {
+  async function run(
+    action: (key: string, startedAt: string) => Promise<boolean | void> | boolean | void,
+  ): Promise<void> {
     const k = begin();
     if (k === null) return;
     let ok = false;
     try {
-      ok = (await action(k)) === true;
+      ok = (await action(k, startedAt ?? now())) === true;
     } finally {
       end(ok);
     }
@@ -64,6 +77,7 @@ export function createSaveGuard(newKey: () => string = randomKey, onHold?: () =>
   function renew() {
     if (key) forgetSentBody(key);
     key = null;
+    startedAt = null;
   }
 
   return { begin, end, run, release, renew, isLocked: () => locked };

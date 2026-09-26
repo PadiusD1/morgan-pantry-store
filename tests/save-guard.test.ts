@@ -161,3 +161,27 @@ describe("idempotency header", () => {
     expect(idempotencyHeaders("POST", "/api/transactions")).toEqual({});
   });
 });
+
+describe("the start time of one logical save", () => {
+  it("stays the same on a retry under the same key and starts again with the next key", async () => {
+    let n = 0;
+    let t = 0;
+    const guard = createSaveGuard(() => `k${++n}`, undefined, () => `T${++t}`);
+    const seen: Array<[string, string | undefined]> = [];
+    await guard.run((key, startedAt) => { seen.push([key, startedAt]); return false; });
+    await guard.run((key, startedAt) => { seen.push([key, startedAt]); return true; });
+    await guard.run((key, startedAt) => { seen.push([key, startedAt]); return true; });
+    expect(seen).toEqual([["k1", "T1"], ["k1", "T1"], ["k2", "T2"]]);
+  });
+
+  it("starts again after renew", async () => {
+    let n = 0;
+    let t = 0;
+    const guard = createSaveGuard(() => `k${++n}`, undefined, () => `T${++t}`);
+    const seen: Array<[string, string | undefined]> = [];
+    await guard.run((key, startedAt) => { seen.push([key, startedAt]); return false; });
+    guard.renew();
+    await guard.run((key, startedAt) => { seen.push([key, startedAt]); return false; });
+    expect(seen).toEqual([["k1", "T1"], ["k2", "T2"]]);
+  });
+});

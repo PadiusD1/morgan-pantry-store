@@ -180,7 +180,7 @@ export default function CheckInPage() {
     await saveGuard.run(submitCheckIn);
   }
 
-  async function submitCheckIn(key: string): Promise<boolean | void> {
+  async function submitCheckIn(key: string, startedAt: string): Promise<boolean | void> {
     if (!quantity || quantity <= 0) {
       toast({
         title: "Quantity required",
@@ -276,6 +276,7 @@ export default function CheckInPage() {
         donorId: picked.donorId,
         donorClientId: picked.donorClientId,
         location,
+        timestamp: startedAt,
       }));
     } catch (err) {
       if (import.meta.env.DEV) {

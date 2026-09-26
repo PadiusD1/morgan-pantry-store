@@ -334,7 +334,7 @@ export default function CheckOutPage() {
     await saveGuard.run(submitCheckOut);
   }
 
-  async function submitCheckOut(key: string): Promise<boolean | void> {
+  async function submitCheckOut(key: string, startedAt: string): Promise<boolean | void> {
     if (!cart.length) {
       toast({
         title: "No items in cart",
@@ -457,6 +457,7 @@ export default function CheckOutPage() {
         items: cart,
         location,
         isEmergency,
+        timestamp: startedAt,
       }));
     } catch (e) {
       if (import.meta.env.DEV) {
