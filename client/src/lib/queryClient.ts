@@ -57,8 +57,41 @@ export function isSessionExpiredError(err: unknown): boolean {
   return err instanceof SessionExpiredError || (err instanceof Error && err.name === "SessionExpiredError");
 }
 
+/** A held 409, the first try under this key is still being saved. */
+export class SaveStillRunningError extends Error {
+  constructor(text: string) {
+    super(`409: ${text}`);
+    this.name = "SaveStillRunningError";
+  }
+}
+
+export const SAVE_STILL_RUNNING_MESSAGE =
+  "The first try is still being saved. Wait a moment, then save again.";
+
+export function isSaveStillRunning(err: unknown): boolean {
+  return err instanceof SaveStillRunningError || (err instanceof Error && err.name === "SaveStillRunningError");
+}
+
+/**
+ * A retry sent edited values, but an earlier try under the same key was
+ * already recorded. It carries what the server stored for that earlier try.
+ */
+export class EarlierSaveRecordedError extends Error {
+  readonly recorded: unknown;
+  constructor(recorded: unknown) {
+    super("An earlier save was already recorded and the change was not saved");
+    this.name = "EarlierSaveRecordedError";
+    this.recorded = recorded;
+  }
+}
+
+export function isEarlierSaveRecorded(err: unknown): err is EarlierSaveRecordedError {
+  return err instanceof EarlierSaveRecordedError || (err instanceof Error && err.name === "EarlierSaveRecordedError");
+}
+
 /** The text a failed save shows, the sign in message for a 401, else the fallback. */
 export function saveErrorMessage(err: unknown, fallback: string): string {
+  if (isSaveStillRunning(err)) return SAVE_STILL_RUNNING_MESSAGE;
   return isSessionExpiredError(err) ? SESSION_EXPIRED_MESSAGE : fallback;
 }
 
@@ -107,9 +140,11 @@ export function idempotencyHeaders(
   return key ? { "Idempotency-Key": key } : {};
 }
 
-// The first body sent with each Idempotency-Key. A retry resends it, so the
-// server replays the first save instead of answering 422 for a new timestamp.
-const sentBodies = new Map<string, string>();
+// Every distinct body sent with each Idempotency-Key, oldest first. A retry
+// sends the current body. When the server answers that the key already holds
+// another body, one of these earlier bodies was recorded, and sending it once
+// more reads back what was stored.
+const sentBodies = new Map<string, string[]>();
 
 /** Drops the body kept for a key, once its action has succeeded. */
 export function forgetSentBody(key: string): void {
@@ -126,21 +161,35 @@ export async function apiRequest(
 ): Promise<Response> {
   const keyHeaders = idempotencyHeaders(method, url, options);
   const key = keyHeaders["Idempotency-Key"];
-  let body = data ? JSON.stringify(data) : undefined;
-  if (key && body !== undefined) {
-    const first = sentBodies.get(key);
-    if (first !== undefined) body = first;
-    else sentBodies.set(key, body);
+  const body = data ? JSON.stringify(data) : undefined;
+  const earlier = key && body !== undefined ? sentBodies.get(key) ?? [] : [];
+  if (key && body !== undefined && !earlier.includes(body)) sentBodies.set(key, [...earlier, body]);
+  const send = (sendBody: string | undefined) =>
+    fetch(url, {
+      method,
+      headers: {
+        ...(data ? { "Content-Type": "application/json" } : {}),
+        ...keyHeaders,
+      },
+      body: sendBody,
+      credentials: "include",
+    });
+  const res = await send(body);
+  const held = res.headers.get("Idempotency-Key-Status") === "held";
+  // The key already holds an earlier body, so the edit was not saved. Send each
+  // earlier body once to read back what was recorded, then name the outcome.
+  if (key && held && res.status === 422) {
+    for (const earlierBody of earlier.filter((b) => b !== body)) {
+      const replay = await send(earlierBody);
+      if (!replay.ok) continue;
+      const recorded: unknown = await replay.json().catch(() => null);
+      sentBodies.delete(key);
+      throw new EarlierSaveRecordedError(recorded);
+    }
   }
-  const res = await fetch(url, {
-    method,
-    headers: {
-      ...(data ? { "Content-Type": "application/json" } : {}),
-      ...keyHeaders,
-    },
-    body,
-    credentials: "include",
-  });
+  if (key && held && res.status === 409) {
+    throw new SaveStillRunningError((await res.text()) || res.statusText);
+  }
   // A refusal rolled back on the server and freed the key, a duplicate person
   // included, so the next try sends the form as it is then. Only an answer the
   // server marks as holding the key (a save still running, or the key already
