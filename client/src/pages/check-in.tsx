@@ -159,6 +159,7 @@ export default function CheckInPage() {
       toast({
         title: "Lookup failed",
         description: "Could not reach product databases. Please enter details manually.",
+        variant: "destructive",
       });
     }
   }

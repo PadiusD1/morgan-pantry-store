@@ -211,7 +211,7 @@ export default function PartnersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       toast({ title: "Partner removed", description: `${deleteConfirm.name} has been removed.` });
     } catch {
-      toast({ title: "Delete failed", description: "Could not delete partner. Try again." });
+      toast({ title: "Delete failed", description: "Could not delete partner. Try again.", variant: "destructive" });
     }
     setDeleteConfirm(null);
   }

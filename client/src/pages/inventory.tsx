@@ -801,7 +801,7 @@ function CsvImportDialog({
       complete: (results) => {
         const data = results.data as string[][];
         if (data.length < 2) {
-          toast({ title: "Invalid file", description: "File must have a header row and at least one data row." });
+          toast({ title: "Invalid file", description: "File must have a header row and at least one data row.", variant: "destructive" });
           return;
         }
         const headerRow = data[0].map((h) => (h ?? "").toString().trim());
@@ -812,7 +812,7 @@ function CsvImportDialog({
         setStep("mapping");
       },
       error: () => {
-        toast({ title: "Parse error", description: "Could not parse the file. Ensure it is a valid CSV." });
+        toast({ title: "Parse error", description: "Could not parse the file. Ensure it is a valid CSV.", variant: "destructive" });
       },
     });
   }, [toast]);

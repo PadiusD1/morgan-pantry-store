@@ -269,6 +269,7 @@ export default function CheckOutPage() {
       toast({
         title: "Lookup failed",
         description: "Could not reach product databases. Try again or add item manually.",
+        variant: "destructive",
       });
       setScanLoading(false);
     }
