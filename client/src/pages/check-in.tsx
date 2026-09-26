@@ -220,7 +220,7 @@ export default function CheckInPage() {
         weightPerUnitLbs: newItem.weightPerUnitLbs,
         valuePerUnitUsd: newItem.valuePerUnitUsd,
         allergens: newItem.allergens,
-      });
+      }, { idempotencyKey: `${key}.item` });
       itemId = created.id;
       setPinnedItem(created);
       // Cache barcode so future scans remember all saved info

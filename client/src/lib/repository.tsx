@@ -15,6 +15,7 @@ import {
   type ApiTransaction,
 } from "./api-types";
 import { findCachedItem } from "./inventory-cache";
+import { trackCreate } from "./item-action";
 import { newClientRecord } from "./new-client";
 import { loadGate } from "./load-gate";
 
@@ -393,17 +394,17 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
           upsertApiRow(old, tempId, created),
         );
-        pendingCreates.current.delete(tempId);
         return created.id;
       })
       .catch((err) => {
         // Roll the optimistic row back to server truth, then propagate.
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        pendingCreates.current.delete(tempId);
         throw err instanceof Error ? err : new Error(String(err));
       });
 
-    pendingCreates.current.set(tempId, createPromise);
+    // The temporary id keeps resolving to the canonical id after the create
+    // finishes, so a handler still awaiting an inline donor posts its stock.
+    trackCreate(pendingCreates.current, tempId, createPromise);
     // Standalone callers (CSV import, inventory add) don't await this promise —
     // swallow the rejection here so it isn't reported as unhandled. Awaiters
     // still observe the rejection through their own `await`.
@@ -565,8 +566,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
     // The live cache, not this render's snapshot, so an item the page created a
     // moment ago is found. A missing item throws, the caller says nothing was recorded.
+    // A temporary id resolves to the canonical one first, since the created
+    // row replaced the temporary row in the cache when the create answered.
+    const resolvedId = await resolveItemId(itemId);
     const cached = queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"]) ?? inventoryQuery.data;
-    const item = toInventoryItem(findCachedItem(cached, itemId));
+    const item = toInventoryItem(findCachedItem(cached, resolvedId));
 
     // Optimistic inventory update. The SERVER is the source of truth for stock —
     // it applies the +received delta atomically when the IN transaction is posted
@@ -574,7 +578,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     // is reconciled by the invalidation below.
     queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
       (old ?? []).map((i) =>
-        i.id === itemId ? { ...i, quantity: i.quantity + quantity, updatedAt: timestamp } : i,
+        i.id === resolvedId ? { ...i, quantity: i.quantity + quantity, updatedAt: timestamp } : i,
       ),
     );
 
