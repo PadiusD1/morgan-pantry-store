@@ -275,14 +275,17 @@ export default function ReportsPage() {
               data-testid="input-report-to"
             />
           </div>
-          <div className="flex flex-col gap-2 md:flex-row">
-            <Button type="button" variant="outline" onClick={exportJson} data-testid="button-export-json">
-              Export JSON
-            </Button>
-            <Button type="button" variant="outline" onClick={exportCsv} data-testid="button-export-csv">
-              Export CSV
-            </Button>
-          </div>
+          {/* Data exports are for admin and staff, as in server/auth.ts, never a volunteer. */}
+          {canExportServer && (
+            <div className="flex flex-col gap-2 md:flex-row">
+              <Button type="button" variant="outline" onClick={exportJson} data-testid="button-export-json">
+                Export JSON
+              </Button>
+              <Button type="button" variant="outline" onClick={exportCsv} data-testid="button-export-csv">
+                Export CSV
+              </Button>
+            </div>
+          )}
           <div className="flex flex-col gap-1 md:items-end">
             <label
               className="text-xs font-medium text-muted-foreground"
