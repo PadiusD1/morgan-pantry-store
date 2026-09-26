@@ -24,6 +24,10 @@ import {
   releaseRequestReservations,
   RequestRateLimitError,
 } from "./request-service";
+import { moveRequestStatus } from "./request-service";
+
+const PICKUP_STATUSES = ["approved", "partially_approved", "ready_for_pickup"];
+const OPEN_STATUSES = ["pending", "under_review", ...PICKUP_STATUSES];
 
 const PG_UNIQUE_VIOLATION = "23505";
 
@@ -977,11 +981,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       )).rows;
 
       for (const r of expired) {
-        await releaseRequestReservations(r.id);
-        await pool.query(
-          `UPDATE requests SET status = 'expired', updated_at = now() WHERE id = $1`,
-          [r.id],
-        );
+        // Another request may have expired this row already, so skip it.
+        if (!(await moveRequestStatus(r.id, "expired", PICKUP_STATUSES))) continue;
         await storage.createAuditLogEntry({
           requestId: r.id,
           action: "expired",
@@ -1242,6 +1243,17 @@ export async function registerRoutes(app: Express): Promise<void> {
     try {
       await client.query("BEGIN");
 
+      const claimed = await client.query(
+        `UPDATE requests SET status = 'completed', updated_at = now()
+         WHERE id = $1 AND status = ANY($2) RETURNING id`,
+        [req.params.id, PICKUP_STATUSES],
+      );
+      if (claimed.rowCount === 0) {
+        await client.query("ROLLBACK");
+        client.release();
+        return res.status(409).json({ message: "This request was already changed" });
+      }
+
       const txResult = await client.query(
         `INSERT INTO transactions (type, timestamp, client_id, client_name)
          VALUES ('OUT', now(), $1, $2) RETURNING id`,
@@ -1322,14 +1334,9 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot cancel request with status '${request.status}'` });
     }
 
-    if (["approved", "partially_approved", "ready_for_pickup"].includes(request.status)) {
-      await releaseRequestReservations(req.params.id);
+    if (!(await moveRequestStatus(req.params.id, "cancelled", OPEN_STATUSES))) {
+      return res.status(409).json({ message: "This request was already changed" });
     }
-
-    await storage.updateRequest(req.params.id, {
-      status: "cancelled",
-      cancelledAt: new Date(),
-    });
 
     await storage.createAuditLogEntry({
       requestId: req.params.id,
@@ -1363,11 +1370,9 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot mark no-show for request with status '${request.status}'` });
     }
 
-    if (["approved", "partially_approved", "ready_for_pickup"].includes(request.status)) {
-      await releaseRequestReservations(req.params.id);
+    if (!(await moveRequestStatus(req.params.id, "no_show", OPEN_STATUSES))) {
+      return res.status(409).json({ message: "This request was already changed" });
     }
-
-    await storage.updateRequest(req.params.id, { status: "no_show" });
 
     await storage.createAuditLogEntry({
       requestId: req.params.id,
