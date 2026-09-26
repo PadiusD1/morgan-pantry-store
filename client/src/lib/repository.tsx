@@ -16,6 +16,7 @@ import {
 } from "./api-types";
 import { findCachedItem } from "./inventory-cache";
 import { newClientRecord } from "./new-client";
+import { loadGate } from "./load-gate";
 
 export type PackageType = "single" | "multi_pack" | "variety_pack" | "case";
 
@@ -796,10 +797,16 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
   }
 
   // ── Loading & error gates ───────────────────────────────────────────────
-  const isLoading = inventoryQuery.isLoading || clientsQuery.isLoading || transactionsQuery.isLoading;
-  const error = inventoryQuery.error || clientsQuery.error || transactionsQuery.error;
+  // A failed refetch over loaded data keeps the pages mounted, so a check out
+  // form keeps what was typed. Only a query that never loaded blocks the app.
+  const gate = loadGate([inventoryQuery, clientsQuery, transactionsQuery]);
+  const retryLoad = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+  };
 
-  if (isLoading) {
+  if (gate.kind === "loading") {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -807,17 +814,13 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     );
   }
 
-  if (error) {
+  if (gate.kind === "error") {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen gap-4">
-        <p className="text-destructive">Failed to load data: {(error as Error).message}</p>
+        <p className="text-destructive">Failed to load data: {gate.error.message}</p>
         <button
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md"
-          onClick={() => {
-            queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
-          }}
+          onClick={retryLoad}
         >
           Retry
         </button>
@@ -844,7 +847,32 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     addCategory,
   };
 
-  return <RepositoryContext.Provider value={value}>{children}</RepositoryContext.Provider>;
+  return (
+    <RepositoryContext.Provider value={value}>
+      {children}
+      {/* Bottom centre on phones, where toasts sit at the top, and top centre
+          below the mobile bar from sm up, where toasts sit at the bottom, so it
+          never covers a toast or the Sign out button in the sidebar footer. */}
+      {gate.staleError && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-md border bg-background px-3 py-2 text-sm shadow-md sm:bottom-auto sm:top-16"
+          data-testid="notice-refresh-failed"
+        >
+          <span>Could not refresh data</span>
+          <button
+            type="button"
+            className="font-medium text-primary hover:underline"
+            onClick={retryLoad}
+            data-testid="button-refresh-retry"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </RepositoryContext.Provider>
+  );
 }
 
 export function useRepository() {
