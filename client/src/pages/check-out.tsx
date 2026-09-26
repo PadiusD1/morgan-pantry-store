@@ -412,6 +412,7 @@ export default function CheckOutPage() {
         setIsEmergency(false);
         setFulfillingRequestId(null);
         setRequestItemIdByInventoryId({});
+        return true;
       } catch (e) {
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
