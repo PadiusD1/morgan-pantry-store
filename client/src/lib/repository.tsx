@@ -145,14 +145,14 @@ export type RepositoryContextValue = RepositoryState & {
     donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
-  }) => Promise<void>;
+  }) => Promise<unknown>;
   recordOutbound: (options: {
     client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
-  }) => Promise<{ client: ClientRecord }>;
+  }) => Promise<{ client: ClientRecord; saved?: unknown }>;
   upsertClient: (partial: Partial<ClientRecord> & { name: string; identifier: string }) => ClientRecord;
   updateSettings: (partial: Partial<Settings>) => void;
   upsertBarcodeCache: (barcode: string, entry: Omit<BarcodeCacheEntry, "cachedAt">) => void;
@@ -574,7 +574,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
-  }): Promise<void> {
+  }): Promise<unknown> {
     const { itemId, quantity, source, donor, donorClientId, donorId, location } = options;
     const timestamp = options.timestamp ?? new Date().toISOString();
 
@@ -642,7 +642,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Create the IN transaction. The server applies the inventory delta inside
       // the same DB transaction — do NOT PATCH inventory quantity here.
-      await apiRequest("POST", "/api/transactions", {
+      const res = await apiRequest("POST", "/api/transactions", {
         type: "IN",
         timestamp,
         source: source ?? null,
@@ -661,11 +661,14 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           valuePerUnitUsd: String(txItem.valuePerUnitUsd),
         }],
       });
+      // The page builds its success text from what the server stored.
+      const saved: unknown = await res.json().catch(() => null);
 
       // Confirmed — reconcile the optimistic cache with the server's truth.
       queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      return saved;
     } catch (err) {
       // Roll back every optimistic mutation to the server's truth, then rethrow
       // so the page can surface an error toast and skip the success receipt.
@@ -682,7 +685,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
-  }): Promise<{ client: ClientRecord }> {
+  }): Promise<{ client: ClientRecord; saved?: unknown }> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const isEmergency = Boolean(options.isEmergency);
     if (!options.items.length) {
@@ -768,6 +771,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       // transaction links to the correct server client ID (and so a client-create
       // failure surfaces here rather than being silently dropped).
       const realClientId = await resolveClientId(client.id);
+      let saved: unknown = null;
 
       if (txItems.length) {
         // Resolve item IDs (awaiting any in-flight item creates), then post the
@@ -783,7 +787,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           })),
         );
 
-        await apiRequest("POST", "/api/transactions", {
+        const res = await apiRequest("POST", "/api/transactions", {
           type: "OUT",
           timestamp,
           clientId: realClientId,
@@ -795,6 +799,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           accuracy: options.location?.accuracy ?? null,
           items: apiItems,
         });
+        saved = await res.json().catch(() => null);
       }
 
       // Confirmed — reconcile the optimistic cache with the server's truth.
@@ -804,7 +809,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Return the client carrying its resolved (real) server id so the caller
       // can select the persisted record for the receipt.
-      return { client: { ...client, id: realClientId } };
+      return { client: { ...client, id: realClientId }, saved };
     } catch (err) {
       // Roll back every optimistic mutation to the server's truth, then rethrow
       // so the page can surface an error toast and skip the success receipt.

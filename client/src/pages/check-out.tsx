@@ -5,7 +5,8 @@ import { currentLocation } from "@/lib/location";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
-import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { apiRequest, isEarlierSaveRecorded, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -438,7 +439,7 @@ export default function CheckOutPage() {
 
     const location = currentLocation();
 
-    let result: { client: typeof clients[number] };
+    let result: { client: typeof clients[number]; saved?: unknown };
     try {
       result = await withIdempotencyKey(key, () => recordOutbound({
         client: clientPayload,
@@ -450,6 +451,12 @@ export default function CheckOutPage() {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.error("Failed to record check-out:", e);
+      }
+      if (isEarlierSaveRecorded(e)) {
+        // The first try was recorded. Keep the edited form and cart, start a new key.
+        saveGuard.renew();
+        toast({ title: "Not saved", description: earlierSaveText(e.recorded, "out"), variant: "destructive" });
+        return;
       }
       toast({
         title: "Check-out failed",
@@ -469,7 +476,7 @@ export default function CheckOutPage() {
 
       toast({
         title: isEmergency ? "Emergency shop recorded" : "Check-out recorded",
-        description: `Distribution recorded for ${result.client.name}${isEmergency ? " (Emergency Shop Appointment)" : ""}${location ? " with location" : ""}.`,
+        description: `Distribution recorded for ${savedCheckOutName(result.saved, result.client.name)}${isEmergency ? " (Emergency Shop Appointment)" : ""}${location ? " with location" : ""}.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       setCart([]);
