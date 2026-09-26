@@ -2,7 +2,11 @@ import React, { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { clientSaveRequest } from "@/lib/client-save";
+import { duplicateRefusal } from "@shared/identity";
+import { useSaveGuard } from "@/lib/save-guard";
+import type { ClientRecord } from "@/lib/repository";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
@@ -32,7 +36,7 @@ function highlightNote(text: string, query: string): React.ReactNode {
 }
 
 export default function ClientsPage() {
-  const { clients: allClients, upsertClient, transactions, settings } = useRepository();
+  const { clients: allClients, transactions, settings } = useRepository();
   // The Clients page is for student clients only — partner orgs live under /partners.
   // Treat NULL/unset client_type as 'student' for backward compatibility with existing rows.
   const clients = useMemo(
@@ -84,28 +88,50 @@ export default function ClientsPage() {
     return [...words.entries()].filter(([, count]) => count >= 2).sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [clients]);
 
+  // One save at a time. The server decides, so a new person whose details
+  // match someone already in is refused by name and never merged into them.
+  const saveGuard = useSaveGuard();
   function handleSave() {
     if (!editing) return;
     if (!editing.name.trim() || !editing.identifier.trim()) {
       toast({ title: "Missing required fields", description: "Name and identifier are required." });
       return;
     }
-    const client = upsertClient({
-      id: editing.id,
-      name: editing.name.trim(),
-      identifier: editing.identifier.trim(),
-      contact: editing.contact?.trim() || undefined,
-      phone: editing.phone?.trim() || undefined,
-      email: editing.email?.trim() || undefined,
-      address: editing.address?.trim() || undefined,
-      dateOfBirth: editing.dateOfBirth || undefined,
-      householdSize: editing.householdSize ?? 1,
-      status: editing.status ?? "active",
-      allergies: editing.allergies,
-      notes: editing.notes?.trim() || undefined,
-    });
-    toast({ title: "Client saved", description: client.name });
+    const form = editing;
+    void saveGuard.run((key) => withIdempotencyKey(key, () => saveClient(form)));
+  }
+
+  async function saveClient(form: NonNullable<typeof editing>): Promise<boolean> {
+    const fields: Partial<ClientRecord> = {
+      name: form.name.trim(),
+      identifier: form.identifier.trim(),
+      contact: form.contact?.trim() || undefined,
+      phone: form.phone?.trim() || undefined,
+      email: form.email?.trim() || undefined,
+      address: form.address?.trim() || undefined,
+      dateOfBirth: form.dateOfBirth || undefined,
+      householdSize: form.householdSize ?? 1,
+      status: form.status ?? "active",
+      allergies: form.allergies,
+      notes: form.notes?.trim() || undefined,
+    };
+    const request = clientSaveRequest(form.id, fields);
+    try {
+      await apiRequest(request.method, request.url, request.body);
+    } catch (err) {
+      toast({
+        title: "Client not saved",
+        description:
+          duplicateRefusal(err) ??
+          saveErrorMessage(err, "The server did not save this person. Your entries are kept, check them and try again."),
+        variant: "destructive",
+      });
+      return false;
+    }
+    queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    toast({ title: "Client saved", description: fields.name });
     setEditing(null);
+    return true;
   }
 
   async function handleDelete() {
