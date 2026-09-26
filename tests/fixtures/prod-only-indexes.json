@@ -1,0 +1,74 @@
+[
+ {
+  "name": "idx_clients_client_type",
+  "definition": "CREATE INDEX idx_clients_client_type ON public.clients USING btree (client_type)"
+ },
+ {
+  "name": "idx_inventory_items_category",
+  "definition": "CREATE INDEX idx_inventory_items_category ON public.inventory_items USING btree (category)"
+ },
+ {
+  "name": "idx_notifications_recipient_id",
+  "definition": "CREATE INDEX idx_notifications_recipient_id ON public.notifications USING btree (recipient_id)"
+ },
+ {
+  "name": "idx_notifications_request_id",
+  "definition": "CREATE INDEX idx_notifications_request_id ON public.notifications USING btree (request_id)"
+ },
+ {
+  "name": "idx_request_audit_log_request_id",
+  "definition": "CREATE INDEX idx_request_audit_log_request_id ON public.request_audit_log USING btree (request_id)"
+ },
+ {
+  "name": "idx_request_items_inventory_item_id",
+  "definition": "CREATE INDEX idx_request_items_inventory_item_id ON public.request_items USING btree (inventory_item_id)"
+ },
+ {
+  "name": "idx_request_items_request_id",
+  "definition": "CREATE INDEX idx_request_items_request_id ON public.request_items USING btree (request_id)"
+ },
+ {
+  "name": "idx_requests_client_identifier",
+  "definition": "CREATE INDEX idx_requests_client_identifier ON public.requests USING btree (client_identifier)"
+ },
+ {
+  "name": "idx_requests_created_at",
+  "definition": "CREATE INDEX idx_requests_created_at ON public.requests USING btree (created_at)"
+ },
+ {
+  "name": "idx_requests_status",
+  "definition": "CREATE INDEX idx_requests_status ON public.requests USING btree (status)"
+ },
+ {
+  "name": "idx_requests_user_id",
+  "definition": "CREATE INDEX idx_requests_user_id ON public.requests USING btree (user_id)"
+ },
+ {
+  "name": "idx_transaction_items_inventory_item_id",
+  "definition": "CREATE INDEX idx_transaction_items_inventory_item_id ON public.transaction_items USING btree (inventory_item_id)"
+ },
+ {
+  "name": "idx_transaction_items_transaction_id",
+  "definition": "CREATE INDEX idx_transaction_items_transaction_id ON public.transaction_items USING btree (transaction_id)"
+ },
+ {
+  "name": "idx_transactions_client_id",
+  "definition": "CREATE INDEX idx_transactions_client_id ON public.transactions USING btree (client_id)"
+ },
+ {
+  "name": "idx_transactions_donor_id",
+  "definition": "CREATE INDEX idx_transactions_donor_id ON public.transactions USING btree (donor_id)"
+ },
+ {
+  "name": "idx_transactions_is_emergency",
+  "definition": "CREATE INDEX idx_transactions_is_emergency ON public.transactions USING btree (is_emergency)"
+ },
+ {
+  "name": "idx_transactions_timestamp",
+  "definition": "CREATE INDEX idx_transactions_timestamp ON public.transactions USING btree (\"timestamp\")"
+ },
+ {
+  "name": "idx_transactions_type",
+  "definition": "CREATE INDEX idx_transactions_type ON public.transactions USING btree (type)"
+ }
+]

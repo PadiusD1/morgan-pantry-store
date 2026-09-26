@@ -127,22 +127,59 @@ export async function createFoodRequest(
  * Release every reserved item on a request and clear the reserved flags.
  * Used by cancel / no-show / expiry flows.
  */
-export async function releaseRequestReservations(requestId: string): Promise<void> {
-  const { rows } = await pool.query(
+export async function releaseRequestReservations(
+  requestId: string,
+  db: { query: typeof pool.query } = pool,
+): Promise<void> {
+  const { rows } = await db.query(
     `SELECT inventory_item_id, approved_quantity
      FROM request_items WHERE request_id = $1 AND reserved = true`,
     [requestId],
   );
   for (const row of rows) {
-    await pool.query(
+    await db.query(
       `UPDATE inventory_items
        SET reserved_quantity = GREATEST(0, reserved_quantity - $1)
        WHERE id = $2`,
       [row.approved_quantity ?? 0, row.inventory_item_id],
     );
   }
-  await pool.query(
+  await db.query(
     `UPDATE request_items SET reserved = false WHERE request_id = $1`,
     [requestId],
   );
+}
+
+/**
+ * Moves a request to `next` only while it is still in one of `expected`, as
+ * the first statement of its transaction, then releases any reservation.
+ * Returns false when another request already moved it (PLAN.md defect 4).
+ */
+export async function moveRequestStatus(
+  requestId: string,
+  next: "cancelled" | "no_show" | "expired",
+  expected: readonly string[],
+): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const moved = await client.query(
+      `UPDATE requests SET status = $2, updated_at = now(),
+         cancelled_at = CASE WHEN $2 = 'cancelled' THEN now() ELSE cancelled_at END
+       WHERE id = $1 AND status = ANY($3) RETURNING id`,
+      [requestId, next, expected],
+    );
+    if (moved.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await releaseRequestReservations(requestId, client);
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
