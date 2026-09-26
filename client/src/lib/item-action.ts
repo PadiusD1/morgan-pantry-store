@@ -1,3 +1,5 @@
+import { serverMessage } from "./stock-change";
+
 /**
  * One logical item action (a new item, an inline new donor and its stock) run
  * as a whole. Each component write keeps one key derived from the action key,
@@ -94,11 +96,11 @@ export function classifySaveError(err: unknown): SaveOutcome {
   return "uncertain";
 }
 
-/** Short plain text for a failed item action, per the shared design. */
+/** Short plain text for a failed item action, per the shared design. A known refusal shows the server's message. */
 export function itemActionFailureText(err: unknown, refusal: string): string {
   const outcome = classifySaveError(err);
   if (outcome === "running") return "The first try is still saving. Please wait a moment, then check the list.";
-  if (outcome === "refused") return refusal;
+  if (outcome === "refused") return serverMessage(err) ?? refusal;
   return "The save may already be recorded. Check the list before saving again, the same entries are kept.";
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifySaveError,
   componentKeys,
+  itemActionFailureText,
   runItemAction,
   runItemSave,
   importRow,
@@ -204,5 +205,15 @@ describe("importRow", () => {
     const { request } = fakeRequest({ "POST /api/inventory": [() => new Response("boom", { status: 500 })] });
     await expect(importRow(counts, () => request("POST", "/api/inventory", {}, { idempotencyKey: "imp.0" }))).rejects.toThrow(/^500/);
     expect(counts.created).toBe(0);
+  });
+});
+
+describe("itemActionFailureText", () => {
+  it("shows the server message for a known refusal and the shared design text otherwise", () => {
+    expect(itemActionFailureText(new Error('409: {"message":"The count changed. Reload and try again."}'), "Not saved")).toBe("The count changed. Reload and try again.");
+    expect(itemActionFailureText(new Error("400: plain"), "Not saved")).toBe("Not saved");
+    expect(itemActionFailureText(new Error('409: {"message":"This request is still being saved"}'), "Not saved")).toMatch(/still saving/);
+    expect(itemActionFailureText(new Error("500: boom"), "Not saved")).toMatch(/may already be recorded/);
+    expect(itemActionFailureText(new TypeError("Failed to fetch"), "Not saved")).toMatch(/may already be recorded/);
   });
 });

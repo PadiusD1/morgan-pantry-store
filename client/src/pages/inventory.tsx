@@ -85,7 +85,7 @@ export default function InventoryPage() {
       }[result.stage];
       toast({
         title: result.stage === "item" ? "Not saved" : "Stock not recorded",
-        description: itemActionFailureText(result.error, saveErrorMessage(result.error, refusal)),
+        description: saveErrorMessage(result.error, itemActionFailureText(result.error, refusal)),
         variant: "destructive",
       });
       return false;
