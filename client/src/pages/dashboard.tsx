@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowDownRightIcon, ArrowUpRightIcon, ClockIcon, InboxIcon, PackageIcon, UsersIcon, WeightIcon, BarChart3Icon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
+import { DONUT_OTHER, donutSlices } from "@/lib/donut";
 
 export default function DashboardPage() {
   const { inventory, transactions, clients } = useRepository();
@@ -28,17 +29,7 @@ export default function DashboardPage() {
   });
 
   // Category breakdown for pie chart
-  const categoryData = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const item of inventory) {
-      const cat = item.category || "Uncategorized";
-      counts[cat] = (counts[cat] || 0) + item.quantity;
-    }
-    return Object.entries(counts)
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8);
-  }, [inventory]);
+  const categoryData = useMemo(() => donutSlices(inventory), [inventory]);
 
   // Weekly activity for bar chart (last 7 days)
   const weeklyActivity = useMemo(() => {
@@ -301,7 +292,7 @@ export default function DashboardPage() {
                 No inventory data available.
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height={220}>
+              <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
                   <Pie
                     data={categoryData}
@@ -312,16 +303,20 @@ export default function DashboardPage() {
                     paddingAngle={2}
                     dataKey="value"
                     nameKey="name"
-                    label={({ name, percent }) =>
-                      `${name} ${(percent * 100).toFixed(0)}%`
-                    }
-                    labelLine={false}
                   >
-                    {categoryData.map((_, idx) => (
-                      <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                    {categoryData.map((slice, idx) => (
+                      <Cell key={slice.name} fill={slice.name === DONUT_OTHER ? "#9ca3af" : PIE_COLORS[idx % PIE_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                  <Legend
+                    verticalAlign="bottom"
+                    iconType="circle"
+                    wrapperStyle={{ fontSize: 12 }}
+                    formatter={(value: string) =>
+                      `${value} ${categoryData.find((s) => s.name === value)?.percent ?? 0}%`
+                    }
+                  />
                 </PieChart>
               </ResponsiveContainer>
             )}
