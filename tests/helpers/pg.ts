@@ -11,16 +11,22 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 
 export const PG_PORT = 55417;
 export const PG_USER = "frc";
-const PG_ROOT = "/srv/tools/pg17/usr/lib/postgresql/17/bin";
-const PG_LIB = "/srv/tools/pg17/usr/lib/x86_64-linux-gnu";
-const PG_DATA = "/srv/tools/frc-test/pg17-data";
-const PG_SOCK = "/srv/tools/frc-test/sock";
-const PG_LOG = "/srv/tools/frc-test/pg17.log";
+// Where PostgreSQL 17 and the test cluster live. FRC_PG_BIN and FRC_PG_LIB
+// name a PostgreSQL 17 install, FRC_TEST_PG_ROOT a folder holding an initdb
+// cluster in pg17-data (user frc, trust auth). The defaults suit a Debian
+// package install.
+const PG_ROOT = process.env.FRC_PG_BIN || "/usr/lib/postgresql/17/bin";
+const PG_LIB = process.env.FRC_PG_LIB || "";
+const TEST_ROOT = process.env.FRC_TEST_PG_ROOT || path.join(os.homedir(), ".frc-pg-test");
+const PG_DATA = path.join(TEST_ROOT, "pg17-data");
+const PG_SOCK = path.join(TEST_ROOT, "sock");
+const PG_LOG = path.join(TEST_ROOT, "pg17.log");
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 
