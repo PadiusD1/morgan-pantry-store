@@ -62,6 +62,7 @@ export type ClientRecord = {
   contact?: string;
   phone?: string;
   email?: string;
+  classification?: string;
   address?: string;
   dateOfBirth?: string;
   householdSize?: number;
@@ -142,7 +143,7 @@ export type RepositoryContextValue = RepositoryState & {
     location?: GeoLocation;
   }) => Promise<void>;
   recordOutbound: (options: {
-    client: { id?: string; name: string; identifier: string; contact?: string };
+    client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
@@ -649,7 +650,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
   }
 
   async function recordOutbound(options: {
-    client: { id?: string; name: string; identifier: string; contact?: string };
+    client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
@@ -666,6 +667,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       name: options.client.name,
       identifier: options.client.identifier,
       contact: options.client.contact,
+      // Only typed values go in, so a blank box never wipes a stored one.
+      ...(options.client.email ? { email: options.client.email } : {}),
+      ...(options.client.classification ? { classification: options.client.classification } : {}),
     });
 
     const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
@@ -757,6 +761,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           timestamp,
           clientId: realClientId,
           clientName: client.name,
+          clientClassification: options.client.classification ?? null,
           isEmergency,
           latitude: options.location?.latitude ?? null,
           longitude: options.location?.longitude ?? null,

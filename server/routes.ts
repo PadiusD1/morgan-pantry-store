@@ -5,8 +5,9 @@ import { storage } from "./storage";
 import { pool } from "./pg";
 import { claimRequestKey, runIdempotent, saveRequestKey, sendClaim } from "./idempotency";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { inventoryItems, stockAdjustments } from "@shared/schema";
+import { clients as clientsTable, inventoryItems, stockAdjustments } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
+import { classificationProblem, createClientWork, transactionClassification } from "./client-create";
 import { lookupBarcode } from "./barcode-lookup";
 import { checkClientDuplicate } from "./client-duplicates";
 import { findOrCreateDonor } from "./donor-find-or-create";
@@ -92,6 +93,7 @@ function mapTransactionRow(row: any) {
     donor: row.donor,
     clientId: row.client_id,
     clientName: row.client_name,
+    clientClassification: row.client_classification ?? null,
     donorId: row.donor_id,
     isEmergency: row.is_emergency,
     latitude: row.latitude,
@@ -467,22 +469,15 @@ export async function registerRoutes(app: Express): Promise<void> {
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
 
-    const dup = await checkClientDuplicate(result.data);
-    if (dup.duplicate) {
-      return res.status(409).json({ message: duplicateMessage(dup.match), duplicateOf: dup.match.id });
-    }
-
-    try {
-      const client = await storage.createClient(result.data);
-      res.status(201).json(client);
-    } catch (err: any) {
-      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
-        return res.status(409).json({
-          message: `A client with identifier "${result.data.identifier}" already exists. Use a different identifier.`,
-        });
-      }
-      throw err;
-    }
+    // Check out sends an Idempotency-Key, so a retry returns the first answer.
+    await runIdempotent(req, res, (client) =>
+      createClientWork(result.data, {
+        checkDuplicate: (data) => checkClientDuplicate(data),
+        duplicateMessage,
+        insert: async (data) => (await drizzle(client).insert(clientsTable).values(data).returning())[0],
+        isUniqueViolation: (err) => pgErrorCode(err) === PG_UNIQUE_VIOLATION,
+      }),
+    );
   });
 
   app.patch("/api/clients/:id", async (req, res) => {
@@ -492,6 +487,8 @@ export async function registerRoutes(app: Express): Promise<void> {
         .status(400)
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
+    const classificationError = classificationProblem(result.data.classification);
+    if (classificationError) return res.status(400).json({ message: classificationError });
     const before = await storage.getClient(req.params.id);
     if (!before) return res.status(404).json({ message: "Not found" });
     const dup = await checkClientDuplicate({ ...before, ...result.data, id: before.id }, before);
@@ -617,8 +614,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       const txRow = (
         await client.query(
           `INSERT INTO transactions
-             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy)
-           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12)
+             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy, client_classification)
+           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12, $13)
            RETURNING *`,
           [
             txId,
@@ -633,6 +630,7 @@ export async function registerRoutes(app: Express): Promise<void> {
             (d as any).latitude ?? null,
             (d as any).longitude ?? null,
             (d as any).accuracy ?? null,
+            transactionClassification((d as any).clientClassification),
           ],
         )
       ).rows[0];

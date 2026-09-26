@@ -19,6 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
 import { duplicateRefusal } from "@shared/identity";
+import { CLASSIFICATIONS, buildCheckoutClient, findReturningClient, inputsFromClient, validateIdentityInputs } from "@shared/checkout-identity";
 import { useReceiptCountdown } from "@/hooks/use-receipt-countdown";
 import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon, SirenIcon, ChevronsUpDownIcon, CheckIcon, Handshake } from "lucide-react";
 
@@ -56,6 +57,8 @@ export default function CheckOutPage() {
   const [clientId, setClientId] = useState<string | "new" | "">("");
   const [clientName, setClientName] = useState("");
   const [clientIdentifier, setClientIdentifier] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
+  const [clientClassification, setClientClassification] = useState("");
   const [clientContact, setClientContact] = useState("");
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
   const [isEmergency, setIsEmergency] = useState(false);
@@ -127,6 +130,8 @@ export default function CheckOutPage() {
     if (!id || id === "new") {
       setClientName("");
       setClientIdentifier("");
+      setClientEmail("");
+      setClientClassification("");
       setClientContact("");
       setClientAllergies([]);
       return;
@@ -134,7 +139,10 @@ export default function CheckOutPage() {
     const c = clients.find((c) => c.id === id);
     if (c) {
       setClientName(c.name);
-      setClientIdentifier(c.identifier);
+      const split = inputsFromClient(c);
+      setClientIdentifier(split.studentId);
+      setClientEmail(split.email);
+      setClientClassification(c.classification ?? "");
       setClientContact(c.contact || "");
       setClientAllergies(c.allergies || []);
     }
@@ -332,7 +340,6 @@ export default function CheckOutPage() {
     }
 
     const clientNameFinal = clientName.trim();
-    const identifierFinal = clientIdentifier.trim() || clientNameFinal || "Unknown";
     if (!clientNameFinal) {
       toast({
         title: "Missing client name",
@@ -340,6 +347,29 @@ export default function CheckOutPage() {
       });
       return;
     }
+    const identityError = Object.values(validateIdentityInputs({
+      studentId: clientIdentifier,
+      email: clientEmail,
+      classification: clientClassification,
+    }))[0];
+    if (identityError) {
+      toast({ title: "Check the student details", description: identityError });
+      return;
+    }
+    // A returning student is found by ID or email, so no second record is made.
+    const selectedClient = clientId && clientId !== "new" ? clients.find((c) => c.id === clientId) : undefined;
+    const returningClient = selectedClient ? undefined : findReturningClient(clients, { studentId: clientIdentifier, email: clientEmail });
+    const clientPayload = buildCheckoutClient({
+      existing: selectedClient ?? returningClient,
+      name: returningClient ? returningClient.name : clientNameFinal,
+      studentId: clientIdentifier,
+      email: clientEmail,
+      classification: clientClassification,
+      contact: clientContact,
+      // Seeded by the save key, so a retry after a failed save sends the same identifier.
+      random: () => key,
+    });
+    const identifierFinal = clientPayload.identifier;
 
     // No stock validation — checkout always proceeds.
     // If inventory is insufficient, it will be auto-adjusted.
@@ -400,12 +430,7 @@ export default function CheckOutPage() {
     let result: { client: typeof clients[number] };
     try {
       result = await withIdempotencyKey(key, () => recordOutbound({
-        client: {
-          id: clientId && clientId !== "new" ? clientId : undefined,
-          name: clientNameFinal,
-          identifier: identifierFinal,
-          contact: clientContact.trim() || undefined,
-        },
+        client: clientPayload,
         items: cart,
         location,
         isEmergency,
@@ -600,7 +625,7 @@ export default function CheckOutPage() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-id" data-testid="label-client-identifier">
-                  Student ID / email
+                  Student ID (optional)
                 </label>
                 <Input
                   id="client-id"
@@ -608,6 +633,45 @@ export default function CheckOutPage() {
                   onChange={(e) => setClientIdentifier(e.target.value)}
                   data-testid="input-client-identifier"
                 />
+                {validateIdentityInputs({ studentId: clientIdentifier }).studentId && (
+                  <p className="text-xs text-destructive" data-testid="error-client-identifier">
+                    {validateIdentityInputs({ studentId: clientIdentifier }).studentId}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="client-email" data-testid="label-client-email">
+                  Email (optional)
+                </label>
+                <Input
+                  id="client-email"
+                  inputMode="email"
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  data-testid="input-client-email"
+                />
+                {validateIdentityInputs({ email: clientEmail }).email && (
+                  <p className="text-xs text-destructive" data-testid="error-client-email">
+                    {validateIdentityInputs({ email: clientEmail }).email}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="client-classification" data-testid="label-client-classification">
+                  Classification
+                </label>
+                <Select value={clientClassification} onValueChange={setClientClassification}>
+                  <SelectTrigger id="client-classification" data-testid="select-client-classification">
+                    <SelectValue placeholder="Select classification" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLASSIFICATIONS.map((c) => (
+                      <SelectItem key={c} value={c} data-testid={`option-classification-${c}`}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-contact" data-testid="label-client-contact">
