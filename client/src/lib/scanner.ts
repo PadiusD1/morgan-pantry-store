@@ -110,7 +110,37 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
   return { key, timeout, hasHeld };
 }
 
-export type ScanField = { value: string };
+export type ScanField = { value: string; selectionStart?: number | null; selectionEnd?: number | null };
+
+/**
+ * Puts text where the caret was, replacing a selected range, and returns the
+ * new value with the caret after the inserted text. With no selection known
+ * the text goes at the end.
+ */
+export function insertAtSelection(
+  value: string,
+  text: string,
+  start: number | null | undefined,
+  end: number | null | undefined,
+): { value: string; caret: number } {
+  if (start == null) return { value: value + text, caret: value.length + text.length };
+  const clamp = (n: number) => Math.min(Math.max(n, 0), value.length);
+  const a = clamp(start);
+  const b = clamp(end ?? start);
+  const from = Math.min(a, b);
+  const to = Math.max(a, b);
+  return { value: value.slice(0, from) + text + value.slice(to), caret: from + text.length };
+}
+
+type HeldAt = { start: number | null; end: number | null };
+
+function readSelection(field: ScanField): HeldAt {
+  try {
+    return { start: field.selectionStart ?? null, end: field.selectionEnd ?? null };
+  } catch {
+    return { start: null, end: null };
+  }
+}
 
 export type ScanKeyEvent = ScanKey & {
   preventDefault(): void;
@@ -120,7 +150,8 @@ export type ScanKeyEvent = ScanKey & {
 export type ScannerControllerOptions<F extends ScanField> = {
   config?: ScannerConfig;
   getFocused: () => F | null;
-  writeField: (field: F, value: string) => void;
+  /** caret, when given, is where the caret goes after the write */
+  writeField: (field: F, value: string, caret?: number) => void;
   onScan: (code: string) => void;
   schedule: (fn: () => void, ms: number) => () => void;
 };
@@ -136,6 +167,7 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
   const machine = createScanMachine(config);
   let field: F | null = null;
   let snapshot = "";
+  let heldAt: HeldAt | null = null;
   let cancelTimer: (() => void) | null = null;
 
   function clearTimer() {
@@ -144,8 +176,11 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
   }
 
   function flushInto(text: string | undefined) {
+    const at = heldAt;
+    heldAt = null;
     if (!text || !field) return;
-    opts.writeField(field, field.value + text);
+    const next = insertAtSelection(field.value, text, at?.start, at?.end);
+    opts.writeField(field, next.value, next.caret);
   }
 
   function handle(ev: ScanKeyEvent) {
@@ -155,6 +190,7 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
     if (decision.snapshot) {
       field = opts.getFocused();
       snapshot = field ? field.value : "";
+      heldAt = null;
     }
 
     if (decision.action === "pass") {
@@ -166,6 +202,8 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
     ev.stopPropagation();
 
     if (decision.action === "hold") {
+      // The first held key marks where the burst goes if it turns out to be typing.
+      if (!heldAt && field) heldAt = readSelection(field);
       clearTimer();
       cancelTimer = opts.schedule(() => {
         cancelTimer = null;
@@ -177,6 +215,7 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
     clearTimer();
     if (field && field.value !== snapshot) opts.writeField(field, snapshot);
     field = null;
+    heldAt = null;
     opts.onScan(decision.code!);
   }
 
@@ -229,13 +268,22 @@ function focusedEditable(): EditableField | null {
   return null;
 }
 
-/** Sets a value the way the browser does, so React sees an input event. */
-export function setNativeValue(el: EditableField, value: string) {
+/**
+ * Sets a value the way the browser does, so React sees an input event, then
+ * puts the caret at caret when one is given and the field still has focus.
+ */
+export function setNativeValue(el: EditableField, value: string, caret?: number) {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
   if (setter) setter.call(el, value);
   else el.value = value;
   el.dispatchEvent(new Event("input", { bubbles: true }));
+  if (caret === undefined || el.ownerDocument.activeElement !== el) return;
+  try {
+    el.setSelectionRange(caret, caret);
+  } catch {
+    // Number and email fields have no caret to place, the value is already set.
+  }
 }
 
 /**
