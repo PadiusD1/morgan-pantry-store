@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
+import { useReceiptCountdown } from "@/hooks/use-receipt-countdown";
 import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon, SirenIcon, ChevronsUpDownIcon, CheckIcon, Handshake } from "lucide-react";
 
 type ItemGroupItem = {
@@ -90,6 +91,7 @@ export default function CheckOutPage() {
 
   // Receipt state for post-checkout print
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
+  const receiptWindow = useReceiptCountdown(receipt, () => setReceipt(null));
 
   // Track which approved request is being fulfilled through checkout
   const [fulfillingRequestId, setFulfillingRequestId] = useState<string | null>(null);
@@ -880,7 +882,12 @@ export default function CheckOutPage() {
 
         {/* Receipt Dialog */}
         <Dialog open={!!receipt} onOpenChange={(open) => { if (!open) setReceipt(null); }}>
-          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogContent
+            className="max-w-md max-h-[85vh] overflow-y-auto"
+            onPointerDownCapture={receiptWindow.cancel}
+            onPointerEnter={receiptWindow.cancel}
+            onPointerMove={receiptWindow.cancel}
+          >
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <PrinterIcon className="h-5 w-5" />
@@ -890,6 +897,11 @@ export default function CheckOutPage() {
                 Review and print the receipt for this distribution.
               </DialogDescription>
             </DialogHeader>
+            {receiptWindow.secondsLeft !== null && (
+              <p className="text-xs text-muted-foreground" aria-live="polite" data-testid="text-receipt-countdown">
+                Closes in {receiptWindow.secondsLeft} {receiptWindow.secondsLeft === 1 ? "second" : "seconds"}. Tap or hover to keep it open.
+              </p>
+            )}
             {receipt && <ReceiptContent receipt={receipt} />}
             <DialogFooter className="gap-2">
               <Button variant="outline" onClick={() => setReceipt(null)}>Close</Button>
@@ -933,6 +945,22 @@ export default function CheckOutPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {!receipt && receiptWindow.lastReceipt && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            onClick={() => {
+              receiptWindow.markReprint();
+              setReceipt(receiptWindow.lastReceipt);
+            }}
+            data-testid="button-reprint-last-receipt"
+          >
+            <PrinterIcon className="h-4 w-4 mr-1.5" />
+            Reprint last receipt
+          </Button>
+        )}
       </CardContent>
     </Card>
   );
