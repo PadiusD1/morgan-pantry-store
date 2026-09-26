@@ -153,3 +153,43 @@ describe("request status changes are conditional updates", () => {
     expect(await stock(item)).toEqual([10, 3]);
   });
 });
+
+describe("a fulfilled request copies the student's classification", () => {
+  async function fulfilledClassification(request: string) {
+    const res = await post(`/api/requests/${request}/fulfill`);
+    expect(res.status).toBe(200);
+    const { rows } = await t.pool.query(
+      `SELECT t.client_classification FROM requests r JOIN transactions t ON t.id = r.transaction_id
+       WHERE r.id = $1`,
+      [request],
+    );
+    return rows[0].client_classification;
+  }
+
+  it("writes the classification of the request's client onto the check out", async () => {
+    const client = (
+      await t.pool.query(
+        `INSERT INTO clients (name, identifier, classification)
+         VALUES ('Test Student Two', 'T0000002', 'Junior') RETURNING id`,
+      )
+    ).rows[0].id;
+    const { request } = await approvedRequest();
+    await t.pool.query(`UPDATE requests SET client_id = $1 WHERE id = $2`, [client, request]);
+    expect(await fulfilledClassification(request)).toBe("Junior");
+  });
+
+  it("leaves it empty when the request has no client or the value is not on the list", async () => {
+    const { request } = await approvedRequest();
+    expect(await fulfilledClassification(request)).toBeNull();
+
+    const client = (
+      await t.pool.query(
+        `INSERT INTO clients (name, identifier, classification)
+         VALUES ('Test Student Three', 'T0000003', 'Test value not listed') RETURNING id`,
+      )
+    ).rows[0].id;
+    const other = await approvedRequest();
+    await t.pool.query(`UPDATE requests SET client_id = $1 WHERE id = $2`, [client, other.request]);
+    expect(await fulfilledClassification(other.request)).toBeNull();
+  });
+});

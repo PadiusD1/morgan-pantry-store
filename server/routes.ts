@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { clients as clientsTable, inventoryItems, stockAdjustments } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import { classificationProblem, createClientWork, transactionClassification } from "./client-create";
+import { CLASSIFICATIONS } from "@shared/checkout-identity";
 import { lookupBarcode } from "./barcode-lookup";
 import { checkClientDuplicate } from "./client-duplicates";
 import { findOrCreateDonor } from "./donor-find-or-create";
@@ -1357,10 +1358,13 @@ export async function registerRoutes(app: Express): Promise<void> {
         return res.status(409).json({ message: "This request was already changed" });
       }
 
+      // The student's classification is copied onto the check out, only a listed value.
       const txResult = await client.query(
-        `INSERT INTO transactions (type, timestamp, client_id, client_name)
-         VALUES ('OUT', now(), $1, $2) RETURNING id`,
-        [request.clientId || null, request.clientName],
+        `INSERT INTO transactions (type, timestamp, client_id, client_name, client_classification)
+         VALUES ('OUT', now(), $1, $2,
+           (SELECT classification FROM clients WHERE id = $1 AND classification = ANY($3::text[])))
+         RETURNING id`,
+        [request.clientId || null, request.clientName, CLASSIFICATIONS],
       );
       txId = txResult.rows[0].id;
 
