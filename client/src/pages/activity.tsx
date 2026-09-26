@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { sourceNameOf } from "@shared/donation-source";
 
 export default function ActivityPage() {
   const { transactions } = useRepository();
@@ -121,6 +122,7 @@ export default function ActivityPage() {
                     </TableCell>
                     <TableCell className="text-sm" data-testid={`text-activity-summary-${tx.id}`}>
                       {tx.type === "OUT" && tx.clientName && <span className="font-medium mr-1">{tx.clientName}</span>}
+                      {sourceNameOf(tx) && <span className="font-medium mr-1">{sourceNameOf(tx)}</span>}
                       {first?.name}
                       {extra > 0 && <span className="text-muted-foreground"> + {extra} more</span>}
                     </TableCell>

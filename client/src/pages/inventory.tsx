@@ -3,6 +3,7 @@ import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategor
 import { currentLocation } from "@/lib/location";
 import { saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
+import { pickFields, postDonor, useDonationSources, type DonorPick, type SourceFields } from "@/lib/donation-source";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import { CheckCircle2Icon, FileSpreadsheetIcon, PencilIcon, PlusIcon, SearchIcon
 import Papa from "papaparse";
 
 export default function InventoryPage() {
-  const { inventory, addOrUpdateItem, adjustItemQuantity, recordInbound, upsertBarcodeCache, barcodeCache, sources, donors, addSource, addDonor } = useRepository();
+  const { inventory, addOrUpdateItem, adjustItemQuantity, recordInbound, upsertBarcodeCache, barcodeCache, sources, addSource } = useRepository();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | "all">("all");
@@ -46,17 +47,29 @@ export default function InventoryPage() {
 
   // One save at a time, and the first check in carries an Idempotency-Key.
   const saveGuard = useSaveGuard();
-  async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number }) {
+  async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }) {
     await saveGuard.run((key) => saveItem(key, form));
   }
 
-  async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number }): Promise<boolean> {
+  async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }): Promise<boolean> {
     const item = addOrUpdateItem(form, { idempotencyKey: `${key}.item` });
     
     // If it's a new item (implied if we pass initialQuantity > 0)
     if (form.initialQuantity && form.initialQuantity > 0) {
       if (form.source) addSource(form.source);
-      if (form.donor && form.source === "Donation") addDonor(form.donor);
+      // A donor pick sends donor_id, a partner pick client_id, a new name is found or created first.
+      let picked: SourceFields = {};
+      try {
+        picked = await pickFields(form.donorPick, key, postDonor);
+      } catch (err) {
+        toast({
+          title: "Stock not recorded",
+          description: saveErrorMessage(err, `${item.name} was saved but the new donor was not. Record the stock on Check in.`),
+          variant: "destructive",
+        });
+        setEditingItem(null);
+        return true;
+      }
 
       const location = currentLocation();
       try {
@@ -64,7 +77,9 @@ export default function InventoryPage() {
           itemId: item.id,
           quantity: form.initialQuantity!,
           source: form.source,
-          donor: form.donor,
+          donor: picked.donor,
+          donorId: picked.donorId,
+          donorClientId: picked.donorClientId,
           location
         }));
       } catch (err) {
@@ -169,7 +184,6 @@ export default function InventoryPage() {
                   upsertBarcodeCache={upsertBarcodeCache}
                   barcodeCache={barcodeCache}
                   sources={sources}
-                  donors={donors}
                 />
               )}
             </Dialog>
@@ -297,18 +311,17 @@ function InventoryEditDialog({
   onSave,
   upsertBarcodeCache,
   barcodeCache,
-  sources,
-  donors
+  sources
 }: {
   item: InventoryItem;
   onCancel: () => void;
-  onSave: (item: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string }) => void;
+  onSave: (item: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; donorPick?: DonorPick }) => void;
   upsertBarcodeCache: any;
   barcodeCache: any;
   sources: string[];
-  donors: string[];
 }) {
   const isNew = !item.id;
+  const { data: donorOptions = [] } = useDonationSources();
   const [form, setForm] = useState({
     id: item.id || undefined,
     name: item.name || "",
@@ -411,6 +424,9 @@ function InventoryEditDialog({
       barcode: form.barcode?.trim() || undefined,
       source: form.source.trim() || undefined,
       donor: form.donor.trim() || undefined,
+      donorPick: form.source === "Donation"
+        ? (isNewDonor ? { newName: form.donor } : { option: donorOptions.find((o) => o.key === form.donor) })
+        : undefined,
     });
   }
 
@@ -614,7 +630,12 @@ function InventoryEditDialog({
                                     <SelectValue placeholder="Select Donor" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    {donors.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                                    {donorOptions.map(d => (
+                                      <SelectItem key={d.key} value={d.key}>
+                                        {d.organization ? `${d.name} (${d.organization})` : d.name}
+                                        {d.kind === "partner" ? " · Partner org" : ""}
+                                      </SelectItem>
+                                    ))}
                                     <SelectItem value="new_donor_custom">+ Add New Donor</SelectItem>
                                 </SelectContent>
                             </Select>

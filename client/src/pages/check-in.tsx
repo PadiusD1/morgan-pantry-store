@@ -6,6 +6,7 @@ import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
+import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,22 +14,6 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Import, SearchIcon, XIcon, Loader2, CheckCircle2, AlertCircle, Package, Scale, DollarSign, ShieldCheck } from "lucide-react";
-
-type DonorOption = {
-  id: string;
-  name: string;
-  organization?: string | null;
-  status?: string;
-  fromPartner?: boolean;
-};
-
-type ApiClientLite = {
-  id: string;
-  name: string;
-  organization?: string | null;
-  clientType?: string | null;
-  partnershipType?: string | null;
-};
 
 type ScanState =
   | { phase: "idle" }
@@ -39,61 +24,20 @@ type ScanState =
   | { phase: "error"; message: string };
 
 export default function CheckInPage() {
-  const { inventory, addOrUpdateItem, recordInbound, upsertBarcodeCache, sources, donors: localDonors, addSource, addDonor, categories, addCategory } = useRepository();
+  const { inventory, addOrUpdateItem, recordInbound, upsertBarcodeCache, sources, addSource, categories, addCategory } = useRepository();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  // ─── Donor list: pull authoritative list from /api/donors so every donor shows up,
-  // not just the three hard-coded localStorage seeds.
-  const { data: apiDonors = [] } = useQuery<DonorOption[]>({
-    queryKey: ["/api/donors"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/donors");
-      return res.json();
-    },
-  });
-
-  // Partner organizations can also donate to the pantry — surface them in the same
-  // selector so staff don't have to add a parallel "donor" record for each partner.
-  const { data: apiPartners = [] } = useQuery<ApiClientLite[]>({
-    queryKey: ["/api/clients", "type=partner"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/clients?type=partner");
-      return res.json();
-    },
-  });
-
-  // Merge: API donors first, then partner orgs (de-duped by name), then any
-  // localStorage-only legacy names as a fallback.
-  const donorOptions = useMemo<DonorOption[]>(() => {
-    const seen = new Map<string, DonorOption>();
-    for (const d of apiDonors) {
-      if (!d?.name) continue;
-      seen.set(d.name, d);
-    }
-    for (const p of apiPartners) {
-      if (!p?.name || seen.has(p.name)) continue;
-      seen.set(p.name, {
-        id: `partner:${p.id}`,
-        name: p.name,
-        organization: p.organization ?? null,
-        fromPartner: true,
-      });
-    }
-    for (const name of localDonors || []) {
-      if (name && !seen.has(name)) {
-        seen.set(name, { id: `local:${name}`, name });
-      }
-    }
-    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [apiDonors, apiPartners, localDonors]);
+  // Who donated it, donors and partner organisations in one list from the server.
+  const { data: donorOptions = [] } = useDonationSources();
+  const partnerCount = donorOptions.filter((o) => o.kind === "partner").length;
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedId, setSelectedId] = useState<string | "">("");
   const [quantity, setQuantity] = useState<number>(0);
   const [source, setSource] = useState("");
   const [donor, setDonor] = useState("");
-  const [donorPartnerId, setDonorPartnerId] = useState<string | undefined>();
+  const [donorKey, setDonorKey] = useState("");
   const [isNewSource, setIsNewSource] = useState(false);
   const [isNewDonor, setIsNewDonor] = useState(false);
   const [isNewCategory, setIsNewCategory] = useState(false);
@@ -118,12 +62,12 @@ export default function CheckInPage() {
 
   const sourceOptions = useMemo(() => {
     const next = [...(sources || [])];
-    if (apiPartners.length > 0 && !next.includes("Partner Donation")) {
+    if (partnerCount > 0 && !next.includes("Partner Donation")) {
       const donationIndex = next.indexOf("Donation");
       next.splice(donationIndex >= 0 ? donationIndex + 1 : next.length, 0, "Partner Donation");
     }
     return next;
-  }, [apiPartners.length, sources]);
+  }, [partnerCount, sources]);
 
   const isDonationSource = source === "Donation" || source === "Partner Donation";
 
@@ -275,17 +219,28 @@ export default function CheckInPage() {
     if (isNewSource && source.trim()) {
         addSource(source.trim());
     }
-    if (isNewDonor && donor.trim() && isDonationSource) {
-        const donorName = donor.trim();
-        addDonor(donorName);
-        // Persist to /api/donors so it shows up on future check-ins and in the Donors page.
-        // Best effort: a duplicate-name failure is fine — the donor still gets used on this transaction.
-        try {
-          await apiRequest("POST", "/api/donors", { name: donorName, status: "active" });
-          queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
-        } catch {
-          // Server may return 400 for missing name or 500 for duplicate — ignore.
-        }
+    // A donor pick sends donor_id and the name, a partner pick sends client_id.
+    // A new donor is found or created on the server first, with its own key.
+    let picked: SourceFields = {};
+    if (isDonationSource) {
+      try {
+        picked = await pickFields(
+          isNewDonor ? { newName: donor } : { option: donorOptions.find((o) => o.key === donorKey) },
+          key,
+          postDonor,
+        );
+      } catch (err) {
+        toast({
+          title: "Donor not saved",
+          description: saveErrorMessage(err, "The new donor could not be saved. Please try again."),
+          variant: "destructive",
+        });
+        return false;
+      }
+      if (isNewDonor && picked.donorId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/donation-sources"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
+      }
     }
 
     const location = currentLocation();
@@ -295,8 +250,9 @@ export default function CheckInPage() {
         itemId,
         quantity,
         source: source.trim() || undefined,
-        donor: (isDonationSource ? (donor.trim() || undefined) : undefined),
-        donorClientId: isDonationSource ? donorPartnerId : undefined,
+        donor: picked.donor,
+        donorId: picked.donorId,
+        donorClientId: picked.donorClientId,
         location,
       }));
     } catch (err) {
@@ -639,7 +595,7 @@ export default function CheckInPage() {
                         setSource(val);
                         if (val !== "Donation" && val !== "Partner Donation") {
                           setDonor("");
-                          setDonorPartnerId(undefined);
+                          setDonorKey("");
                           setIsNewDonor(false);
                         }
                     }
@@ -680,15 +636,13 @@ export default function CheckInPage() {
                   </div>
                   <div className="flex gap-2">
                     {!isNewDonor ? (
-                        <Select value={donor} onValueChange={(val) => {
+                        <Select value={donorKey} onValueChange={(val) => {
                             if (val === "new_donor_custom") {
                                 setIsNewDonor(true);
                                 setDonor("");
-                                setDonorPartnerId(undefined);
+                                setDonorKey("");
                             } else {
-                                const selected = donorOptions.find((d) => d.name === val);
-                                setDonor(val);
-                                setDonorPartnerId(selected?.fromPartner ? selected.id.replace(/^partner:/, "") : undefined);
+                                setDonorKey(val);
                             }
                         }}>
                             <SelectTrigger id="donor">
@@ -696,11 +650,11 @@ export default function CheckInPage() {
                             </SelectTrigger>
                             <SelectContent>
                                 {donorOptions.map((d) => {
-                                  const label = d.organization ? `${d.name} — ${d.organization}` : d.name;
+                                  const label = d.organization ? `${d.name} (${d.organization})` : d.name;
                                   return (
-                                    <SelectItem key={d.id} value={d.name}>
+                                    <SelectItem key={d.key} value={d.key}>
                                       {label}
-                                      {d.fromPartner ? " · Partner org" : ""}
+                                      {d.kind === "partner" ? " · Partner org" : ""}
                                     </SelectItem>
                                   );
                                 })}
@@ -713,7 +667,6 @@ export default function CheckInPage() {
                                 value={donor}
                                 onChange={(e) => {
                                   setDonor(e.target.value);
-                                  setDonorPartnerId(undefined);
                                 }}
                                 placeholder="Enter new donor"
                                 autoFocus

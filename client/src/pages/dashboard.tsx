@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowDownRightIcon, ArrowUpRightIcon, ClockIcon, InboxIcon, PackageIcon, UsersIcon, WeightIcon, BarChart3Icon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 import { DONUT_OTHER, donutSlices } from "@/lib/donut";
+import { sourceNameOf } from "@shared/donation-source";
 
 export default function DashboardPage() {
   const { inventory, transactions, clients } = useRepository();
@@ -190,6 +191,7 @@ export default function DashboardPage() {
                           {tx.type === "OUT" && tx.clientName && (
                             <span className="font-medium mr-1">{tx.clientName}</span>
                           )}
+                          {sourceNameOf(tx) && <span className="font-medium mr-1">{sourceNameOf(tx)}</span>}
                           {firstItem?.name}
                           {extraCount > 0 && <span className="text-muted-foreground"> + {extraCount} more</span>}
                         </div>
