@@ -160,3 +160,13 @@ export async function runItemSave<P>(steps: ItemSaveSteps<P>): Promise<ItemSaveR
   }
   return { ok: true, itemId };
 }
+
+/** Saves one import row, and resolves only after the server confirmed it. */
+export async function importRow<T>(
+  counts: { created: number },
+  save: () => Promise<T>,
+): Promise<T> {
+  const saved = await save();
+  counts.created++;
+  return saved;
+}

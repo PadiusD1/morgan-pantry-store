@@ -4,6 +4,7 @@ import {
   componentKeys,
   runItemAction,
   runItemSave,
+  importRow,
   trackCreate,
   type RequestFn,
 } from "@/lib/item-action";
@@ -183,5 +184,25 @@ describe("runItemSave", () => {
     const s = steps("donor");
     expect(await runItemSave(s.steps)).toMatchObject({ ok: false, stage: "donor" });
     expect(s.done).toEqual(["item", "donor"]);
+  });
+});
+
+describe("importRow", () => {
+  it("counts a row created only after its save is confirmed", async () => {
+    const counts = { created: 0 };
+    const save = deferred<string>();
+    const run = importRow(counts, () => save.promise);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(counts.created).toBe(0);
+    save.resolve("item-real");
+    await run;
+    expect(counts.created).toBe(1);
+  });
+
+  it("does not count a row whose save failed", async () => {
+    const counts = { created: 0 };
+    const { request } = fakeRequest({ "POST /api/inventory": [() => new Response("boom", { status: 500 })] });
+    await expect(importRow(counts, () => request("POST", "/api/inventory", {}, { idempotencyKey: "imp.0" }))).rejects.toThrow(/^500/);
+    expect(counts.created).toBe(0);
   });
 });

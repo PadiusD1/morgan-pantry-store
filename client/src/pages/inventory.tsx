@@ -3,7 +3,7 @@ import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategor
 import { currentLocation } from "@/lib/location";
 import { saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
-import { itemActionFailureText, runItemSave } from "@/lib/item-action";
+import { importRow, itemActionFailureText, runItemSave } from "@/lib/item-action";
 import { pickFields, postDonor, useDonationSources, type DonorPick, type SourceFields } from "@/lib/donation-source";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -193,6 +193,7 @@ export default function InventoryPage() {
             <CsvImportDialog
               onClose={() => setShowImport(false)}
               addOrUpdateItem={addOrUpdateItem}
+              itemSaved={itemSaved}
             />
           )}
         </CardContent>
@@ -780,9 +781,11 @@ type ImportResult = {
 function CsvImportDialog({
   onClose,
   addOrUpdateItem,
+  itemSaved,
 }: {
   onClose: () => void;
-  addOrUpdateItem: (partial: Partial<InventoryItem> & { name: string }, options?: { addQuantity?: boolean }) => InventoryItem;
+  addOrUpdateItem: (partial: Partial<InventoryItem> & { name: string }, options?: { addQuantity?: boolean; idempotencyKey?: string }) => InventoryItem;
+  itemSaved: (id: string) => Promise<string>;
 }) {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -843,6 +846,7 @@ function CsvImportDialog({
 
     setStep("importing");
     const importResult: ImportResult = { created: 0, enriched: 0, failed: 0, errors: [] };
+    const importKey = globalThis.crypto.randomUUID();
 
     // Build reverse mapping: field -> column index
     const fieldToCol: Partial<Record<MappableField, number>> = {};
@@ -884,8 +888,9 @@ function CsvImportDialog({
           weightPerUnitLbs: weightVal,
         };
 
-        addOrUpdateItem(item, { addQuantity: true });
-        importResult.created++;
+        // Each row is awaited and counted created only once the server confirmed it.
+        const saved = addOrUpdateItem(item, { addQuantity: true, idempotencyKey: `${importKey}.${i}` });
+        await importRow(importResult, () => itemSaved(saved.id));
 
         // Attempt barcode enrichment if barcode is present
         if (barcodeVal) {
