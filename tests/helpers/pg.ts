@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 
-export const PG_PORT = 55417;
+export const PG_PORT = Number(process.env.FRC_TEST_PG_PORT || 55417);
 export const PG_USER = "frc";
 // Where PostgreSQL 17 and the test cluster live. FRC_PG_BIN and FRC_PG_LIB
 // name a PostgreSQL 17 install, FRC_TEST_PG_ROOT a folder holding an initdb
