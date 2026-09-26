@@ -12,6 +12,8 @@
  */
 
 import { eq, and, gte, lte, desc, asc, sql, count, type SQL } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { DonorStore } from "./donor-find-or-create";
 import {
   users,
   inventoryItems,
@@ -754,16 +756,11 @@ export class PgStorage implements IStorage {
 
   // key is normaliseName from shared/identity.ts, lowercase with collapsed spaces
   async findDonorsByNormalisedName(key: string): Promise<Donor[]> {
-    return db
-      .select()
-      .from(donors)
-      .where(sql`lower(btrim(regexp_replace(${donors.name}, '\\s+', ' ', 'g'))) = ${key}`)
-      .orderBy(asc(donors.createdAt));
+    return donorStoreOn(db).findDonorsByNormalisedName(key);
   }
 
   async createDonor(data: InsertDonor): Promise<Donor> {
-    const [row] = await db.insert(donors).values(data).returning();
-    return row;
+    return donorStoreOn(db).createDonor(data);
   }
 
   async updateDonor(
@@ -786,4 +783,24 @@ export class PgStorage implements IStorage {
       .returning({ id: donors.id });
     return deleted.length > 0;
   }
+}
+
+/**
+ * The donor reads and writes of find or create on one connection. An
+ * idempotent route passes drizzle over its transaction client, so the donor
+ * write rolls back with the rest of the transaction.
+ */
+export function donorStoreOn(exec: NodePgDatabase<any>): DonorStore {
+  return {
+    findDonorsByNormalisedName: (key) =>
+      exec
+        .select()
+        .from(donors)
+        .where(sql`lower(btrim(regexp_replace(${donors.name}, '\\s+', ' ', 'g'))) = ${key}`)
+        .orderBy(asc(donors.createdAt)),
+    createDonor: async (data) => {
+      const [row] = await exec.insert(donors).values(data).returning();
+      return row;
+    },
+  };
 }

@@ -10,8 +10,9 @@ import { eq, sql } from "drizzle-orm";
 import { classificationProblem, createClientWork, transactionClassification } from "./client-create";
 import { CLASSIFICATIONS } from "@shared/checkout-identity";
 import { lookupBarcode } from "./barcode-lookup";
-import { checkClientDuplicate } from "./client-duplicates";
+import { candidateLookupOn, checkClientDuplicate } from "./client-duplicates";
 import { findOrCreateDonor } from "./donor-find-or-create";
+import { donorStoreOn } from "./pg-storage";
 import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
@@ -475,7 +476,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     // Check out sends an Idempotency-Key, so a retry returns the first answer.
     await runIdempotent(req, res, (client) =>
       createClientWork(result.data, {
-        checkDuplicate: (data) => checkClientDuplicate(data),
+        checkDuplicate: (data) => checkClientDuplicate(data, null, candidateLookupOn(client)),
         duplicateMessage,
         insert: async (data) => (await drizzle(client).insert(clientsTable).values(data).returning())[0],
         isUniqueViolation: (err) => pgErrorCode(err) === PG_UNIQUE_VIOLATION,
@@ -1843,8 +1844,8 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.data.name?.trim()) {
       return res.status(400).json({ message: "Donor name is required" });
     }
-    await runIdempotent(req, res, async () => {
-      const { donor, created } = await findOrCreateDonor(storage, result.data);
+    await runIdempotent(req, res, async (client) => {
+      const { donor, created } = await findOrCreateDonor(donorStoreOn(drizzle(client)), result.data);
       return { status: created ? 201 : 200, body: donor };
     });
   });
