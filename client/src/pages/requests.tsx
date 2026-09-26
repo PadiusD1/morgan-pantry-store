@@ -78,7 +78,7 @@ export default function RequestsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({ title: "Success", description: `Request ${action} completed.` });
     } catch (e: any) {
-      toast({ title: "Error", description: e.message });
+      toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setActionLoading(false);
       setApproveTarget(null);

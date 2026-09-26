@@ -116,7 +116,7 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
       setRequestId(data.id);
       setStep("success");
     } catch (e: any) {
-      toast({ title: "Error", description: e.message });
+      toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
