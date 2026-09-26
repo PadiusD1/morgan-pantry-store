@@ -12,6 +12,8 @@ import {
   boolean,
   jsonb,
   real,
+  primaryKey,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -156,6 +158,7 @@ export const clients = pgTable("clients", {
     .notNull()
     .default(sql`'{}'::text[]`),
   notes: text("notes"),
+  classification: text("classification"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
@@ -280,6 +283,7 @@ export const transactions = pgTable("transactions", {
   latitude: doublePrecision("latitude"),
   longitude: doublePrecision("longitude"),
   accuracy: doublePrecision("accuracy"),
+  clientClassification: text("client_classification"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -628,3 +632,42 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
     references: [requests.id],
   }),
 }));
+
+// ─── Release one (migrations/0001_release_one.sql) ──────────────────────────
+
+export const idempotencyKeys = pgTable(
+  "idempotency_keys",
+  {
+    userId: uuid("user_id").notNull(),
+    key: text("key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    responseStatus: integer("response_status"),
+    responseBody: jsonb("response_body"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: "idempotency_keys_pkey", columns: [t.userId, t.key] }),
+    index("idx_idempotency_keys_created_at").on(t.createdAt),
+  ],
+);
+
+export type IdempotencyKey = typeof idempotencyKeys.$inferSelect;
+
+export const stockAdjustments = pgTable(
+  "stock_adjustments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    inventoryItemId: uuid("inventory_item_id")
+      .notNull()
+      .references(() => inventoryItems.id),
+    delta: integer("delta").notNull(),
+    quantityBefore: integer("quantity_before").notNull(),
+    quantityAfter: integer("quantity_after").notNull(),
+    reason: text("reason"),
+    userId: uuid("user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_stock_adjustments_inventory_item_id").on(t.inventoryItemId)],
+);
+
+export type StockAdjustment = typeof stockAdjustments.$inferSelect;
