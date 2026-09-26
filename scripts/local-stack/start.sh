@@ -20,7 +20,6 @@ VOLUNTEER_EMAIL=volunteer@local-stack.invalid
 FIXTURE="$REPO/scripts/local-stack/barcode-fixture.json"
 MIGRATION_0001="$REPO/migrations/0001_release_one.sql"
 INDEXES="$REPO/tests/fixtures/prod-only-indexes.json"
-PROD_OBJECTS=/srv/office/projects/frc-portal/schema/prod-objects.json
 
 refuse() { echo "local stack refused because $*" >&2; exit 2; }
 
@@ -46,14 +45,17 @@ if ! pgc pg_ctl -D "$PGDATA" status > /dev/null 2>&1; then
 fi
 
 # Migration 0001 and the production only index list come from the working
-# tree when present, otherwise from the server branch or the office schema file.
+# tree when present, otherwise from the frc-r1-server branch.
 if [[ ! -f "$MIGRATION_0001" ]]; then
   MIGRATION_0001="$STACK_ROOT/0001_release_one.sql"
   git --no-optional-locks -C "$REPO" show frc-r1-server:migrations/0001_release_one.sql > "$MIGRATION_0001" \
     || refuse "migration 0001 is neither in the tree nor on frc-r1-server"
 fi
-[[ -f "$INDEXES" ]] || INDEXES="$PROD_OBJECTS"
-[[ -f "$INDEXES" ]] || refuse "no production index list was found"
+if [[ ! -f "$INDEXES" ]]; then
+  INDEXES="$STACK_ROOT/prod-only-indexes.json"
+  git --no-optional-locks -C "$REPO" show frc-r1-server:tests/fixtures/prod-only-indexes.json > "$INDEXES" \
+    || refuse "the production index list is neither in the tree nor on frc-r1-server"
+fi
 
 ADMIN_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 VOLUNTEER_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
