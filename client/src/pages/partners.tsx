@@ -3,6 +3,8 @@ import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
 import { apiRequest } from "@/lib/queryClient";
+import { toApiClientBody } from "@/lib/api-types";
+import { useSaveGuard } from "@/lib/save-guard";
 import type { ClientRecord } from "@/lib/repository";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -60,7 +62,7 @@ const PARTNERSHIP_TYPES = [
 ];
 
 export default function PartnersPage() {
-  const { clients, upsertClient, transactions } = useRepository();
+  const { clients, transactions } = useRepository();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
@@ -138,13 +140,19 @@ export default function PartnersPage() {
     );
   }
 
+  // One save at a time, and saved is shown only after the server accepts it.
+  const saveGuard = useSaveGuard();
   function handleSave() {
+    void saveGuard.run(savePartner);
+  }
+
+  async function savePartner(): Promise<boolean | void> {
     if (!editing) return;
     if (!editing.name.trim() || !editing.identifier.trim()) {
       toast({ title: "Missing required fields", description: "Partner name and identifier are required." });
       return;
     }
-    const saved = upsertClient({
+    const partner = {
       id: editing.id,
       name: editing.name.trim(),
       identifier: editing.identifier.trim(),
@@ -156,12 +164,44 @@ export default function PartnersPage() {
       partnershipType: editing.partnershipType || undefined,
       status: editing.status,
       notes: editing.notes?.trim() || undefined,
-      clientType: "partner",
+      clientType: "partner" as const,
       householdSize: 1,
-      allergies: [],
-    });
-    toast({ title: "Partner saved", description: saved.name });
+      allergies: [] as string[],
+    };
+    // Same match as upsertClient, by id or by identifier among partners.
+    const normalize = (s: string | undefined | null) => (s ?? "").trim().toLowerCase();
+    const existing = partner.id
+      ? clients.find((c) => c.id === partner.id)
+      : clients.find(
+          (c) =>
+            normalize(c.identifier) === normalize(partner.identifier) &&
+            (c.clientType ?? "student") === "partner",
+        );
+    try {
+      if (existing) {
+        // Keep existing values for any field left blank, as upsertClient does.
+        const merged: Partial<ClientRecord> = {};
+        for (const [key, value] of Object.entries(partner)) {
+          if (value !== undefined && value !== null && value !== "") {
+            (merged as Record<string, unknown>)[key] = value;
+          }
+        }
+        await apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(merged));
+      } else {
+        await apiRequest("POST", "/api/clients", toApiClientBody(partner));
+      }
+    } catch {
+      toast({
+        title: "Partner not saved",
+        description: "The server did not save this partner. Your entries are kept, check them and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    toast({ title: "Partner saved", description: partner.name });
     setEditing(null);
+    return true;
   }
 
   async function handleDelete() {
