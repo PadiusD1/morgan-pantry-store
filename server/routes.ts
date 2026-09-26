@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import { pool } from "./pg";
 import { lookupBarcode } from "./barcode-lookup";
+import { CSV_BOM, csvRow } from "@shared/csv";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -1600,9 +1601,9 @@ export async function registerRoutes(app: Express): Promise<void> {
 
     let totalItems = 0, totalWeight = 0, totalValue = 0;
     const lines: string[] = [];
-    lines.push(`Donor Report: ${donor.name}`);
-    if (donor.organization) lines.push(`Organization: ${donor.organization}`);
-    lines.push(`Generated: ${new Date().toLocaleString()}`);
+    lines.push(csvRow([`Donor Report: ${donor.name}`]));
+    if (donor.organization) lines.push(csvRow([`Organization: ${donor.organization}`]));
+    lines.push(csvRow([`Generated: ${new Date().toLocaleString()}`]));
     lines.push("");
     lines.push("Date,Items,Total Qty,Total Weight (lbs),Total Value ($)");
     for (const tx of txRows) {
@@ -1617,7 +1618,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       }
       totalItems += qty; totalWeight += wt; totalValue += val;
       const date = new Date(tx.timestamp).toLocaleDateString();
-      lines.push(`${date},"${names.join(", ")}",${qty},${Math.round(wt*100)/100},${Math.round(val*100)/100}`);
+      lines.push(csvRow([date, names.join(", "), qty, Math.round(wt*100)/100, Math.round(val*100)/100]));
     }
     lines.push("");
     lines.push("Summary");
@@ -1631,8 +1632,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       lines.push(`Average Items Per Donation,${Math.round(totalItems/txRows.length*10)/10}`);
     }
 
-    const csv = lines.join("\n");
-    res.setHeader("Content-Type", "text/csv");
+    const csv = CSV_BOM + lines.join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="donor-${donor.name.replace(/[^a-z0-9]/gi, '-')}-report.csv"`);
     res.send(csv);
   });

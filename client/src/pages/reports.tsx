@@ -10,6 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
+import { canUseServerExports, downloadBlob, downloadCsvText, downloadServerCsv } from "@/lib/download";
+import { csvRow } from "@shared/csv";
 import { SirenIcon, CalendarDaysIcon } from "lucide-react";
 
 type EmergencyClient = {
@@ -30,6 +33,8 @@ export default function ReportsPage() {
   const repo = useRepository();
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canExportServer = canUseServerExports(user?.role);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [monthlyYear, setMonthlyYear] = useState<string>(String(new Date().getFullYear()));
@@ -122,14 +127,7 @@ export default function ReportsPage() {
       if (monthlyYear) params.set("year", monthlyYear);
       if (opts.emergencyOnly) params.set("emergency", "1");
       const url = `/api/reports/monthly-csv?${params.toString()}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      const blob = await res.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `frc-monthly-summary-${monthlyYear}${opts.emergencyOnly ? "-emergencies" : ""}.csv`;
-      link.click();
-      URL.revokeObjectURL(link.href);
+      await downloadServerCsv(url, `frc-monthly-summary-${monthlyYear}${opts.emergencyOnly ? "-emergencies" : ""}.csv`);
       toast({
         title: "Monthly summary exported",
         description: opts.emergencyOnly
@@ -145,12 +143,7 @@ export default function ReportsPage() {
   function exportJson() {
     const payload = JSON.stringify(repo, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "morgan-state-repository-export.json";
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, "morgan-state-repository-export.json");
   }
 
   function exportCsv() {
@@ -168,29 +161,23 @@ export default function ReportsPage() {
           const client = tx.clientName ?? clientRecord?.name ?? "";
           const identifier = clientRecord?.identifier ?? "";
           rows.push(
-            [
+            csvRow([
               tx.type,
               tx.timestamp,
               lat,
               long,
               acc,
-              escapeCsv(client),
-              escapeCsv(identifier),
-              escapeCsv(item.name),
-              item.quantity.toString(),
-              item.weightPerUnitLbs.toString(),
-              item.valuePerUnitUsd.toString(),
-            ].join(","),
+              client,
+              identifier,
+              item.name,
+              item.quantity,
+              item.weightPerUnitLbs,
+              item.valuePerUnitUsd,
+            ]),
           );
         }
       }
-      const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `frc-export-${new Date().toISOString().split("T")[0]}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadCsvText(rows.join("\r\n"), `frc-export-${new Date().toISOString().split("T")[0]}.csv`);
       toast({ title: "Export complete", description: `Exported ${rows.length - 1} transaction rows.` });
     } catch (err) {
       const message = err instanceof Error ? err.message : "CSV export failed";
@@ -311,6 +298,7 @@ export default function ReportsPage() {
 
       {/* Monthly summary CSV exporter — keeps the existing detailed CSV intact and adds
           a separate, month-grouped summary report with category subtotals and a year total. */}
+      {canExportServer && (
       <Card className="glass-panel" data-testid="card-report-monthly-summary">
         <CardHeader className="py-3 px-4 border-b border-border/80">
           <CardTitle className="section-heading flex items-center gap-1.5">
@@ -358,6 +346,7 @@ export default function ReportsPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card className="glass-panel" data-testid="card-report-inventory-summary">
@@ -543,11 +532,4 @@ export default function ReportsPage() {
       </Card>
     </div>
   );
-}
-
-function escapeCsv(value: string) {
-  if (value.includes(",") || value.includes("\"")) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
 }

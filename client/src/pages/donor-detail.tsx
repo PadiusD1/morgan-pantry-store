@@ -2,6 +2,9 @@ import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
+import { canUseServerExports, downloadServerCsv } from "@/lib/download";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +44,17 @@ export default function DonorDetailPage() {
   const [, params] = useRoute<{ id: string }>("/donors/:id");
   const [, navigate] = useLocation();
   const donorId = params?.id;
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  async function exportDonorCsv(name: string) {
+    try {
+      await downloadServerCsv(`/api/donors/${donorId}/export`, `donor-${name.replace(/[^a-z0-9]/gi, "-")}-report.csv`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Donor export failed";
+      toast({ title: "Export failed", description: message, variant: "destructive" });
+    }
+  }
 
   const { data: donor, isLoading: loadingDonor, isError: donorError, refetch: refetchDonor } = useQuery<Donor>({
     queryKey: ["/api/donors", donorId],
@@ -216,16 +230,18 @@ export default function DonorDetailPage() {
         <CardHeader className="py-3 px-4 border-b border-border/80">
           <CardTitle className="section-heading flex items-center justify-between">
             <span>Donation History</span>
+            {canUseServerExports(user?.role) && (
             <Button
               variant="outline"
               size="sm"
               className="h-7 px-2 text-xs"
-              onClick={() => window.open(`/api/donors/${donorId}/export`)}
+              onClick={() => exportDonorCsv(donor.name)}
               data-testid="button-export-donor"
             >
               <DownloadIcon className="h-3.5 w-3.5 mr-1" />
               Export
             </Button>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
