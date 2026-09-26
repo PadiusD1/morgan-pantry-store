@@ -850,14 +850,23 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
   return (
     <RepositoryContext.Provider value={value}>
       {children}
+      {/* Bottom centre on phones, where toasts sit at the top, and top centre
+          below the mobile bar from sm up, where toasts sit at the bottom, so it
+          never covers a toast or the Sign out button in the sidebar footer. */}
       {gate.staleError && (
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-4 left-4 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-md border bg-background px-3 py-2 text-sm shadow-md"
+          className="fixed bottom-4 left-1/2 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-md border bg-background px-3 py-2 text-sm shadow-md sm:bottom-auto sm:top-16"
+          data-testid="notice-refresh-failed"
         >
-          <span>Could not refresh data. Showing what was last loaded.</span>
-          <button type="button" className="font-medium text-primary hover:underline" onClick={retryLoad}>
+          <span>Could not refresh data</span>
+          <button
+            type="button"
+            className="font-medium text-primary hover:underline"
+            onClick={retryLoad}
+            data-testid="button-refresh-retry"
+          >
             Retry
           </button>
         </div>
