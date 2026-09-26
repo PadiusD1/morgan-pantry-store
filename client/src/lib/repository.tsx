@@ -124,7 +124,6 @@ export type RepositoryState = {
   settings: Settings;
   barcodeCache: Record<string, BarcodeCacheEntry>;
   sources: string[];
-  donors: string[];
   categories: string[];
 };
 
@@ -137,6 +136,7 @@ export type RepositoryContextValue = RepositoryState & {
     source?: string;
     donor?: string;
     donorClientId?: string;
+    donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
   }) => Promise<void>;
@@ -151,7 +151,6 @@ export type RepositoryContextValue = RepositoryState & {
   updateSettings: (partial: Partial<Settings>) => void;
   upsertBarcodeCache: (barcode: string, entry: Omit<BarcodeCacheEntry, "cachedAt">) => void;
   addSource: (source: string) => void;
-  addDonor: (donor: string) => void;
   categories: string[];
   addCategory: (category: string) => void;
 };
@@ -164,7 +163,6 @@ type LocalState = {
   settings: Settings;
   barcodeCache: Record<string, BarcodeCacheEntry>;
   sources: string[];
-  donors: string[];
   categories: string[];
 };
 
@@ -172,7 +170,6 @@ const defaultLocal: LocalState = {
   settings: { visitWarningDays: 7 },
   barcodeCache: {},
   sources: ["Donation", "Purchase", "Transfer", "Other"],
-  donors: ["Morgan State University", "Maryland Food Bank", "Local Grocery"],
   categories: [
     "Beverages",
     "Bread & Bakery",
@@ -526,10 +523,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     source?: string;
     donor?: string;
     donorClientId?: string;
+    donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
   }): Promise<void> {
-    const { itemId, quantity, source, donor, donorClientId, location } = options;
+    const { itemId, quantity, source, donor, donorClientId, donorId, location } = options;
     const timestamp = options.timestamp ?? new Date().toISOString();
 
     if (!quantity || quantity <= 0) return;
@@ -602,6 +600,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         donor: donor ?? null,
         clientId: donorClientId ?? null,
         clientName: donorClientId ? donor ?? null : null,
+        donorId: donorId ?? null,
         latitude: location?.latitude ?? null,
         longitude: location?.longitude ?? null,
         accuracy: location?.accuracy ?? null,
@@ -782,13 +781,6 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     });
   }
 
-  function addDonor(donor: string) {
-    setLocal((prev) => {
-      if (prev.donors?.includes(donor)) return prev;
-      return { ...prev, donors: [...(prev.donors || []), donor] };
-    });
-  }
-
   function addCategory(category: string) {
     setLocal((prev) => {
       if (prev.categories?.includes(category)) return prev;
@@ -833,7 +825,6 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     settings: local.settings,
     barcodeCache: local.barcodeCache,
     sources: local.sources,
-    donors: local.donors,
     categories: local.categories,
     addOrUpdateItem,
     adjustItemQuantity,
@@ -843,7 +834,6 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     updateSettings,
     upsertBarcodeCache,
     addSource,
-    addDonor,
     addCategory,
   };
 
