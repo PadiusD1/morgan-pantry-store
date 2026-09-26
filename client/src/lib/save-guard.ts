@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { forgetSentBody } from "./queryClient";
 
 function randomKey(): string {
   return globalThis.crypto.randomUUID();
@@ -24,7 +25,10 @@ export function createSaveGuard(newKey: () => string = randomKey) {
 
   function end(succeeded: boolean) {
     locked = false;
-    if (succeeded) key = null;
+    if (succeeded) {
+      if (key) forgetSentBody(key);
+      key = null;
+    }
   }
 
   /** Runs the action unless one is running. The action returns true on success. */
