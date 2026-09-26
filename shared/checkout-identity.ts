@@ -131,6 +131,64 @@ export function inputsFromClient(client: LookupClient): { studentId: string; ema
   };
 }
 
+export const ID_EMAIL_CONFLICT_MESSAGE = "The student ID and email belong to different people on file";
+export const ALREADY_ON_FILE_MESSAGE = "This student is already on file with a different student ID";
+export const ID_TAKEN_MESSAGE = "That student ID belongs to a different person on file";
+export const ID_CHANGE_MESSAGE = "This person already has a different student ID on file";
+
+export type CheckoutIdentity<T extends LookupClient> =
+  | { ok: true; existing: T | undefined; name: string }
+  | { ok: false; message: string };
+
+function storedStudentId(client: LookupClient): string {
+  return normaliseName(inputsFromClient(client).studentId);
+}
+
+/**
+ * Decides who a check out is for, finding 1. Two same fields mean the same
+ * person, one shared field is allowed. A typed ID wins and its email must not
+ * belong to someone else. An unmatched ID never takes over an email match
+ * that already holds a student ID. A picked person keeps their own ID.
+ */
+export function resolveCheckoutIdentity<T extends LookupClient>(
+  clients: readonly T[],
+  inputs: { studentId?: string | null; email?: string | null; name?: string | null; selected?: T | null },
+): CheckoutIdentity<T> {
+  const students = clients.filter((c) => !c.clientType || c.clientType === "student");
+  const studentId = normaliseName(inputs.studentId);
+  const email = normaliseEmail(inputs.email);
+  const name = (inputs.name ?? "").trim();
+  const byId = studentId ? students.find((c) => normaliseName(c.identifier) === studentId) : undefined;
+  const byEmail = email
+    ? [
+        ...students.filter((c) => normaliseEmail(c.email) === email),
+        ...students.filter((c) => normaliseEmail(c.email) !== email && normaliseEmail(c.identifier) === email),
+      ]
+    : [];
+  const selected = inputs.selected ?? undefined;
+  if (selected) {
+    if (byId && byId.id !== selected.id) return { ok: false, message: ID_TAKEN_MESSAGE };
+    const stored = storedStudentId(selected);
+    if (studentId && stored && stored !== studentId) return { ok: false, message: ID_CHANGE_MESSAGE };
+    return { ok: true, existing: selected, name };
+  }
+  if (byId) {
+    if (byEmail.length > 0 && !byEmail.some((c) => c.id === byId.id)) {
+      return { ok: false, message: ID_EMAIL_CONFLICT_MESSAGE };
+    }
+    return { ok: true, existing: byId, name: (byId.name ?? "").trim() || name };
+  }
+  if (studentId) {
+    const sameName = byEmail.find((c) => normaliseName(c.name) === normaliseName(name));
+    if (!sameName) return { ok: true, existing: undefined, name };
+    if (storedStudentId(sameName)) return { ok: false, message: ALREADY_ON_FILE_MESSAGE };
+    return { ok: true, existing: sameName, name: (sameName.name ?? "").trim() || name };
+  }
+  const q = byEmail[0];
+  if (q) return { ok: true, existing: q, name: (q.name ?? "").trim() || name };
+  return { ok: true, existing: undefined, name };
+}
+
 export type CheckoutClientPayload = {
   id?: string;
   name: string;
@@ -141,8 +199,10 @@ export type CheckoutClientPayload = {
 };
 
 /**
- * The client part of a check out. A typed student ID wins, a returning
- * record keeps its identifier, a new record with no ID gets a generated one.
+ * The client part of a check out. A returning record keeps a stored student
+ * ID, a typed student ID fills a record with none or starts a new one, and a
+ * new record with no ID gets a generated one. Pass `existing` from
+ * resolveCheckoutIdentity.
  * Pass the save key as `random` so a retry of the same save regenerates the
  * same identifier and the retried create matches the first one.
  */
@@ -161,7 +221,10 @@ export function buildCheckoutClient(input: {
   const classification = (input.classification ?? "").trim() || (input.existing?.classification ?? "").trim();
   const contact = (input.contact ?? "").trim();
   const existingIdentifier = (input.existing?.identifier ?? "").trim();
+  // A stored student ID is never replaced, so a row never carries another person's ID.
+  const existingStudentId = input.existing ? inputsFromClient(input.existing).studentId : "";
   const identifier =
+    existingStudentId ||
     studentId ||
     existingIdentifier ||
     generateIdentifier(input.takenIdentifiers ?? [], input.random);

@@ -20,7 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
 import { duplicateRefusal } from "@shared/identity";
-import { CLASSIFICATIONS, buildCheckoutClient, findReturningClient, inputsFromClient, validateIdentityInputs } from "@shared/checkout-identity";
+import { CLASSIFICATIONS, buildCheckoutClient, inputsFromClient, resolveCheckoutIdentity, validateIdentityInputs } from "@shared/checkout-identity";
 import { useReceiptCountdown } from "@/hooks/use-receipt-countdown";
 import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon, SirenIcon, ChevronsUpDownIcon, CheckIcon, Handshake } from "lucide-react";
 
@@ -366,12 +366,22 @@ export default function CheckOutPage() {
       toast({ title: "Check the student details", description: identityError });
       return;
     }
-    // A returning student is found by ID or email, so no second record is made.
+    // A returning student is found by ID or email, so no second record is made,
+    // and a conflicting ID and email is refused with the form and cart kept.
     const selectedClient = clientId && clientId !== "new" ? clients.find((c) => c.id === clientId) : undefined;
-    const returningClient = selectedClient ? undefined : findReturningClient(clients, { studentId: clientIdentifier, email: clientEmail });
+    const identity = resolveCheckoutIdentity(clients, {
+      studentId: clientIdentifier,
+      email: clientEmail,
+      name: clientNameFinal,
+      selected: selectedClient,
+    });
+    if (!identity.ok) {
+      toast({ title: "Check the student details", description: identity.message, variant: "destructive" });
+      return;
+    }
     const clientPayload = buildCheckoutClient({
-      existing: selectedClient ?? returningClient,
-      name: returningClient ? returningClient.name : clientNameFinal,
+      existing: identity.existing,
+      name: identity.name,
       studentId: clientIdentifier,
       email: clientEmail,
       classification: clientClassification,
