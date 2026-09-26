@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { pool } from "./pg";
 import { lookupBarcode } from "./barcode-lookup";
 import { checkClientDuplicate } from "./client-duplicates";
+import { findOrCreateDonor } from "./donor-find-or-create";
 import { duplicateMessage } from "@shared/identity";
 import {
   insertInventoryItemSchema,
@@ -1724,8 +1725,8 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.data.name?.trim()) {
       return res.status(400).json({ message: "Donor name is required" });
     }
-    const donor = await storage.createDonor(result.data);
-    res.status(201).json(donor);
+    const { donor, created } = await findOrCreateDonor(storage, result.data);
+    res.status(created ? 201 : 200).json(donor);
   });
 
   app.patch("/api/donors/:id", async (req, res) => {
