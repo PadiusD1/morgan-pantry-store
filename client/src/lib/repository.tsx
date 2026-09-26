@@ -15,6 +15,7 @@ import {
   type ApiTransaction,
 } from "./api-types";
 import { findCachedItem } from "./inventory-cache";
+import { newClientRecord } from "./new-client";
 
 export type PackageType = "single" | "multi_pack" | "variety_pack" | "case";
 
@@ -459,29 +460,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     }
 
     const tempId = uuid();
-    const client: ClientRecord = {
-      id: tempId,
-      name: partial.name,
-      identifier: partial.identifier,
-      contact: partial.contact,
-      phone: partial.phone,
-      email: partial.email,
-      address: partial.address,
-      dateOfBirth: partial.dateOfBirth,
-      householdSize: partial.householdSize ?? 1,
-      eligibleDate: partial.eligibleDate,
-      certificationDate: partial.certificationDate,
-      status: partial.status ?? "active",
-      // Carry partner-specific + emergency fields through so the POST body
-      // and the optimistic cache both reflect what the caller passed in.
-      clientType: partial.clientType ?? "student",
-      organization: partial.organization,
-      partnershipType: partial.partnershipType,
-      allergies: partial.allergies,
-      notes: partial.notes,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const client: ClientRecord = newClientRecord(partial, tempId, now);
 
     queryClient.setQueryData<ApiClient[]>(["/api/clients"], (old) => [
       ...(old ?? []),
