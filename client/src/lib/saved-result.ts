@@ -3,6 +3,9 @@
 type SavedTransaction = {
   clientName?: string | null;
   items?: Array<{ quantity?: number | null }> | null;
+  // A saved person, when the earlier try was the check out's new person create.
+  name?: string | null;
+  identifier?: string | null;
 };
 
 function asSaved(recorded: unknown): SavedTransaction {
@@ -27,6 +30,10 @@ export function savedCheckOutName(recorded: unknown, fallback: string): string {
 
 /** What an earlier try recorded, when a retry with edited values was not saved. */
 export function earlierSaveText(recorded: unknown, kind: "in" | "out"): string {
+  const saved = asSaved(recorded);
+  if (kind === "out" && !Array.isArray(saved.items) && saved.name?.trim()) {
+    return `An earlier try already saved ${saved.name.trim()} as a new person. Your change was not saved. Pick that person and save again.`;
+  }
   const units = recordedUnits(recorded);
   const what =
     kind === "in"

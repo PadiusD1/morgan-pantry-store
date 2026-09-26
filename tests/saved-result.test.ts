@@ -51,3 +51,12 @@ describe("a fresh key after an earlier save was recorded", () => {
     expect(seen).toEqual(["key-1", "key-2"]);
   });
 });
+
+describe("an earlier try that saved a new person during a check out", () => {
+  it("names the person the server stored instead of counting units", () => {
+    const person = { id: "c9", name: "Test Student Two", identifier: "TS0002" };
+    expect(earlierSaveText(person, "out")).toBe(
+      "An earlier try already saved Test Student Two as a new person. Your change was not saved. Pick that person and save again.",
+    );
+  });
+});
