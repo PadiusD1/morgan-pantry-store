@@ -9,6 +9,7 @@ import { inventoryItems } from "@shared/schema";
 import { lookupBarcode } from "./barcode-lookup";
 import { checkClientDuplicate } from "./client-duplicates";
 import { findOrCreateDonor } from "./donor-find-or-create";
+import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
 import {
@@ -1537,9 +1538,10 @@ export async function registerRoutes(app: Express): Promise<void> {
   async function donorTransactions(donorId: string, donorName: string) {
     const { rows } = await pool.query(
       `SELECT * FROM transactions
-       WHERE type = 'IN' AND (donor_id = $1 OR donor = $2)
+       WHERE type = 'IN' AND (donor_id = $1
+         OR (donor_id IS NULL AND lower(regexp_replace(btrim(donor), '\\s+', ' ', 'g')) = $2))
        ORDER BY timestamp DESC`,
-      [donorId, donorName],
+      [donorId, normaliseDonorName(donorName)],
     );
     return rows;
   }
@@ -1575,19 +1577,14 @@ export async function registerRoutes(app: Express): Promise<void> {
       )
     ).rows;
 
-    const byId = new Map<string, any[]>();
-    const byName = new Map<string, any[]>();
+    // Each row goes to one donor, by donor_id, or by a case blind name for old rows.
+    const byDonor = new Map<string, any[]>();
     for (const r of aggRows) {
-      if (r.donor_id) {
-        const arr = byId.get(r.donor_id);
-        if (arr) arr.push(r);
-        else byId.set(r.donor_id, [r]);
-      }
-      if (r.donor_name) {
-        const arr = byName.get(r.donor_name);
-        if (arr) arr.push(r);
-        else byName.set(r.donor_name, [r]);
-      }
+      const owner = attributeDonor({ donorId: r.donor_id, donor: r.donor_name }, donors as any[]);
+      if (!owner) continue;
+      const arr = byDonor.get(owner);
+      if (arr) arr.push(r);
+      else byDonor.set(owner, [r]);
     }
 
     const withStats = donors.map((d: any) => {
@@ -1598,7 +1595,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       let totalDonations = 0;
       let lastTimestamp: any = null;
 
-      const candidates = [...(byId.get(d.id) ?? []), ...(byName.get(d.name) ?? [])];
+      const candidates = byDonor.get(d.id) ?? [];
       for (const r of candidates) {
         if (seen.has(r.tx_id)) continue; // dedupe when a tx matches by both id and name
         seen.add(r.tx_id);
@@ -1623,6 +1620,13 @@ export async function registerRoutes(app: Express): Promise<void> {
       };
     });
     res.json(withStats);
+  });
+
+  // Who donated it, donors and partner organisations in one list for the picker.
+  app.get("/api/donation-sources", async (_req, res) => {
+    const [donors, clients] = await Promise.all([storage.getDonors(), storage.getClients()]);
+    const partners = (clients as any[]).filter((c) => c.clientType === "partner");
+    res.json(buildSourceOptions(donors as any[], partners));
   });
 
   app.get("/api/donors/:id/export", async (req, res) => {
@@ -1743,8 +1747,10 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.data.name?.trim()) {
       return res.status(400).json({ message: "Donor name is required" });
     }
-    const { donor, created } = await findOrCreateDonor(storage, result.data);
-    res.status(created ? 201 : 200).json(donor);
+    await runIdempotent(req, res, async () => {
+      const { donor, created } = await findOrCreateDonor(storage, result.data);
+      return { status: created ? 201 : 200, body: donor };
+    });
   });
 
   app.patch("/api/donors/:id", async (req, res) => {
