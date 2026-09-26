@@ -2,6 +2,7 @@ import React, { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository, getCurrentLocation } from "@/lib/repository";
 import { lookupBarcode } from "@/lib/barcode-lookup";
+import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -259,6 +260,13 @@ export default function CheckOutPage() {
       setScanLoading(false);
     }
   }
+
+  // A scan always reaches the lookup, whatever field has focus, and a code
+  // that arrives during a lookup waits its turn.
+  const lookupRef = useRef(handleBarcodeScanned);
+  lookupRef.current = handleBarcodeScanned;
+  const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
+  useScanner(scanQueue.push);
 
   function handleAddNewItem() {
     if (!newItemForm) return;
@@ -719,7 +727,7 @@ export default function CheckOutPage() {
                         if (e.key === "Enter") {
                           e.preventDefault();
                           if (barcode.trim()) {
-                            handleBarcodeScanned(barcode);
+                            scanQueue.push(barcode);
                             setBarcode("");
                           }
                         }

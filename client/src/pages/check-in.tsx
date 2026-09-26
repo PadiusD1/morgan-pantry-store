@@ -2,6 +2,7 @@ import React, { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository, getCurrentLocation } from "@/lib/repository";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
+import { createScanQueue, useScanner } from "@/lib/scanner";
 import { apiRequest } from "@/lib/queryClient";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -159,7 +160,6 @@ export default function CheckInPage() {
           description: `${item.name} (${item.quantity} on hand). Existing data populated. Scan again or confirm to record.`,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        setTimeout(() => quantityInputRef.current?.focus(), 100);
         return;
       }
 
@@ -186,7 +186,6 @@ export default function CheckInPage() {
           title: "New item added automatically",
           description: `${item.name} found via ${result.product.winningSource}. Quantity preset to 1 — adjust or scan again to add more.`,
         });
-        setTimeout(() => quantityInputRef.current?.focus(), 100);
         return;
       }
 
@@ -208,6 +207,13 @@ export default function CheckInPage() {
       });
     }
   }
+
+  // A scan always reaches the lookup, whatever field has focus, and a code
+  // that arrives during a lookup waits its turn.
+  const lookupRef = useRef(handleBarcodeLookup);
+  lookupRef.current = handleBarcodeLookup;
+  const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
+  useScanner(scanQueue.push);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -344,7 +350,7 @@ export default function CheckInPage() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  handleBarcodeLookup(e.currentTarget.value);
+                  scanQueue.push(e.currentTarget.value);
                   e.currentTarget.value = "";
                 }
               }}
