@@ -3,6 +3,9 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import { pool } from "./pg";
+import { claimRequestKey, runIdempotent, saveRequestKey, sendClaim } from "./idempotency";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { inventoryItems } from "@shared/schema";
 import { lookupBarcode } from "./barcode-lookup";
 import {
   insertInventoryItemSchema,
@@ -316,8 +319,10 @@ export async function registerRoutes(app: Express): Promise<void> {
         .status(400)
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
-    const item = await storage.createInventoryItem(result.data);
-    res.status(201).json(item);
+    await runIdempotent(req, res, async (client) => {
+      const [item] = await drizzle(client).insert(inventoryItems).values(result.data).returning();
+      return { status: 201, body: item };
+    });
   });
 
   app.patch("/api/inventory/:id", async (req, res) => {
@@ -495,6 +500,12 @@ export async function registerRoutes(app: Express): Promise<void> {
     try {
       await client.query("BEGIN");
 
+      const claim = await claimRequestKey(client, req);
+      if (claim) {
+        await client.query("ROLLBACK");
+        return sendClaim(res, claim);
+      }
+
       const txRow = (
         await client.query(
           `INSERT INTO transactions
@@ -551,8 +562,9 @@ export async function registerRoutes(app: Express): Promise<void> {
         }
       }
 
-      await client.query("COMMIT");
       responsePayload = { ...mapTransactionRow(txRow), items: createdItems };
+      await saveRequestKey(client, req, 201, responsePayload);
+      await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
