@@ -1,0 +1,35 @@
+{
+  "2000000100017": {
+    "name": "Test Brown Rice 2 lb",
+    "brand": "Test Pantry Brand",
+    "category": "Grains",
+    "description": "Synthetic product for the local stack",
+    "weightG": 907,
+    "weightUnit": "g",
+    "priceCents": 299,
+    "currency": "USD",
+    "allergens": []
+  },
+  "2000000100024": {
+    "name": "Test Black Beans 15 oz",
+    "brand": "Test Pantry Brand",
+    "category": "Canned Goods",
+    "description": "Synthetic product for the local stack",
+    "weightG": 425,
+    "weightUnit": "g",
+    "priceCents": 119,
+    "currency": "USD",
+    "allergens": []
+  },
+  "2000000100031": {
+    "name": "Test Granola Bars Variety Pack 12 count",
+    "brand": "Test Snack Brand",
+    "category": "Snacks",
+    "description": "Synthetic product for the local stack",
+    "weightG": 504,
+    "weightUnit": "g",
+    "priceCents": 549,
+    "currency": "USD",
+    "allergens": ["oats", "almonds"]
+  }
+}

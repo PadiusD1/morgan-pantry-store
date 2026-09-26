@@ -1,4 +1,5 @@
 import { log } from "./app";
+import { lookupStubProduct } from "./barcode-stub";
 
 // ─── Server-Side Barcode Result Cache ────────────────────────────────────────
 // Prevents re-hitting external APIs for the same barcode within a session.
@@ -361,6 +362,10 @@ async function lookupUsda(barcode: string): Promise<ProviderResult | null> {
 // ─── Provider Registry ──────────────────────────────────────────────────────
 
 function getProviders(): ApiProvider[] {
+  const stub = process.env.FRC_BARCODE_STUB;
+  if (stub) {
+    return [{ name: "Local stub", enabled: true, priority: 1, lookup: (code) => lookupStubProduct(stub, code) }];
+  }
   return [
     {
       name: "Open Food Facts",
