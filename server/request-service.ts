@@ -168,6 +168,43 @@ export async function claimRequest(
 }
 
 /**
+ * Sets a request to `next` only while it is still one of `expected`, taking
+ * the same claim as approval. Returns the status it held, or null when another
+ * writer already moved it. `reviewedBy` also stamps the review time.
+ */
+export async function changeRequestStatus(
+  requestId: string,
+  next: "denied" | "under_review" | "ready_for_pickup",
+  expected: readonly string[],
+  fields: { adminNote?: string; reviewedBy?: string } = {},
+): Promise<string | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const previous = await claimRequest(client, requestId, expected);
+    if (!previous) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    await client.query(
+      `UPDATE requests SET status = $2, updated_at = now(),
+         admin_note = COALESCE($3, admin_note),
+         reviewed_by = COALESCE($4, reviewed_by),
+         reviewed_at = CASE WHEN $4::text IS NULL THEN reviewed_at ELSE now() END
+       WHERE id = $1`,
+      [requestId, next, fields.adminNote ?? null, fields.reviewedBy ?? null],
+    );
+    await client.query("COMMIT");
+    return previous;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Moves a request to `next` only while it is still in one of `expected`, as
  * the first statement of its transaction, then releases any reservation.
  * Returns false when another request already moved it (PLAN.md defect 4).

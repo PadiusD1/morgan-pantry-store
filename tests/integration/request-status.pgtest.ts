@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, type TestDb } from "../helpers/pg";
 
 const STAFF = "00000000-0000-4000-8000-00000000000c";
+const STUDENT = "00000000-0000-4000-8000-00000000000d";
 
 let t: TestDb;
 let server: Server;
@@ -17,10 +18,14 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { id: STAFF, email: "", name: "Test Staff One", role: "staff", studentId: null };
+    req.user = req.headers["x-test-student"]
+      ? { id: STUDENT, email: "", name: "Test Student One", role: "student", studentId: "T0000001" }
+      : { id: STAFF, email: "", name: "Test Staff One", role: "staff", studentId: null };
     next();
   });
   await registerRoutes(app);
+  const { registerPortalRoutes } = await import("../../server/portal");
+  registerPortalRoutes(app);
   app.use((err: any, _req: any, res: any, _next: any) => {
     res.status(500).json({ message: String(err?.message ?? err) });
   });
@@ -302,5 +307,77 @@ describe("approval claims the request inside its transaction", () => {
     expect(await statusOf(request)).toBe("cancelled");
     expect(await stock(item)).toEqual([10, 0]);
     expect(await approvals(request)).toBe(0);
+  });
+});
+
+describe("deny, review, ready and the student cancel take the same claim", () => {
+  function studentPost(path: string) {
+    return fetch(base + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-test-student": "1" },
+      body: "{}",
+    });
+  }
+
+  it("a student cancel racing an approval never leaves a cancelled request holding stock", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const approve = post(`/api/requests/${request}/approve`);
+    await lockWaiters(1);
+    const cancel = studentPost(`/api/portal/requests/${request}/cancel`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [ra, rc] = await Promise.all([approve, cancel]);
+    expect(bothWaited).toBe(true);
+    expect(ra.status).toBe(200);
+    expect(rc.status).toBe(409);
+    expect(await statusOf(request)).toBe("approved");
+    expect(await stock(item)).toEqual([10, 2]);
+  });
+
+  it("a deny racing an approval loses with 409 and leaves the approval intact", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const approve = post(`/api/requests/${request}/approve`);
+    await lockWaiters(1);
+    const deny = post(`/api/requests/${request}/deny`, { adminNote: "Test note" });
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [ra, rd] = await Promise.all([approve, deny]);
+    expect(bothWaited).toBe(true);
+    expect(ra.status).toBe(200);
+    expect(rd.status).toBe(409);
+    expect(await statusOf(request)).toBe("approved");
+    expect(await stock(item)).toEqual([10, 2]);
+  });
+
+  it("a review racing an approval loses with 409", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const approve = post(`/api/requests/${request}/approve`);
+    await lockWaiters(1);
+    const review = post(`/api/requests/${request}/review`);
+    await lockWaiters(2);
+    await release();
+    const [ra, rr] = await Promise.all([approve, review]);
+    expect(ra.status).toBe(200);
+    expect(rr.status).toBe(409);
+    expect(await statusOf(request)).toBe("approved");
+  });
+
+  it("ready after a staff cancel answers 409 and keeps the request cancelled", async () => {
+    const { item, request } = await approvedRequest();
+    const release = await hold(`SELECT id FROM requests WHERE id = $1 FOR UPDATE`, request);
+    const cancel = post(`/api/requests/${request}/cancel`);
+    await lockWaiters(1);
+    const ready = post(`/api/requests/${request}/ready`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [rc, rr] = await Promise.all([cancel, ready]);
+    expect(bothWaited).toBe(true);
+    expect(rc.status).toBe(200);
+    expect(rr.status).toBe(409);
+    expect(await statusOf(request)).toBe("cancelled");
+    expect(await stock(item)).toEqual([10, 0]);
   });
 });

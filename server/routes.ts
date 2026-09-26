@@ -34,7 +34,7 @@ import {
   releaseRequestReservations,
   RequestRateLimitError,
 } from "./request-service";
-import { claimRequest, moveRequestStatus } from "./request-service";
+import { changeRequestStatus, claimRequest, moveRequestStatus } from "./request-service";
 
 const PICKUP_STATUSES = ["approved", "partially_approved", "ready_for_pickup"];
 const OPEN_STATUSES = ["pending", "under_review", ...PICKUP_STATUSES];
@@ -1298,19 +1298,20 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
     const actor = actorName(req);
 
-    await storage.updateRequest(req.params.id, {
-      status: "denied",
+    const previousStatus = await changeRequestStatus(req.params.id, "denied", ["pending", "under_review"], {
       adminNote: adminNote.trim(),
-      reviewedAt: new Date(),
       reviewedBy: actor,
     });
+    if (!previousStatus) {
+      return res.status(409).json({ message: "This request was already changed" });
+    }
 
     await storage.createAuditLogEntry({
       requestId: req.params.id,
       action: "denied",
       actor,
       details: adminNote.trim(),
-      previousStatus: request.status,
+      previousStatus,
       newStatus: "denied",
     });
 
@@ -1576,7 +1577,9 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot mark as under review from status '${request.status}'` });
     }
 
-    await storage.updateRequest(req.params.id, { status: "under_review" });
+    if (!(await changeRequestStatus(req.params.id, "under_review", ["pending"]))) {
+      return res.status(409).json({ message: "This request was already changed" });
+    }
 
     await storage.createAuditLogEntry({
       requestId: req.params.id,
@@ -1599,14 +1602,20 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot mark as ready from status '${request.status}'` });
     }
 
-    await storage.updateRequest(req.params.id, { status: "ready_for_pickup" });
+    const previousStatus = await changeRequestStatus(req.params.id, "ready_for_pickup", [
+      "approved",
+      "partially_approved",
+    ]);
+    if (!previousStatus) {
+      return res.status(409).json({ message: "This request was already changed" });
+    }
 
     await storage.createAuditLogEntry({
       requestId: req.params.id,
       action: "ready_for_pickup",
       actor: actorName(req),
       details: "Items are ready for client pickup",
-      previousStatus: request.status,
+      previousStatus,
       newStatus: "ready_for_pickup",
     });
 
