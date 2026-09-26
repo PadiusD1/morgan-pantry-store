@@ -361,9 +361,19 @@ async function lookupUsda(barcode: string): Promise<ProviderResult | null> {
 
 // ─── Provider Registry ──────────────────────────────────────────────────────
 
+// The fixture stub is for the local stack only. It is never honoured in a
+// production process or anywhere Vercel runs the code.
+function stubAllowed(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.VERCEL === undefined &&
+    process.env.VERCEL_ENV === undefined
+  );
+}
+
 function getProviders(): ApiProvider[] {
   const stub = process.env.FRC_BARCODE_STUB;
-  if (stub) {
+  if (stub && stubAllowed()) {
     return [{ name: "Local stub", enabled: true, priority: 1, lookup: (code) => lookupStubProduct(stub, code) }];
   }
   return [

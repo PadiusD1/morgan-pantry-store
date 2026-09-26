@@ -28,15 +28,25 @@ export const CANDIDATE_SQL = `
 
 export const sqlCandidateLookup: CandidateLookup = async (probe) => {
   const { pool } = await import("./pg");
-  const { rows } = await pool.query(CANDIDATE_SQL, [
-    probe.clientType,
-    probe.name,
-    probe.studentId,
-    probe.email,
-    probe.phone,
-  ]);
-  return rows;
+  return candidateLookupOn(pool)(probe);
 };
+
+// The lookup on one connection. A create inside runIdempotent passes its
+// transaction client, so it never waits for a second pool connection.
+export function candidateLookupOn(conn: {
+  query(text: string, values: unknown[]): Promise<{ rows: any[] }>;
+}): CandidateLookup {
+  return async (probe) => {
+    const { rows } = await conn.query(CANDIDATE_SQL, [
+      probe.clientType,
+      probe.name,
+      probe.studentId,
+      probe.email,
+      probe.phone,
+    ]);
+    return rows;
+  };
+}
 
 // candidate is the record as it would be saved, before the stored record on
 // an update so legacy duplicates stay editable.

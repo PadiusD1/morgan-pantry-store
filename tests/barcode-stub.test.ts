@@ -36,6 +36,39 @@ describe("barcode lookup stub for the local stack", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("ignores the stub when NODE_ENV is production", async () => {
+    vi.stubEnv("FRC_BARCODE_STUB", FIXTURE);
+    vi.stubEnv("NODE_ENV", "production");
+    // A fresh module, so the result cache of an earlier test is not read.
+    vi.resetModules();
+    const { lookupBarcode } = await import("../server/barcode-lookup");
+    const result = await lookupBarcode("2000000100017");
+    expect(result.found).toBe(false);
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("ignores the stub when VERCEL is set", async () => {
+    vi.stubEnv("FRC_BARCODE_STUB", FIXTURE);
+    vi.stubEnv("VERCEL", "1");
+    // A fresh module, so the result cache of an earlier test is not read.
+    vi.resetModules();
+    const { lookupBarcode } = await import("../server/barcode-lookup");
+    const result = await lookupBarcode("2000000100017");
+    expect(result.found).toBe(false);
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("ignores the stub when VERCEL_ENV is set", async () => {
+    vi.stubEnv("FRC_BARCODE_STUB", FIXTURE);
+    vi.stubEnv("VERCEL_ENV", "preview");
+    // A fresh module, so the result cache of an earlier test is not read.
+    vi.resetModules();
+    const { lookupBarcode } = await import("../server/barcode-lookup");
+    const result = await lookupBarcode("2000000100017");
+    expect(result.found).toBe(false);
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
   it("still asks the outside providers when the variable is unset", async () => {
     vi.stubEnv("FRC_BARCODE_STUB", "");
     const { lookupBarcode } = await import("../server/barcode-lookup");
