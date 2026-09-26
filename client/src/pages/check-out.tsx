@@ -7,6 +7,7 @@ import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest, isEarlierSaveRecorded, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
+import { clientUpdateFailureText } from "@/lib/client-update";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -460,7 +461,7 @@ export default function CheckOutPage() {
       }
       toast({
         title: "Check-out failed",
-        description: duplicateRefusal(e) ?? saveErrorMessage(e, "The distribution could not be recorded. Please try again."),
+        description: duplicateRefusal(e) ?? clientUpdateFailureText(e) ?? saveErrorMessage(e, "The distribution could not be recorded. Please try again."),
         variant: "destructive",
       });
       return;
