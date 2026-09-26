@@ -14,6 +14,7 @@ import {
   type ApiClient,
   type ApiTransaction,
 } from "./api-types";
+import { findCachedItem } from "./inventory-cache";
 
 export type PackageType = "single" | "multi_pack" | "variety_pack" | "case";
 
@@ -554,9 +555,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
     if (!quantity || quantity <= 0) return;
 
-    const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
-    const item = currentInventory.find((i) => i.id === itemId);
-    if (!item) return;
+    // The live cache, not this render's snapshot, so an item the page created a
+    // moment ago is found. A missing item throws, the caller says nothing was recorded.
+    const cached = queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"]) ?? inventoryQuery.data;
+    const item = toInventoryItem(findCachedItem(cached, itemId));
 
     // Optimistic inventory update. The SERVER is the source of truth for stock —
     // it applies the +received delta atomically when the IN transaction is posted
