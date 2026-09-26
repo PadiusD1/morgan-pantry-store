@@ -47,8 +47,8 @@ function checkIn(guard: ReturnType<typeof createSaveGuard>, timestamp: string, q
   });
 }
 
-describe("a retry resends the first body with its key", () => {
-  it("resends the exact first body after a lost response, then a new action sends its own", async () => {
+describe("a retry sends the current body with its key", () => {
+  it("sends the current body after a lost response, then a new action gets a new key", async () => {
     const sent = stubFetch(["network", 201, 201]);
     let n = 0;
     const guard = createSaveGuard(() => `key-${++n}`);
@@ -56,20 +56,23 @@ describe("a retry resends the first body with its key", () => {
     await checkIn(guard, "2026-09-26T10:00:05.000Z");
     expect(sent[0].key).toBe("key-1");
     expect(sent[1].key).toBe("key-1");
-    expect(sent[1].body).toBe(sent[0].body);
-    expect(JSON.parse(sent[1].body!).timestamp).toBe("2026-09-26T10:00:00.000Z");
+    expect(JSON.parse(sent[1].body!).timestamp).toBe("2026-09-26T10:00:05.000Z");
     await checkIn(guard, "2026-09-26T10:01:00.000Z");
     expect(sent[2].key).toBe("key-2");
     expect(JSON.parse(sent[2].body!).timestamp).toBe("2026-09-26T10:01:00.000Z");
   });
 
-  it("keeps the first body after a server error and after a 409 while the first save runs", async () => {
+  it("keeps the key and sends each current body after a server error and after a 409 while the first save runs", async () => {
     const sent = stubFetch([500, "held409", 201]);
     const guard = createSaveGuard(() => "key-a");
     await checkIn(guard, "2026-09-26T11:00:00.000Z");
     await checkIn(guard, "2026-09-26T11:00:03.000Z");
     await checkIn(guard, "2026-09-26T11:00:09.000Z");
-    expect(new Set(sent.map((s) => s.body)).size).toBe(1);
+    expect(sent.map((s) => JSON.parse(s.body!).timestamp)).toEqual([
+      "2026-09-26T11:00:00.000Z",
+      "2026-09-26T11:00:03.000Z",
+      "2026-09-26T11:00:09.000Z",
+    ]);
     expect(sent.every((s) => s.key === "key-a")).toBe(true);
   });
 
@@ -82,12 +85,13 @@ describe("a retry resends the first body with its key", () => {
     expect(JSON.parse(sent[1].body!).quantity).toBe(8);
   });
 
-  it("keeps the first body after a 422 that says the key is held", async () => {
+  it("keeps the key after a 422 that says the key is held and sends the current body", async () => {
     const sent = stubFetch(["held422", 201]);
     const guard = createSaveGuard(() => "key-h");
     await checkIn(guard, "2026-09-26T13:00:00.000Z", 5);
     await checkIn(guard, "2026-09-26T13:00:04.000Z", 6);
-    expect(sent[1].body).toBe(sent[0].body);
+    expect(sent[1].key).toBe("key-h");
+    expect(JSON.parse(sent[1].body!).quantity).toBe(6);
   });
 
   // Rendered recheck of 26 September. After a duplicate person refusal the

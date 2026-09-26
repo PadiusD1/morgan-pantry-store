@@ -60,7 +60,13 @@ export function createSaveGuard(newKey: () => string = randomKey, onHold?: () =>
     }
   }
 
-  return { begin, end, run, release, isLocked: () => locked };
+  /** Drops the kept key, so the next save starts a new logical action. */
+  function renew() {
+    if (key) forgetSentBody(key);
+    key = null;
+  }
+
+  return { begin, end, run, release, renew, isLocked: () => locked };
 }
 
 export type SaveGuard = ReturnType<typeof createSaveGuard>;

@@ -4,7 +4,8 @@ import { useRepository } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
-import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { apiRequest, isEarlierSaveRecorded, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { earlierSaveText, savedCheckInText } from "@/lib/saved-result";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
@@ -265,8 +266,9 @@ export default function CheckInPage() {
 
     const location = currentLocation();
 
+    let saved: unknown;
     try {
-      await withIdempotencyKey(key, () => recordInbound({
+      saved = await withIdempotencyKey(key, () => recordInbound({
         itemId,
         quantity,
         source: source.trim() || undefined,
@@ -280,6 +282,12 @@ export default function CheckInPage() {
         // eslint-disable-next-line no-console
         console.error("Failed to record check-in:", err);
       }
+      if (isEarlierSaveRecorded(err)) {
+        // The first try was recorded. Keep the edited form and start a new key.
+        saveGuard.renew();
+        toast({ title: "Not saved", description: earlierSaveText(err.recorded, "in"), variant: "destructive" });
+        return;
+      }
       toast({
         title: "Check-in failed",
         description: saveErrorMessage(err, "The stock could not be recorded. Please try again."),
@@ -290,7 +298,7 @@ export default function CheckInPage() {
 
     toast({
       title: "Stock received",
-      description: `Recorded ${quantity} units received${location ? " with location" : ""}.`,
+      description: savedCheckInText(saved, Boolean(location)),
     });
 
     setQuantity(0);

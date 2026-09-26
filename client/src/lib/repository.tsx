@@ -16,6 +16,7 @@ import {
 } from "./api-types";
 import { findCachedItem } from "./inventory-cache";
 import { newClientRecord } from "./new-client";
+import { sendClientUpdate } from "./client-update";
 import { loadGate } from "./load-gate";
 
 export type PackageType = "single" | "multi_pack" | "variety_pack" | "case";
@@ -144,14 +145,14 @@ export type RepositoryContextValue = RepositoryState & {
     donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
-  }) => Promise<void>;
+  }) => Promise<unknown>;
   recordOutbound: (options: {
     client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
-  }) => Promise<{ client: ClientRecord }>;
+  }) => Promise<{ client: ClientRecord; saved?: unknown }>;
   upsertClient: (partial: Partial<ClientRecord> & { name: string; identifier: string }) => ClientRecord;
   updateSettings: (partial: Partial<Settings>) => void;
   upsertBarcodeCache: (barcode: string, entry: Omit<BarcodeCacheEntry, "cachedAt">) => void;
@@ -290,6 +291,8 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   // ── Pending client creates: temp ID → Promise<server ID> ──────────────
   const pendingClientCreates = useRef<Map<string, Promise<string>>>(new Map());
+  // An existing person's update still in flight, so a check out waits for it.
+  const pendingClientUpdates = useRef<Map<string, Promise<string>>>(new Map());
 
   // ── Resolve an item ID: if it's a pending temp ID, await the real one ──
   async function resolveItemId(id: string): Promise<string> {
@@ -300,7 +303,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   // ── Resolve a client ID: if it's a pending temp ID, await the real one ──
   async function resolveClientId(id: string): Promise<string> {
-    const pending = pendingClientCreates.current.get(id);
+    const pending = pendingClientCreates.current.get(id) ?? pendingClientUpdates.current.get(id);
     if (pending) return pending;
     return id;
   }
@@ -476,14 +479,28 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         (old ?? []).map((c) => (c.id === existing.id ? toOptimisticApiClient(updated) : c)),
       );
 
-      apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(merged))
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }))
-        // On failure, invalidate to roll the optimistic merge back to server truth.
+      const updatePromise: Promise<string> = sendClientUpdate(apiRequest, existing.id, toApiClientBody(merged))
+        .then((id) => {
+          queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+          return id;
+        })
+        // On failure, invalidate to roll the optimistic merge back to server truth,
+        // and reject so a check out awaiting this person stops before the visit.
         .catch((err) => {
           const refusal = duplicateRefusal(err);
           if (refusal) toast({ title: "Not saved", description: refusal, variant: "destructive" });
-          return queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+          throw err instanceof Error ? err : new Error(String(err));
+        })
+        .finally(() => {
+          if (pendingClientUpdates.current.get(existing.id) === updatePromise) {
+            pendingClientUpdates.current.delete(existing.id);
+          }
         });
+      pendingClientUpdates.current.set(existing.id, updatePromise);
+      // Standalone callers do not await this, so the rejection is not unhandled.
+      // The check out observes it through resolveClientId.
+      updatePromise.catch(() => {});
 
       return updated;
     }
@@ -557,7 +574,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
-  }): Promise<void> {
+  }): Promise<unknown> {
     const { itemId, quantity, source, donor, donorClientId, donorId, location } = options;
     const timestamp = options.timestamp ?? new Date().toISOString();
 
@@ -625,7 +642,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Create the IN transaction. The server applies the inventory delta inside
       // the same DB transaction — do NOT PATCH inventory quantity here.
-      await apiRequest("POST", "/api/transactions", {
+      const res = await apiRequest("POST", "/api/transactions", {
         type: "IN",
         timestamp,
         source: source ?? null,
@@ -644,11 +661,14 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           valuePerUnitUsd: String(txItem.valuePerUnitUsd),
         }],
       });
+      // The page builds its success text from what the server stored.
+      const saved: unknown = await res.json().catch(() => null);
 
       // Confirmed — reconcile the optimistic cache with the server's truth.
       queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      return saved;
     } catch (err) {
       // Roll back every optimistic mutation to the server's truth, then rethrow
       // so the page can surface an error toast and skip the success receipt.
@@ -665,7 +685,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
-  }): Promise<{ client: ClientRecord }> {
+  }): Promise<{ client: ClientRecord; saved?: unknown }> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const isEmergency = Boolean(options.isEmergency);
     if (!options.items.length) {
@@ -751,6 +771,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       // transaction links to the correct server client ID (and so a client-create
       // failure surfaces here rather than being silently dropped).
       const realClientId = await resolveClientId(client.id);
+      let saved: unknown = null;
 
       if (txItems.length) {
         // Resolve item IDs (awaiting any in-flight item creates), then post the
@@ -766,7 +787,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           })),
         );
 
-        await apiRequest("POST", "/api/transactions", {
+        const res = await apiRequest("POST", "/api/transactions", {
           type: "OUT",
           timestamp,
           clientId: realClientId,
@@ -778,6 +799,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           accuracy: options.location?.accuracy ?? null,
           items: apiItems,
         });
+        saved = await res.json().catch(() => null);
       }
 
       // Confirmed — reconcile the optimistic cache with the server's truth.
@@ -787,7 +809,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Return the client carrying its resolved (real) server id so the caller
       // can select the persisted record for the receipt.
-      return { client: { ...client, id: realClientId } };
+      return { client: { ...client, id: realClientId }, saved };
     } catch (err) {
       // Roll back every optimistic mutation to the server's truth, then rethrow
       // so the page can surface an error toast and skip the success receipt.
