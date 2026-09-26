@@ -4,9 +4,12 @@ import { sourceFields, type SourceFields, type SourceOption } from "@shared/dona
 
 export type { SourceOption, SourceFields };
 
-/** Donors and partners in one list, from the server. */
+/**
+ * Donors and partners in one list, from the server. Refetched on every mount,
+ * because the Donors and Partners pages invalidate their own keys, not this one.
+ */
 export function useDonationSources() {
-  return useQuery<SourceOption[]>({ queryKey: ["/api/donation-sources"] });
+  return useQuery<SourceOption[]>({ queryKey: ["/api/donation-sources"], staleTime: 0 });
 }
 
 /** A pick from the list, or a new donor name typed inline. */
