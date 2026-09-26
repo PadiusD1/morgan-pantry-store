@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
+import { duplicateRefusal } from "@shared/identity";
 import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon, SirenIcon, ChevronsUpDownIcon, CheckIcon, Handshake } from "lucide-react";
 
 type ItemGroupItem = {
@@ -391,7 +392,7 @@ export default function CheckOutPage() {
       }
       toast({
         title: "Check-out failed",
-        description: "The distribution could not be recorded. Please try again.",
+        description: duplicateRefusal(e) ?? "The distribution could not be recorded. Please try again.",
         variant: "destructive",
       });
       return;

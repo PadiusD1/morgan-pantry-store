@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   duplicateMessage,
+  duplicateRefusal,
   findDuplicate,
   normaliseEmail,
   normaliseName,
@@ -121,5 +122,18 @@ describe("findDuplicate", () => {
 
   it("uses a neutral message when the match has no name", () => {
     expect(duplicateMessage({ name: "  " })).toBe("This person is already in");
+  });
+});
+
+describe("duplicateRefusal", () => {
+  it("returns the server message for a duplicate person refusal", () => {
+    const err = new Error(`409: ${JSON.stringify({ message: "Test Student One is already in", duplicateOf: "a1" })}`);
+    expect(duplicateRefusal(err)).toBe("Test Student One is already in");
+  });
+  it("ignores an identifier clash, other statuses and non errors", () => {
+    expect(duplicateRefusal(new Error(`409: ${JSON.stringify({ message: "A client with identifier" })}`))).toBeNull();
+    expect(duplicateRefusal(new Error("500: oops"))).toBeNull();
+    expect(duplicateRefusal(new Error("409: not json"))).toBeNull();
+    expect(duplicateRefusal("409: {}")).toBeNull();
   });
 });

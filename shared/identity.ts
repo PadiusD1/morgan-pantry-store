@@ -84,3 +84,16 @@ export function duplicateMessage(person: IdentityRecord): string {
 }
 
 export const GENERIC_DUPLICATE_MESSAGE = "A person with these details is already in";
+
+// apiRequest throws Error("409: {body}"). A staff route refusing a duplicate
+// person sends duplicateOf with its message, which this returns for a toast.
+export function duplicateRefusal(err: unknown): string | null {
+  const text = err instanceof Error ? err.message : "";
+  if (!text.startsWith("409: ")) return null;
+  try {
+    const body = JSON.parse(text.slice(5));
+    return body && body.duplicateOf && typeof body.message === "string" ? body.message : null;
+  } catch {
+    return null;
+  }
+}

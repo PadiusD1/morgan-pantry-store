@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "./queryClient";
+import { toast } from "@/hooks/use-toast";
+import { duplicateRefusal } from "@shared/identity";
 import {
   toInventoryItem,
   toClientRecord,
@@ -427,7 +429,11 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(merged))
         .then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }))
         // On failure, invalidate to roll the optimistic merge back to server truth.
-        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }));
+        .catch((err) => {
+          const refusal = duplicateRefusal(err);
+          if (refusal) toast({ title: "Not saved", description: refusal, variant: "destructive" });
+          return queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+        });
 
       return updated;
     }
@@ -480,7 +486,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         // apiRequest throws `Error("{status}: {body}")`. A 409 means the client
         // already exists — recover its canonical id instead of failing.
         const status = err instanceof Error ? parseInt(err.message, 10) : NaN;
-        if (status === 409) {
+        const refusal = duplicateRefusal(err);
+        if (refusal) toast({ title: "Not saved", description: refusal, variant: "destructive" });
+        if (status === 409 && !refusal) {
           queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
           pendingClientCreates.current.delete(tempId);
           try {
