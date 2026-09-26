@@ -34,3 +34,19 @@ describe("monthly summary CSV Generated line", () => {
     expect(monthlyGeneratedLine(new Date("2026-01-15T16:05:09Z"))).toBe('Generated,"1/15/2026, 11:05:09 AM EST"');
   });
 });
+
+// The donor export wrote each donation date with toLocaleDateString in the
+// server zone, which is UTC on Vercel, so an evening donation in Baltimore
+// showed the next day.
+describe("donor export dates", () => {
+  it("writes a 9.30 PM Eastern donation on its Eastern date", async () => {
+    const { easternDate } = await import("../server/monthly-csv");
+    expect(easternDate("2026-09-03T01:30:00Z")).toBe("9/2/2026");
+    expect(easternDate(new Date("2026-01-16T03:30:00Z"))).toBe("1/15/2026");
+  });
+
+  it("gives the Generated value in Eastern with its zone", async () => {
+    const { generatedValue } = await import("../server/monthly-csv");
+    expect(generatedValue(new Date("2026-07-15T16:05:09Z"))).toBe("7/15/2026, 12:05:09 PM EDT");
+  });
+});

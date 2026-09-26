@@ -38,9 +38,25 @@ const GENERATED_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZoneName: "short",
 });
 
-export function monthlyGeneratedLine(now: Date): string {
+/** The Generated time in New York time with its zone, spaces made plain. */
+export function generatedValue(now: Date): string {
   // Newer ICU puts a narrow no break space before AM or PM, so any space
   // becomes a plain one and the cell reads the same on every Node version.
-  const value = GENERATED_FORMAT.format(now).replace(/\s+/g, " ");
-  return `Generated,${csvCell(value)}`;
+  return GENERATED_FORMAT.format(now).replace(/\s+/g, " ");
+}
+
+export function monthlyGeneratedLine(now: Date): string {
+  return `Generated,${csvCell(generatedValue(now))}`;
+}
+
+const EASTERN_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+});
+
+/** A stored UTC time as its calendar date in Baltimore, whatever zone the server runs in. */
+export function easternDate(value: string | Date): string {
+  return EASTERN_DATE_FORMAT.format(new Date(value));
 }

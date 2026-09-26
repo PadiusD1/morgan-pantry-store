@@ -15,7 +15,7 @@ import { findOrCreateDonor } from "./donor-find-or-create";
 import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
-import { monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
+import { easternDate, generatedValue, monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -1729,7 +1729,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     const lines: string[] = [];
     lines.push(csvRow([`Donor Report: ${donor.name}`]));
     if (donor.organization) lines.push(csvRow([`Organization: ${donor.organization}`]));
-    lines.push(csvRow([`Generated: ${new Date().toLocaleString()}`]));
+    lines.push(csvRow(["Generated", generatedValue(new Date())]));
     lines.push("");
     lines.push("Date,Items,Total Qty,Total Weight (lbs),Total Value ($)");
     for (const tx of txRows) {
@@ -1743,7 +1743,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         names.push(item.name);
       }
       totalItems += qty; totalWeight += wt; totalValue += val;
-      const date = new Date(tx.timestamp).toLocaleDateString();
+      const date = easternDate(tx.timestamp);
       lines.push(csvRow([date, names.join(", "), qty, Math.round(wt*100)/100, Math.round(val*100)/100]));
     }
     lines.push("");
@@ -1753,8 +1753,8 @@ export async function registerRoutes(app: Express): Promise<void> {
     lines.push(`Total Weight,${Math.round(totalWeight*100)/100} lbs`);
     lines.push(`Total Value,$${Math.round(totalValue*100)/100}`);
     if (txRows.length > 0) {
-      lines.push(`First Donation,${new Date(txRows[txRows.length-1].timestamp).toLocaleDateString()}`);
-      lines.push(`Last Donation,${new Date(txRows[0].timestamp).toLocaleDateString()}`);
+      lines.push(`First Donation,${easternDate(txRows[txRows.length-1].timestamp)}`);
+      lines.push(`Last Donation,${easternDate(txRows[0].timestamp)}`);
       lines.push(`Average Items Per Donation,${Math.round(totalItems/txRows.length*10)/10}`);
     }
 
