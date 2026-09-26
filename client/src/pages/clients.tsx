@@ -115,7 +115,7 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       toast({ title: "Client deleted", description: `${deleteConfirm.name} has been removed.` });
     } catch {
-      toast({ title: "Delete failed", description: "Could not delete client. Try again." });
+      toast({ title: "Delete failed", description: "Could not delete client. Try again.", variant: "destructive" });
     }
     setDeleteConfirm(null);
   }

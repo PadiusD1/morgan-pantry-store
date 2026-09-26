@@ -104,7 +104,7 @@ export default function DonorsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
       setEditing(null);
     } catch {
-      toast({ title: "Save failed", description: "Could not save donor. Try again." });
+      toast({ title: "Save failed", description: "Could not save donor. Try again.", variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -117,7 +117,7 @@ export default function DonorsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
       toast({ title: "Donor deleted", description: `${deleteConfirm.name} has been removed.` });
     } catch {
-      toast({ title: "Delete failed", description: "Could not delete donor. Try again." });
+      toast({ title: "Delete failed", description: "Could not delete donor. Try again.", variant: "destructive" });
     }
     setDeleteConfirm(null);
   }

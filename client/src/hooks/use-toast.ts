@@ -5,8 +5,10 @@ import type {
   ToastProps,
 } from "@/components/ui/toast"
 
-const TOAST_LIMIT = 1
+const TOAST_LIMIT = 3
 const TOAST_REMOVE_DELAY = 1000000
+// Success toasts close on their own, errors stay until dismissed.
+export const SUCCESS_TOAST_MS = 3000
 
 type ToasterToast = ToastProps & {
   id: string
@@ -71,12 +73,39 @@ const addToRemoveQueue = (toastId: string) => {
   toastTimeouts.set(toastId, timeout)
 }
 
+export function isPinned(t: Pick<ToasterToast, "variant">): boolean {
+  return t.variant === "destructive"
+}
+
+// The newest toast is first. Over the limit, closed toasts go first, then
+// the oldest success. A success never evicts a pinned error, so it may show
+// past the limit for its 3 seconds, while a new error evicts the oldest error.
+export function fitToLimit(toasts: ToasterToast[], limit = TOAST_LIMIT): ToasterToast[] {
+  let list = toasts
+  const dropLast = (keep: (t: ToasterToast, i: number) => boolean) => {
+    for (let i = list.length - 1; i > 0; i--) {
+      if (!keep(list[i], i)) {
+        list = [...list.slice(0, i), ...list.slice(i + 1)]
+        return true
+      }
+    }
+    return false
+  }
+  while (list.length > limit) {
+    if (dropLast((t) => t.open !== false)) continue
+    if (dropLast((t) => isPinned(t))) continue
+    if (!isPinned(list[0])) break
+    list = list.slice(0, -1)
+  }
+  return list
+}
+
 export const reducer = (state: State, action: Action): State => {
   switch (action.type) {
     case "ADD_TOAST":
       return {
         ...state,
-        toasts: [action.toast, ...state.toasts].slice(0, TOAST_LIMIT),
+        toasts: fitToLimit([action.toast, ...state.toasts]),
       }
 
     case "UPDATE_TOAST":
@@ -147,12 +176,18 @@ function toast({ ...props }: Toast) {
       type: "UPDATE_TOAST",
       toast: { ...props, id },
     })
-  const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+  let autoClose: ReturnType<typeof setTimeout> | undefined
+  const dismiss = () => {
+    if (autoClose) clearTimeout(autoClose)
+    dispatch({ type: "DISMISS_TOAST", toastId: id })
+  }
 
   dispatch({
     type: "ADD_TOAST",
     toast: {
       ...props,
+      // The hook owns closing, so the Radix timer never closes an error.
+      duration: Infinity,
       id,
       open: true,
       onOpenChange: (open) => {
@@ -160,6 +195,10 @@ function toast({ ...props }: Toast) {
       },
     },
   })
+  const closeAfter = props.duration ?? SUCCESS_TOAST_MS
+  if (!isPinned(props) && Number.isFinite(closeAfter)) {
+    autoClose = setTimeout(dismiss, closeAfter)
+  }
 
   return {
     id: id,
@@ -188,4 +227,9 @@ function useToast() {
   }
 }
 
-export { useToast, toast }
+// Read only view of the current toasts, for tests.
+function getToasts(): ToasterToast[] {
+  return memoryState.toasts
+}
+
+export { useToast, toast, getToasts }
