@@ -4,6 +4,8 @@ import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import { pool } from "./pg";
 import { lookupBarcode } from "./barcode-lookup";
+import { checkClientDuplicate } from "./client-duplicates";
+import { duplicateMessage } from "@shared/identity";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -365,6 +367,11 @@ export async function registerRoutes(app: Express): Promise<void> {
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
 
+    const dup = await checkClientDuplicate(result.data);
+    if (dup.duplicate) {
+      return res.status(409).json({ message: duplicateMessage(dup.match), duplicateOf: dup.match.id });
+    }
+
     try {
       const client = await storage.createClient(result.data);
       res.status(201).json(client);
@@ -384,6 +391,12 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res
         .status(400)
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
+    }
+    const before = await storage.getClient(req.params.id);
+    if (!before) return res.status(404).json({ message: "Not found" });
+    const dup = await checkClientDuplicate({ ...before, ...result.data, id: before.id }, before);
+    if (dup.duplicate) {
+      return res.status(409).json({ message: duplicateMessage(dup.match), duplicateOf: dup.match.id });
     }
     const updated = await storage.updateClient(req.params.id, result.data);
     if (!updated) return res.status(404).json({ message: "Not found" });

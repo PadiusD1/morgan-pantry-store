@@ -21,6 +21,8 @@ import { z } from "zod";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { storage } from "./storage";
+import { checkClientDuplicate } from "./client-duplicates";
+import { GENERIC_DUPLICATE_MESSAGE } from "@shared/identity";
 import type { User } from "@shared/schema";
 
 const SESSION_COOKIE = "frc_session";
@@ -420,7 +422,12 @@ export function registerAuthRoutes(app: Express): void {
     // Keep the pantry's client roster in sync so staff see the student
     try {
       const client = await storage.getClientByIdentifier(studentId);
-      if (!client) {
+      const dup = client
+        ? null
+        : await checkClientDuplicate({ name, identifier: studentId, email, phone, clientType: "student" });
+      if (dup?.duplicate) {
+        console.warn(`[signup] roster sync skipped. ${GENERIC_DUPLICATE_MESSAGE}`);
+      } else if (!client) {
         await storage.createClient({
           name,
           identifier: studentId,
