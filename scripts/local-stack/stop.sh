@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Stops the local stack. Kills only the process group start.sh created, then
-# stops the local cluster. Data stays in /srv/tools/frc-stack/pgdata.
+# stops the local cluster. Data stays in the stack folder.
 set -uo pipefail
 
-STACK_ROOT=/srv/tools/frc-stack
-PG_BIN=/srv/tools/pg17/usr/lib/postgresql/17/bin
-PG_LIB=/srv/tools/pg17/usr/lib/x86_64-linux-gnu
+# The same folder and PostgreSQL 17 as start.sh, see README.md.
+STACK_ROOT="${FRC_STACK_ROOT:-$HOME/.frc-local-stack}"
+PG_BIN="${FRC_PG_BIN:-$(command -v pg_config > /dev/null && pg_config --bindir || true)}"
+PG_LIB="${FRC_PG_LIB:-}"
+if [[ ! -x "$PG_BIN/pg_ctl" ]]; then echo "no PostgreSQL 17 was found, set FRC_PG_BIN to its bin folder" >&2; exit 2; fi
 PIDFILE="$STACK_ROOT/server.pid"
 
 if [[ -f "$PIDFILE" ]]; then

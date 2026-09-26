@@ -4,9 +4,11 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-STACK_ROOT=/srv/tools/frc-stack
-PG_BIN=/srv/tools/pg17/usr/lib/postgresql/17/bin
-PG_LIB=/srv/tools/pg17/usr/lib/x86_64-linux-gnu
+# Where the stack keeps its data and which PostgreSQL 17 it runs. Override
+# with FRC_STACK_ROOT, FRC_PG_BIN and FRC_PG_LIB, see README.md.
+STACK_ROOT="${FRC_STACK_ROOT:-$HOME/.frc-local-stack}"
+PG_BIN="${FRC_PG_BIN:-$(command -v pg_config > /dev/null && pg_config --bindir || true)}"
+PG_LIB="${FRC_PG_LIB:-}"
 PGDATA="$STACK_ROOT/pgdata"
 PGSOCK="$STACK_ROOT/sock"
 PG_PORT=55418
@@ -22,6 +24,8 @@ MIGRATION_0001="$REPO/migrations/0001_release_one.sql"
 INDEXES="$REPO/tests/fixtures/prod-only-indexes.json"
 
 refuse() { echo "local stack refused because $*" >&2; exit 2; }
+
+[[ -x "$PG_BIN/pg_ctl" ]] || refuse "no PostgreSQL 17 was found, set FRC_PG_BIN to its bin folder"
 
 # Guards. Nothing named UPSTASH may reach the server, the database must be
 # local, and the server folder must hold no .env for dotenv to load.
