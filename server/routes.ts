@@ -1539,7 +1539,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     const { rows } = await pool.query(
       `SELECT * FROM transactions
        WHERE type = 'IN' AND (donor_id = $1
-         OR (donor_id IS NULL AND lower(regexp_replace(btrim(donor), '\\s+', ' ', 'g')) = $2))
+         OR (donor_id IS NULL AND lower(btrim(regexp_replace(donor, '\\s+', ' ', 'g'))) = $2))
        ORDER BY timestamp DESC`,
       [donorId, normaliseDonorName(donorName)],
     );
