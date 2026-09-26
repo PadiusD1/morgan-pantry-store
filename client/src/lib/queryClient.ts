@@ -103,21 +103,45 @@ export function idempotencyHeaders(
   return key ? { "Idempotency-Key": key } : {};
 }
 
+// The first body sent with each Idempotency-Key. A retry resends it, so the
+// server replays the first save instead of answering 422 for a new timestamp.
+const sentBodies = new Map<string, string>();
+
+/** Drops the body kept for a key, once its action has succeeded. */
+export function forgetSentBody(key: string): void {
+  for (const k of Array.from(sentBodies.keys())) {
+    if (k === key || k.startsWith(`${key}.`)) sentBodies.delete(k);
+  }
+}
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
   options?: ApiRequestOptions,
 ): Promise<Response> {
+  const keyHeaders = idempotencyHeaders(method, url, options);
+  const key = keyHeaders["Idempotency-Key"];
+  let body = data ? JSON.stringify(data) : undefined;
+  if (key && body !== undefined) {
+    const first = sentBodies.get(key);
+    if (first !== undefined) body = first;
+    else sentBodies.set(key, body);
+  }
   const res = await fetch(url, {
     method,
     headers: {
       ...(data ? { "Content-Type": "application/json" } : {}),
-      ...idempotencyHeaders(method, url, options),
+      ...keyHeaders,
     },
-    body: data ? JSON.stringify(data) : undefined,
+    body,
     credentials: "include",
   });
+  // A plain refusal rolled back on the server and freed the key, so the next
+  // try sends the form as it is then. A 409 or 422 may mean the key is held.
+  if (key && res.status >= 400 && res.status < 500 && res.status !== 409 && res.status !== 422) {
+    sentBodies.delete(key);
+  }
 
   // A 401 on a save must not redirect first, or the form and its entries are lost.
   if (res.status === 401 && !isReadMethod(method) && !isAuthPath(url)) {

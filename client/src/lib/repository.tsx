@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "./queryClient";
+import { apiRequest, saveErrorMessage } from "./queryClient";
+import { planItemChange, serverMessage, type ItemChange, type ItemChangeOptions } from "./stock-change";
 import { toast } from "@/hooks/use-toast";
 import { duplicateRefusal } from "@shared/identity";
 import {
@@ -129,7 +130,7 @@ export type RepositoryState = {
 };
 
 export type RepositoryContextValue = RepositoryState & {
-  addOrUpdateItem: (partial: Partial<InventoryItem> & { name: string }) => InventoryItem;
+  addOrUpdateItem: (partial: ItemChange, options?: ItemChangeOptions) => InventoryItem;
   adjustItemQuantity: (itemId: string, delta: number) => void;
   recordInbound: (options: {
     itemId: string;
@@ -277,7 +278,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   // ── Mutations ───────────────────────────────────────────────────────────
 
-  function addOrUpdateItem(partial: Partial<InventoryItem> & { name: string }): InventoryItem {
+  function addOrUpdateItem(partial: ItemChange, options?: ItemChangeOptions): InventoryItem {
     const now = new Date().toISOString();
     const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
     const existing =
@@ -285,7 +286,8 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       (partial.barcode ? currentInventory.find((i) => i.barcode && i.barcode === partial.barcode) : undefined);
 
     if (existing) {
-      const updated: InventoryItem = { ...existing, ...partial, updatedAt: now };
+      const { fields, body, adds, quantity } = planItemChange(existing.quantity, partial, options);
+      const updated: InventoryItem = { ...existing, ...fields, quantity, updatedAt: now };
 
       // Optimistic update
       queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
@@ -294,9 +296,17 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Fire API. On failure, invalidate to roll the optimistic edit back to the
       // server's truth instead of silently leaving a phantom change in the cache.
-      apiRequest("PATCH", `/api/inventory/${existing.id}`, toApiInventoryBody(partial))
+      apiRequest("PATCH", `/api/inventory/${existing.id}`, body)
+        .then(() =>
+          adds > 0
+            ? apiRequest("POST", `/api/inventory/${existing.id}/adjust`, { delta: adds, reason: "import" }, { idempotencyKey: uuid() })
+            : undefined,
+        )
         .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
-        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }));
+        .catch((e) => {
+          showStockRefusal(e);
+          return queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        });
 
       return updated;
     }
@@ -344,7 +354,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     // failure it REJECTS so any awaiter (recordInbound / recordOutbound) can
     // surface the error instead of silently POSTing a transaction against a
     // temp ID the server never stored.
-    const createPromise = apiRequest("POST", "/api/inventory", toApiInventoryBody(item))
+    const createPromise = apiRequest("POST", "/api/inventory", toApiInventoryBody(item), {
+      idempotencyKey: options?.idempotencyKey ?? uuid(),
+    })
       .then(async (res) => {
         const created: ApiInventoryItem = await res.json();
         // Replace temp ID in cache with real data. If a refetch removed the
@@ -371,6 +383,15 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     return item;
   }
 
+  // A refused stock change is shown, never dropped.
+  function showStockRefusal(e: unknown) {
+    toast({
+      title: "Not saved",
+      description: saveErrorMessage(e, serverMessage(e) ?? "The stock was not changed. Please try again."),
+      variant: "destructive",
+    });
+  }
+
   function adjustItemQuantity(itemId: string, delta: number) {
     // Optimistic update
     queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
@@ -380,15 +401,15 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       }),
     );
 
-    // Fire API: read current quantity from cache to compute new value.
-    const current = (inventoryQuery.data ?? []).find((i) => i.id === itemId);
-    if (current) {
-      const newQty = Math.max(0, current.quantity + delta);
-      apiRequest("PATCH", `/api/inventory/${itemId}`, { quantity: newQty })
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
-        // On failure, invalidate to roll the optimistic +/- back to server truth.
-        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }));
-    }
+    // Send only the difference, applied on the server, so a stale page can not
+    // overwrite a check in made since it loaded (PLAN.md item 33).
+    apiRequest("POST", `/api/inventory/${itemId}/adjust`, { delta }, { idempotencyKey: uuid() })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
+      // On failure, show why and roll the optimistic +/- back to server truth.
+      .catch((e) => {
+        showStockRefusal(e);
+        return queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+      });
   }
 
   function upsertClient(partial: Partial<ClientRecord> & { name: string; identifier: string }): ClientRecord {

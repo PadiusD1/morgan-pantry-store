@@ -5,7 +5,8 @@ import { storage } from "./storage";
 import { pool } from "./pg";
 import { claimRequestKey, runIdempotent, saveRequestKey, sendClaim } from "./idempotency";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { inventoryItems } from "@shared/schema";
+import { inventoryItems, stockAdjustments } from "@shared/schema";
+import { eq, sql } from "drizzle-orm";
 import { lookupBarcode } from "./barcode-lookup";
 import { checkClientDuplicate } from "./client-duplicates";
 import { findOrCreateDonor } from "./donor-find-or-create";
@@ -340,12 +341,99 @@ export async function registerRoutes(app: Express): Promise<void> {
         .status(400)
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
+    if (result.data.quantity !== undefined) {
+      // An absolute count only lands on the count it was read from (PLAN.md defect 4).
+      const expected = req.body?.expectedQuantity;
+      if (typeof expected !== "number" || !Number.isInteger(expected)) {
+        return res.status(400).json({ message: "This page is out of date. Reload and try again" });
+      }
+      const itemId = req.params.id;
+      const changes = result.data;
+      return runIdempotent(req, res, async (client) => {
+        const locked = await client.query(
+          `SELECT quantity FROM inventory_items WHERE id = $1 FOR UPDATE`,
+          [itemId],
+        );
+        if (locked.rowCount === 0) return { status: 404, body: { message: "Not found" } };
+        const before: number = locked.rows[0].quantity;
+        if (before !== expected) {
+          return {
+            status: 409,
+            body: { message: "The stock count changed. Reload and try again", quantity: before },
+          };
+        }
+        const db = drizzle(client);
+        const [item] = await db
+          .update(inventoryItems)
+          .set({ ...changes, updatedAt: new Date() })
+          .where(eq(inventoryItems.id, itemId))
+          .returning();
+        if (item.quantity !== before) {
+          await db.insert(stockAdjustments).values({
+            inventoryItemId: itemId,
+            delta: item.quantity - before,
+            quantityBefore: before,
+            quantityAfter: item.quantity,
+            reason: "edit",
+            userId: req.user?.id ?? null,
+          });
+        }
+        return { status: 200, body: item };
+      });
+    }
     const updated = await storage.updateInventoryItem(
       req.params.id,
       result.data,
     );
     if (!updated) return res.status(404).json({ message: "Not found" });
     res.json(updated);
+  });
+
+  const adjustSchema = z.object({
+    delta: z.number().int().refine((n) => n !== 0),
+    reason: z.string().max(200).nullish(),
+  });
+
+  // A plus or minus travels as a difference, applied under the row lock, and
+  // leaves a stock_adjustments row, never a transaction (PLAN.md item 33).
+  app.post("/api/inventory/:id/adjust", async (req, res) => {
+    const parsed = adjustSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ message: "Invalid data", errors: zodErrors(parsed.error) });
+    }
+    const { delta, reason } = parsed.data;
+    const itemId = req.params.id;
+    await runIdempotent(req, res, async (client) => {
+      const locked = await client.query(
+        `SELECT quantity FROM inventory_items WHERE id = $1 FOR UPDATE`,
+        [itemId],
+      );
+      if (locked.rowCount === 0) return { status: 404, body: { message: "Not found" } };
+      const before: number = locked.rows[0].quantity;
+      if (before + delta < 0) {
+        return {
+          status: 409,
+          body: { message: "Stock can not go below zero", quantity: before },
+        };
+      }
+      const db = drizzle(client);
+      const [item] = await db
+        .update(inventoryItems)
+        .set({ quantity: sql`${inventoryItems.quantity} + ${delta}`, updatedAt: new Date() })
+        .where(eq(inventoryItems.id, itemId))
+        .returning();
+      await db.insert(stockAdjustments).values({
+        inventoryItemId: itemId,
+        delta,
+        quantityBefore: before,
+        quantityAfter: item.quantity,
+        reason: reason ?? null,
+        userId: req.user?.id ?? null,
+      });
+      return { status: 200, body: item };
+    });
   });
 
   // ─── Clients ─────────────────────────────────────────────────────────

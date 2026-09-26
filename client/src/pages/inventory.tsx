@@ -46,12 +46,12 @@ export default function InventoryPage() {
 
   // One save at a time, and the first check in carries an Idempotency-Key.
   const saveGuard = useSaveGuard();
-  async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string }) {
+  async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number }) {
     await saveGuard.run((key) => saveItem(key, form));
   }
 
-  async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string }): Promise<boolean> {
-    const item = addOrUpdateItem(form);
+  async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number }): Promise<boolean> {
+    const item = addOrUpdateItem(form, { idempotencyKey: `${key}.item` });
     
     // If it's a new item (implied if we pass initialQuantity > 0)
     if (form.initialQuantity && form.initialQuantity > 0) {
@@ -163,7 +163,9 @@ export default function InventoryPage() {
                 <InventoryEditDialog
                   item={editingItem}
                   onCancel={() => setEditingItem(null)}
-                  onSave={handleSave}
+                  onSave={(form) =>
+                    handleSave(editingItem?.id ? { ...form, expectedQuantity: editingItem.quantity } : form)
+                  }
                   upsertBarcodeCache={upsertBarcodeCache}
                   barcodeCache={barcodeCache}
                   sources={sources}
@@ -759,7 +761,7 @@ function CsvImportDialog({
   addOrUpdateItem,
 }: {
   onClose: () => void;
-  addOrUpdateItem: (partial: Partial<InventoryItem> & { name: string }) => InventoryItem;
+  addOrUpdateItem: (partial: Partial<InventoryItem> & { name: string }, options?: { addQuantity?: boolean }) => InventoryItem;
 }) {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -861,7 +863,7 @@ function CsvImportDialog({
           weightPerUnitLbs: weightVal,
         };
 
-        addOrUpdateItem(item);
+        addOrUpdateItem(item, { addQuantity: true });
         importResult.created++;
 
         // Attempt barcode enrichment if barcode is present
