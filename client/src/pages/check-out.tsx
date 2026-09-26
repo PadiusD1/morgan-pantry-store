@@ -5,7 +5,7 @@ import { currentLocation } from "@/lib/location";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
-import { apiRequest, withIdempotencyKey } from "@/lib/queryClient";
+import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -414,7 +414,7 @@ export default function CheckOutPage() {
       }
       toast({
         title: "Check-out failed",
-        description: "The distribution could not be recorded. Please try again.",
+        description: saveErrorMessage(e, "The distribution could not be recorded. Please try again."),
         variant: "destructive",
       });
       return;

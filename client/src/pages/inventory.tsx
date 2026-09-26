@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
-import { withIdempotencyKey } from "@/lib/queryClient";
+import { saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -67,10 +67,10 @@ export default function InventoryPage() {
           donor: form.donor,
           location
         }));
-      } catch {
+      } catch (err) {
         toast({
           title: "Stock not recorded",
-          description: `${item.name} was saved but the ${form.initialQuantity} received were not recorded. Record them on Check in.`,
+          description: saveErrorMessage(err, `${item.name} was saved but the ${form.initialQuantity} received were not recorded. Record them on Check in.`),
           variant: "destructive",
         });
         // The dialog closes, so the next save is a new action with a new key.

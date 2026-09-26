@@ -4,7 +4,7 @@ import { useRepository } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
-import { apiRequest, withIdempotencyKey } from "@/lib/queryClient";
+import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -306,7 +306,7 @@ export default function CheckInPage() {
       }
       toast({
         title: "Check-in failed",
-        description: "The stock could not be recorded. Please try again.",
+        description: saveErrorMessage(err, "The stock could not be recorded. Please try again."),
         variant: "destructive",
       });
       return;

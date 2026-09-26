@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, saveErrorMessage } from "@/lib/queryClient";
 import { toApiClientBody } from "@/lib/api-types";
 import { useSaveGuard } from "@/lib/save-guard";
 import type { ClientRecord } from "@/lib/repository";
@@ -190,10 +190,10 @@ export default function PartnersPage() {
       } else {
         await apiRequest("POST", "/api/clients", toApiClientBody(partner));
       }
-    } catch {
+    } catch (err) {
       toast({
         title: "Partner not saved",
-        description: "The server did not save this partner. Your entries are kept, check them and try again.",
+        description: saveErrorMessage(err, "The server did not save this partner. Your entries are kept, check them and try again."),
         variant: "destructive",
       });
       return;
