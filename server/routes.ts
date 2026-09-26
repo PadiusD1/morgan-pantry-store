@@ -14,6 +14,7 @@ import { findOrCreateDonor } from "./donor-find-or-create";
 import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
+import { monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -1993,15 +1994,9 @@ export async function registerRoutes(app: Express): Promise<void> {
               a[0].localeCompare(b[0]),
             );
             for (const [itemName, itemAgg] of sortedItems) {
-              lines.push([
-                csvEscape(category),
-                csvEscape(itemName),
-                itemAgg.quantity.toString(),
-                itemAgg.costPerUnit.toFixed(2),
-                itemAgg.total.toFixed(2),
-              ].join(","));
+              lines.push(monthlyItemLine(category, itemName, itemAgg.quantity, itemAgg.costPerUnit, itemAgg.total));
             }
-            lines.push(`${csvEscape(category)} subtotal,,,,${catAgg.total.toFixed(2)}`);
+            lines.push(monthlySubtotalLine(category, catAgg.total));
           }
           lines.push(`${MONTH_NAMES[month - 1]} ${year} total,,,,${monthAgg.total.toFixed(2)}`);
         }
@@ -2027,14 +2022,4 @@ export async function registerRoutes(app: Express): Promise<void> {
       res.status(500).json({ message: "Failed to generate monthly summary" });
     }
   });
-}
-
-// ─── CSV helpers ──────────────────────────────────────────────────────
-function csvEscape(value: string): string {
-  if (value == null) return "";
-  const str = String(value);
-  if (/[",\n]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
 }
