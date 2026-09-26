@@ -15,7 +15,7 @@ import { findOrCreateDonor } from "./donor-find-or-create";
 import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
-import { monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
+import { monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -1971,7 +1971,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       ];
       const lines: string[] = [];
       lines.push(`Morgan State FRC Monthly Summary${includeEmergencyOnly ? " (Emergency Shop Appointments only)" : ""}`);
-      lines.push(`Generated,${new Date().toLocaleString()}`);
+      lines.push(monthlyGeneratedLine(new Date()));
       lines.push("");
 
       const sortedYears = Array.from(yearMap.keys()).sort();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { monthlyItemLine, monthlySubtotalLine } from "../server/monthly-csv";
+import { monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "../server/monthly-csv";
 
 describe("monthly summary CSV lines", () => {
   it("writes plain names and fixed decimals unchanged", () => {
@@ -22,5 +22,15 @@ describe("monthly summary CSV lines", () => {
   it("never guards the number cells, even a negative one", () => {
     expect(monthlyItemLine("Snacks", "Test Popcorn", -3, 1, -3)).toBe("Snacks,Test Popcorn,-3,1.00,-3.00");
     expect(monthlySubtotalLine("Snacks", -3)).toBe("Snacks subtotal,,,,-3.00");
+  });
+});
+
+describe("monthly summary CSV Generated line", () => {
+  it("writes a summer time in New York with EDT as one quoted cell", () => {
+    expect(monthlyGeneratedLine(new Date("2026-07-15T16:05:09Z"))).toBe('Generated,"7/15/2026, 12:05:09 PM EDT"');
+  });
+
+  it("writes a winter time in New York with EST as one quoted cell", () => {
+    expect(monthlyGeneratedLine(new Date("2026-01-15T16:05:09Z"))).toBe('Generated,"1/15/2026, 11:05:09 AM EST"');
   });
 });
