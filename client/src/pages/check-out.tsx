@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRepository, getCurrentLocation } from "@/lib/repository";
+import { useRepository } from "@/lib/repository";
+import { currentLocation } from "@/lib/location";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
@@ -377,7 +378,7 @@ export default function CheckOutPage() {
       return;
     }
 
-    const location = await getCurrentLocation();
+    const location = currentLocation();
 
     let result: { client: typeof clients[number] };
     try {

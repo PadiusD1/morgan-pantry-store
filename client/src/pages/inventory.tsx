@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { useRepository, InventoryItem, isLowStock, getCurrentLocation, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
+import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
+import { currentLocation } from "@/lib/location";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -49,7 +50,7 @@ export default function InventoryPage() {
       if (form.source) addSource(form.source);
       if (form.donor && form.source === "Donation") addDonor(form.donor);
 
-      const location = await getCurrentLocation();
+      const location = currentLocation();
       recordInbound({
         itemId: item.id,
         quantity: form.initialQuantity,
