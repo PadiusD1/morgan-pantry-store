@@ -68,7 +68,10 @@ function isReadMethod(method: string): boolean {
 }
 
 // The writes that carry an Idempotency-Key, one key per logical action.
-const IDEMPOTENT_WRITES = ["POST /api/transactions"];
+const IDEMPOTENT_WRITES = ["POST /api/transactions", "POST /api/clients"];
+// A check out may create its client and then its transaction under one action
+// key, so the client create gets its own key derived from the action key.
+const KEY_SUFFIX: Record<string, string> = { "POST /api/clients": ".client" };
 let actionKey: string | null = null;
 
 export type ApiRequestOptions = { idempotencyKey?: string };
@@ -95,10 +98,11 @@ export function idempotencyHeaders(
   url: string,
   options?: ApiRequestOptions,
 ): Record<string, string> {
+  const route = `${method.toUpperCase()} ${requestPath(url)}`;
   const key =
     options?.idempotencyKey ??
-    (actionKey && IDEMPOTENT_WRITES.includes(`${method.toUpperCase()} ${requestPath(url)}`)
-      ? actionKey
+    (actionKey && IDEMPOTENT_WRITES.includes(route)
+      ? actionKey + (KEY_SUFFIX[route] ?? "")
       : undefined);
   return key ? { "Idempotency-Key": key } : {};
 }

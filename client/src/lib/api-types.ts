@@ -48,6 +48,7 @@ export type ApiClient = {
   contact: string | null;
   phone: string | null;
   email: string | null;
+  classification?: string | null;
   address: string | null;
   dateOfBirth: string | null;
   householdSize: number | null;
@@ -132,6 +133,7 @@ export function toClientRecord(api: ApiClient): ClientRecord {
     contact: api.contact ?? undefined,
     phone: api.phone ?? undefined,
     email: api.email ?? undefined,
+    classification: api.classification ?? undefined,
     address: api.address ?? undefined,
     dateOfBirth: api.dateOfBirth ?? undefined,
     householdSize: api.householdSize ?? 1,
@@ -213,6 +215,7 @@ export function toApiClientBody(client: Partial<ClientRecord>) {
   if (client.contact !== undefined) body.contact = client.contact || null;
   if (client.phone !== undefined) body.phone = client.phone || null;
   if (client.email !== undefined) body.email = client.email || null;
+  if (client.classification !== undefined) body.classification = client.classification || null;
   if (client.address !== undefined) body.address = client.address || null;
   if (client.dateOfBirth !== undefined) body.dateOfBirth = client.dateOfBirth || null;
   if (client.householdSize !== undefined) body.householdSize = client.householdSize ?? 1;
