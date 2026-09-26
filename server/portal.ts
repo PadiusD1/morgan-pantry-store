@@ -10,7 +10,7 @@ import { storage } from "./storage";
 import {
   createFoodRequest,
   getRequestPayload,
-  releaseRequestReservations,
+  moveRequestStatus,
   RequestRateLimitError,
 } from "./request-service";
 
@@ -140,11 +140,9 @@ export function registerPortalRoutes(app: Express): void {
       });
     }
 
-    await releaseRequestReservations(req.params.id);
-    await storage.updateRequest(req.params.id, {
-      status: "cancelled",
-      cancelledAt: new Date(),
-    });
+    if (!(await moveRequestStatus(req.params.id, "cancelled", ["pending", "under_review"]))) {
+      return res.status(409).json({ message: "This request was already changed" });
+    }
     await storage.createAuditLogEntry({
       requestId: req.params.id,
       action: "cancelled",
