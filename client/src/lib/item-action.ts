@@ -127,7 +127,7 @@ export type ItemSaveSteps<P> = {
   /** Picks or creates the donor, when a starting quantity is recorded. */
   pickDonor?: () => Promise<P>;
   /** Records the starting quantity against the canonical id. */
-  recordStock?: (itemId: string, picked: P | undefined) => Promise<void>;
+  recordStock?: (itemId: string, picked: P | undefined) => Promise<unknown>;
 };
 
 export type ItemSaveResult =
