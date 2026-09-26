@@ -34,7 +34,7 @@ import {
   releaseRequestReservations,
   RequestRateLimitError,
 } from "./request-service";
-import { moveRequestStatus } from "./request-service";
+import { claimRequest, moveRequestStatus } from "./request-service";
 
 const PICKUP_STATUSES = ["approved", "partially_approved", "ready_for_pickup"];
 const OPEN_STATUSES = ["pending", "under_review", ...PICKUP_STATUSES];
@@ -1202,6 +1202,13 @@ export async function registerRoutes(app: Express): Promise<void> {
       try {
         await client.query("BEGIN");
 
+        const previousStatus = await claimRequest(client, req.params.id, ["pending", "under_review"]);
+        if (!previousStatus) {
+          await client.query("ROLLBACK");
+          client.release();
+          return res.status(409).json({ message: "This request was already changed" });
+        }
+
         for (const ri of requestItems) {
           const approvedQty = approvalMap.has(ri.id) ? approvalMap.get(ri.id)! : ri.requestedQuantity;
 
@@ -1246,7 +1253,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         await client.query(
           `INSERT INTO request_audit_log (request_id, action, details, actor, previous_status, new_status)
            VALUES ($1, 'approved', $2, $3, $4, $5)`,
-          [req.params.id, isPartial ? "Partially approved" : "Fully approved", actor, request.status, newStatus],
+          [req.params.id, isPartial ? "Partially approved" : "Fully approved", actor, previousStatus, newStatus],
         );
 
         await client.query(

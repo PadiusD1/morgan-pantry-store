@@ -193,3 +193,114 @@ describe("a fulfilled request copies the student's classification", () => {
     expect(await fulfilledClassification(other.request)).toBeNull();
   });
 });
+
+/** A pending request for 2 units of an item of 10 with nothing reserved. */
+async function pendingRequest() {
+  const item = (
+    await t.pool.query(
+      `INSERT INTO inventory_items (name, quantity) VALUES ('Test Beans One', 10) RETURNING id`,
+    )
+  ).rows[0].id;
+  const request = (
+    await t.pool.query(
+      `INSERT INTO requests (client_name, client_identifier, reason, status)
+       VALUES ('Test Student One', 'T0000001', 'Test reason', 'pending') RETURNING id`,
+    )
+  ).rows[0].id;
+  await t.pool.query(
+    `INSERT INTO request_items (request_id, inventory_item_id, item_name, requested_quantity)
+     VALUES ($1, $2, 'Test Beans One', 2)`,
+    [request, item],
+  );
+  return { item, request };
+}
+
+/** Holds a row lock in an open transaction until the returned function commits it. */
+async function hold(sql: string, id: string) {
+  const c = await t.pool.connect();
+  await c.query("BEGIN");
+  await c.query(sql, [id]);
+  return async () => {
+    await c.query("COMMIT");
+    c.release();
+  };
+}
+
+/** Waits up to 3 seconds for n backends of this database to wait on a lock. */
+async function lockWaiters(n: number) {
+  for (let i = 0; i < 150; i++) {
+    const { rows } = await t.pool.query(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    if (rows[0].n >= n) return true;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return false;
+}
+
+async function approvals(request: string) {
+  const { rows } = await t.pool.query(
+    `SELECT count(*)::int AS n FROM request_audit_log WHERE request_id = $1 AND action = 'approved'`,
+    [request],
+  );
+  return rows[0].n;
+}
+
+async function statusOf(request: string) {
+  const { rows } = await t.pool.query(`SELECT status FROM requests WHERE id = $1`, [request]);
+  return rows[0].status;
+}
+
+describe("approval claims the request inside its transaction", () => {
+  it("two overlapping approvals of one pending request, one wins and stock is reserved once", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const a = post(`/api/requests/${request}/approve`);
+    const b = post(`/api/requests/${request}/approve`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(bothWaited).toBe(true);
+    expect([ra.status, rb.status].sort()).toEqual([200, 409]);
+    const loser = ra.status === 409 ? ra : rb;
+    expect((await loser.json()).message).toBe("This request was already changed");
+    expect(await statusOf(request)).toBe("approved");
+    expect(await stock(item)).toEqual([10, 2]);
+    expect(await approvals(request)).toBe(1);
+  });
+
+  it("approval first then a staff cancel ends cancelled with nothing reserved", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const approve = post(`/api/requests/${request}/approve`);
+    await lockWaiters(1);
+    const cancel = post(`/api/requests/${request}/cancel`);
+    await lockWaiters(2);
+    await release();
+    const [ra, rc] = await Promise.all([approve, cancel]);
+    expect(rc.status).toBe(200);
+    expect([200, 409]).toContain(ra.status);
+    expect(await statusOf(request)).toBe("cancelled");
+    expect(await stock(item)).toEqual([10, 0]);
+    expect(await approvals(request)).toBe(ra.status === 200 ? 1 : 0);
+  });
+
+  it("a staff cancel first then an approval, the approval gets 409 and reserves nothing", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM requests WHERE id = $1 FOR UPDATE`, request);
+    const cancel = post(`/api/requests/${request}/cancel`);
+    await lockWaiters(1);
+    const approve = post(`/api/requests/${request}/approve`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [rc, ra] = await Promise.all([cancel, approve]);
+    expect(bothWaited).toBe(true);
+    expect(rc.status).toBe(200);
+    expect(ra.status).toBe(409);
+    expect((await ra.json()).message).toBe("This request was already changed");
+    expect(await statusOf(request)).toBe("cancelled");
+    expect(await stock(item)).toEqual([10, 0]);
+    expect(await approvals(request)).toBe(0);
+  });
+});

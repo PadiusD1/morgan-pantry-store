@@ -151,6 +151,23 @@ export async function releaseRequestReservations(
 }
 
 /**
+ * Locks the request row as the first statement of the caller's transaction,
+ * before any inventory row, and returns its status while it is still one of
+ * `expected`. Returns null when another writer already moved it.
+ */
+export async function claimRequest(
+  client: { query: typeof pool.query },
+  requestId: string,
+  expected: readonly string[],
+): Promise<string | null> {
+  const { rows } = await client.query(
+    `SELECT status FROM requests WHERE id = $1 AND status = ANY($2) FOR UPDATE`,
+    [requestId, expected],
+  );
+  return rows.length ? rows[0].status : null;
+}
+
+/**
  * Moves a request to `next` only while it is still in one of `expected`, as
  * the first statement of its transaction, then releases any reservation.
  * Returns false when another request already moved it (PLAN.md defect 4).
