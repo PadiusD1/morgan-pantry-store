@@ -186,6 +186,7 @@ export default function ReportsPage() {
   }
 
   function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!canExportServer) return;
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -286,16 +287,19 @@ export default function ReportsPage() {
               </Button>
             </div>
           )}
-          <div className="flex flex-col gap-1 md:items-end">
-            <label
-              className="text-xs font-medium text-muted-foreground"
-              htmlFor="import-json"
-              data-testid="label-import-json"
-            >
-              Import JSON backup
-            </label>
-            <Input id="import-json" type="file" accept="application/json" onChange={handleImport} data-testid="input-import-json" />
-          </div>
+          {/* A backup import writes many records at once, so it is for admin and staff too. */}
+          {canExportServer && (
+            <div className="flex flex-col gap-1 md:items-end">
+              <label
+                className="text-xs font-medium text-muted-foreground"
+                htmlFor="import-json"
+                data-testid="label-import-json"
+              >
+                Import JSON backup
+              </label>
+              <Input id="import-json" type="file" accept="application/json" onChange={handleImport} data-testid="input-import-json" />
+            </div>
+          )}
         </CardContent>
       </Card>
 
