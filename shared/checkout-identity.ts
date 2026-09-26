@@ -59,6 +59,7 @@ export type LookupClient = {
   identifier?: string | null;
   email?: string | null;
   clientType?: string | null;
+  classification?: string | null;
 };
 
 /**
@@ -142,6 +143,8 @@ export type CheckoutClientPayload = {
 /**
  * The client part of a check out. A typed student ID wins, a returning
  * record keeps its identifier, a new record with no ID gets a generated one.
+ * Pass the save key as `random` so a retry of the same save regenerates the
+ * same identifier and the retried create matches the first one.
  */
 export function buildCheckoutClient(input: {
   existing?: LookupClient | null;
@@ -155,7 +158,7 @@ export function buildCheckoutClient(input: {
 }): CheckoutClientPayload {
   const studentId = (input.studentId ?? "").trim();
   const email = (input.email ?? "").trim();
-  const classification = (input.classification ?? "").trim();
+  const classification = (input.classification ?? "").trim() || (input.existing?.classification ?? "").trim();
   const contact = (input.contact ?? "").trim();
   const existingIdentifier = (input.existing?.identifier ?? "").trim();
   const identifier =

@@ -366,7 +366,8 @@ export default function CheckOutPage() {
       email: clientEmail,
       classification: clientClassification,
       contact: clientContact,
-      takenIdentifiers: clients.map((c) => c.identifier),
+      // Seeded by the save key, so a retry after a failed save sends the same identifier.
+      random: () => key,
     });
     const identifierFinal = clientPayload.identifier;
 

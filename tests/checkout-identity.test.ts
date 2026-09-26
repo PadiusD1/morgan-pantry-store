@@ -148,3 +148,19 @@ describe("buildCheckoutClient", () => {
       .toEqual({ name: "Test Student Eight", identifier: "D8888888" });
   });
 });
+
+describe("retry and returning classification", () => {
+  it("regenerates the same identifier for a retry of the same save key", () => {
+    const key = "9c1b7d4e-3f2a-4a00-9b00-000000000000";
+    const first = buildCheckoutClient({ name: "Test Student Nine", random: () => key });
+    const retry = buildCheckoutClient({ name: "Test Student Nine", random: () => key });
+    expect(first.identifier).toBe("FRC9C1B7D4E3F");
+    expect(retry).toEqual(first);
+  });
+
+  it("copies a returning student's stored classification when none is picked", () => {
+    const existing = { id: "c4", name: "Test Student Four", identifier: "E4444444", classification: "Sophomore" };
+    expect(buildCheckoutClient({ existing, name: "Test Student Four" }).classification).toBe("Sophomore");
+    expect(buildCheckoutClient({ existing, name: "Test Student Four", classification: "Junior" }).classification).toBe("Junior");
+  });
+});
