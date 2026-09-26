@@ -7,6 +7,7 @@ import { createScanQueue, useScanner } from "@/lib/scanner";
 import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
+import { itemOptions, nextSelectedId, resolveSelectedId } from "@/lib/check-in-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -90,6 +91,8 @@ export default function CheckInPage() {
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedId, setSelectedId] = useState<string | "">("");
+  // A newly registered item, kept selectable until the list holds its saved row.
+  const [pinnedItem, setPinnedItem] = useState<ReturnType<typeof toInventoryItem> | null>(null);
   const [quantity, setQuantity] = useState<number>(0);
   const [source, setSource] = useState("");
   const [donor, setDonor] = useState("");
@@ -128,9 +131,14 @@ export default function CheckInPage() {
   const isDonationSource = source === "Donation" || source === "Partner Donation";
 
   // Get the currently selected item for enrichment display
+  const shownSelectedId = resolveSelectedId(selectedId, sortedInventory, pinnedItem);
+  const itemChoices = useMemo(
+    () => itemOptions(sortedInventory, pinnedItem, shownSelectedId),
+    [sortedInventory, pinnedItem, shownSelectedId],
+  );
   const selectedItem = useMemo(
-    () => (selectedId ? inventory.find((i) => i.id === selectedId) : undefined),
-    [selectedId, inventory],
+    () => (shownSelectedId ? itemChoices.find((i) => i.id === shownSelectedId) : undefined),
+    [shownSelectedId, itemChoices],
   );
 
   async function handleBarcodeLookup(code: string) {
@@ -175,6 +183,7 @@ export default function CheckInPage() {
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         setMode("existing");
+        setPinnedItem(item);
         setSelectedId(item.id);
         // First-time scan of a new barcode: pre-fill quantity to 1.
         setQuantity(1);
@@ -233,7 +242,7 @@ export default function CheckInPage() {
       return;
     }
 
-    let itemId = selectedId;
+    let itemId = shownSelectedId;
 
     if (mode === "new") {
       if (!newItem.name.trim()) {
@@ -259,6 +268,7 @@ export default function CheckInPage() {
         allergens: newItem.allergens,
       });
       itemId = created.id;
+      setPinnedItem(created);
       // Cache barcode so future scans remember all saved info
       if (newItem.barcode?.trim()) {
         upsertBarcodeCache(newItem.barcode.trim(), {
@@ -452,14 +462,14 @@ export default function CheckInPage() {
                 Item
               </label>
               <Select
-                value={selectedId}
-                onValueChange={(val) => setSelectedId(val)}
+                value={shownSelectedId}
+                onValueChange={(val) => setSelectedId((cur) => nextSelectedId(cur, val))}
               >
                 <SelectTrigger id="select-item" data-testid="select-existing-item">
                   <SelectValue placeholder="Select an item" />
                 </SelectTrigger>
                 <SelectContent>
-                  {sortedInventory.map((item) => (
+                  {itemChoices.map((item) => (
                     <SelectItem key={item.id} value={item.id} data-testid={`option-existing-item-${item.id}`}>
                       {item.brand ? `${item.brand} - ` : ""}{item.name} • {item.quantity} on hand
                     </SelectItem>
