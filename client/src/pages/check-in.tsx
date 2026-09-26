@@ -30,6 +30,7 @@ export default function CheckInPage() {
 
   // Who donated it, donors and partner organisations in one list from the server.
   const { data: donorOptions = [] } = useDonationSources();
+  const partnerCount = donorOptions.filter((o) => o.kind === "partner").length;
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedId, setSelectedId] = useState<string | "">("");
@@ -61,12 +62,12 @@ export default function CheckInPage() {
 
   const sourceOptions = useMemo(() => {
     const next = [...(sources || [])];
-    if (apiPartners.length > 0 && !next.includes("Partner Donation")) {
+    if (partnerCount > 0 && !next.includes("Partner Donation")) {
       const donationIndex = next.indexOf("Donation");
       next.splice(donationIndex >= 0 ? donationIndex + 1 : next.length, 0, "Partner Donation");
     }
     return next;
-  }, [apiPartners.length, sources]);
+  }, [partnerCount, sources]);
 
   const isDonationSource = source === "Donation" || source === "Partner Donation";
 
