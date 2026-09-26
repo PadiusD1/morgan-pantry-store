@@ -5,6 +5,7 @@ import {
   sourceFields,
   sourceNameOf,
 } from "@shared/donation-source";
+import { pickFields } from "@/lib/donation-source";
 
 describe("buildSourceOptions", () => {
   it("lists donors and partners together, sorted by name, each with its kind", () => {
@@ -72,5 +73,26 @@ describe("attributeDonor", () => {
   it("attributes nothing when neither matches", () => {
     expect(attributeDonor({ donor: "Nobody" }, donors)).toBeNull();
     expect(attributeDonor({ donor: null }, donors)).toBeNull();
+  });
+});
+
+describe("pickFields", () => {
+  it("finds or creates a new donor with a key derived from the save key", async () => {
+    const calls: [string, string][] = [];
+    const fields = await pickFields({ newName: "  Test Farm Three " }, "k1", async (name, key) => {
+      calls.push([name, key]);
+      return { id: "d9", name };
+    });
+    expect(calls).toEqual([["Test Farm Three", "k1:donor"]]);
+    expect(fields).toEqual({ donor: "Test Farm Three", donorId: "d9" });
+  });
+
+  it("posts nothing for a pick from the list", async () => {
+    const fields = await pickFields(
+      { option: { key: "partner:p1", kind: "partner", id: "p1", name: "Test Pantry", organization: null } },
+      "k1",
+      async () => { throw new Error("should not post"); },
+    );
+    expect(fields).toEqual({ donor: "Test Pantry", donorClientId: "p1" });
   });
 });
