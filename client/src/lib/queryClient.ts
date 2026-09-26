@@ -20,9 +20,15 @@ function isAuthPath(url: string): boolean {
  * instead of leaving them staring at a broken page. Guarded against redirect
  * loops (already on /login) and against auth endpoints (login/logout/me).
  */
+// After a save is refused with a 401, reads stop redirecting for a while, so the
+// refetch that follows the failed save does not unload the form and its entries.
+const SAVE_401_HOLD_MS = 10 * 60 * 1000;
+let redirectHeldUntil = 0;
+
 function redirectToLoginOnExpiredSession(res: Response) {
   if (typeof window === "undefined") return;
   if (res.status !== 401) return;
+  if (Date.now() < redirectHeldUntil) return;
   if (isAuthPath(res.url)) return;
   if (window.location.pathname === LOGIN_ROUTE) return;
   window.location.href = LOGIN_ROUTE;
@@ -36,18 +42,89 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+/** A save refused because the session ended. The page keeps its entries. */
+export class SessionExpiredError extends Error {
+  constructor(text: string) {
+    super(`401: ${text}`);
+    this.name = "SessionExpiredError";
+  }
+}
+
+export const SESSION_EXPIRED_MESSAGE =
+  "This was not saved because you were signed out. Sign in again in another tab, then save here again.";
+
+export function isSessionExpiredError(err: unknown): boolean {
+  return err instanceof SessionExpiredError || (err instanceof Error && err.name === "SessionExpiredError");
+}
+
+/** The text a failed save shows, the sign in message for a 401, else the fallback. */
+export function saveErrorMessage(err: unknown, fallback: string): string {
+  return isSessionExpiredError(err) ? SESSION_EXPIRED_MESSAGE : fallback;
+}
+
+function isReadMethod(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === "GET" || m === "HEAD";
+}
+
+// The writes that carry an Idempotency-Key, one key per logical action.
+const IDEMPOTENT_WRITES = ["POST /api/transactions"];
+let actionKey: string | null = null;
+
+export type ApiRequestOptions = { idempotencyKey?: string };
+
+function requestPath(url: string): string {
+  return url.replace(/^[a-z]+:\/\/[^/]+/i, "").split(/[?#]/)[0];
+}
+
+/**
+ * Runs one logical save with its key. Inside it, the transaction write that
+ * apiRequest sends carries the key, so a retry sends the same key.
+ */
+export async function withIdempotencyKey<T>(key: string, run: () => Promise<T>): Promise<T> {
+  actionKey = key;
+  try {
+    return await run();
+  } finally {
+    if (actionKey === key) actionKey = null;
+  }
+}
+
+export function idempotencyHeaders(
+  method: string,
+  url: string,
+  options?: ApiRequestOptions,
+): Record<string, string> {
+  const key =
+    options?.idempotencyKey ??
+    (actionKey && IDEMPOTENT_WRITES.includes(`${method.toUpperCase()} ${requestPath(url)}`)
+      ? actionKey
+      : undefined);
+  return key ? { "Idempotency-Key": key } : {};
+}
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  options?: ApiRequestOptions,
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers: {
+      ...(data ? { "Content-Type": "application/json" } : {}),
+      ...idempotencyHeaders(method, url, options),
+    },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
 
+  // A 401 on a save must not redirect first, or the form and its entries are lost.
+  if (res.status === 401 && !isReadMethod(method) && !isAuthPath(url)) {
+    redirectHeldUntil = Date.now() + SAVE_401_HOLD_MS;
+    const text = (await res.text()) || res.statusText;
+    throw new SessionExpiredError(text);
+  }
   await throwIfResNotOk(res);
   return res;
 }

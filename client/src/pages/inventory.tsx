@@ -1,5 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { useRepository, InventoryItem, isLowStock, getCurrentLocation, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
+import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
+import { currentLocation } from "@/lib/location";
+import { saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { useSaveGuard } from "@/lib/save-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -41,7 +44,13 @@ export default function InventoryPage() {
     [inventory, query, categoryFilter],
   );
 
+  // One save at a time, and the first check in carries an Idempotency-Key.
+  const saveGuard = useSaveGuard();
   async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string }) {
+    await saveGuard.run((key) => saveItem(key, form));
+  }
+
+  async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string }): Promise<boolean> {
     const item = addOrUpdateItem(form);
     
     // If it's a new item (implied if we pass initialQuantity > 0)
@@ -49,14 +58,25 @@ export default function InventoryPage() {
       if (form.source) addSource(form.source);
       if (form.donor && form.source === "Donation") addDonor(form.donor);
 
-      const location = await getCurrentLocation();
-      recordInbound({
-        itemId: item.id,
-        quantity: form.initialQuantity,
-        source: form.source,
-        donor: form.donor,
-        location
-      });
+      const location = currentLocation();
+      try {
+        await withIdempotencyKey(key, () => recordInbound({
+          itemId: item.id,
+          quantity: form.initialQuantity!,
+          source: form.source,
+          donor: form.donor,
+          location
+        }));
+      } catch (err) {
+        toast({
+          title: "Stock not recorded",
+          description: saveErrorMessage(err, `${item.name} was saved but the ${form.initialQuantity} received were not recorded. Record them on Check in.`),
+          variant: "destructive",
+        });
+        // The dialog closes, so the next save is a new action with a new key.
+        setEditingItem(null);
+        return true;
+      }
       toast({
         title: "Inventory added",
         description: `Created ${item.name} and recorded ${form.initialQuantity} received${location ? " with location" : ""}.`,
@@ -68,6 +88,7 @@ export default function InventoryPage() {
       });
     }
     setEditingItem(null);
+    return true;
   }
 
   return (

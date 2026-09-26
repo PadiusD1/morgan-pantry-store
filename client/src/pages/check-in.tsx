@@ -1,8 +1,11 @@
 import React, { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRepository, getCurrentLocation } from "@/lib/repository";
+import { useRepository } from "@/lib/repository";
+import { currentLocation } from "@/lib/location";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
-import { apiRequest } from "@/lib/queryClient";
+import { createScanQueue, useScanner } from "@/lib/scanner";
+import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { useSaveGuard } from "@/lib/save-guard";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -159,7 +162,6 @@ export default function CheckInPage() {
           description: `${item.name} (${item.quantity} on hand). Existing data populated. Scan again or confirm to record.`,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        setTimeout(() => quantityInputRef.current?.focus(), 100);
         return;
       }
 
@@ -186,7 +188,6 @@ export default function CheckInPage() {
           title: "New item added automatically",
           description: `${item.name} found via ${result.product.winningSource}. Quantity preset to 1 — adjust or scan again to add more.`,
         });
-        setTimeout(() => quantityInputRef.current?.focus(), 100);
         return;
       }
 
@@ -209,8 +210,21 @@ export default function CheckInPage() {
     }
   }
 
+  // A scan always reaches the lookup, whatever field has focus, and a code
+  // that arrives during a lookup waits its turn.
+  const lookupRef = useRef(handleBarcodeLookup);
+  lookupRef.current = handleBarcodeLookup;
+  const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
+  useScanner(scanQueue.push);
+
+  // One save at a time, and a retry keeps the same Idempotency-Key.
+  const saveGuard = useSaveGuard();
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    await saveGuard.run(submitCheckIn);
+  }
+
+  async function submitCheckIn(key: string): Promise<boolean | void> {
     if (!quantity || quantity <= 0) {
       toast({
         title: "Quantity required",
@@ -274,17 +288,17 @@ export default function CheckInPage() {
         }
     }
 
-    const location = await getCurrentLocation();
+    const location = currentLocation();
 
     try {
-      await recordInbound({
+      await withIdempotencyKey(key, () => recordInbound({
         itemId,
         quantity,
         source: source.trim() || undefined,
         donor: (isDonationSource ? (donor.trim() || undefined) : undefined),
         donorClientId: isDonationSource ? donorPartnerId : undefined,
         location,
-      });
+      }));
     } catch (err) {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
@@ -292,7 +306,7 @@ export default function CheckInPage() {
       }
       toast({
         title: "Check-in failed",
-        description: "The stock could not be recorded. Please try again.",
+        description: saveErrorMessage(err, "The stock could not be recorded. Please try again."),
         variant: "destructive",
       });
       return;
@@ -320,6 +334,7 @@ export default function CheckInPage() {
       setIsNewCategory(false);
       setCustomCategory("");
     }
+    return true;
   }
 
   return (
@@ -344,7 +359,7 @@ export default function CheckInPage() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  handleBarcodeLookup(e.currentTarget.value);
+                  scanQueue.push(e.currentTarget.value);
                   e.currentTarget.value = "";
                 }
               }}
