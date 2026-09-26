@@ -18,6 +18,7 @@ export async function setupVite(server: Server, app: Express) {
   const vite = await createViteServer({
     ...viteConfig,
     configFile: false,
+    ...(process.env.VITE_CACHE_DIR ? { cacheDir: process.env.VITE_CACHE_DIR } : {}),
     customLogger: {
       ...viteLogger,
       error: (msg, options) => {
