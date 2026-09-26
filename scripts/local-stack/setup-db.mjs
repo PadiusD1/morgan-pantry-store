@@ -12,7 +12,7 @@ function refuse(msg) {
   console.error(`setup refused because ${msg}`);
   process.exit(2);
 }
-if (Object.keys(process.env).some((k) => k.startsWith("UPSTASH"))) refuse("an UPSTASH variable is set");
+if (Object.keys(process.env).some((k) => k.startsWith("UPSTASH") || k.startsWith("KV_REST_API"))) refuse("an UPSTASH or KV_REST_API variable is set");
 const url = new URL(DATABASE_URL ?? "");
 if (url.hostname !== "localhost") refuse("DATABASE_URL is not localhost");
 const dbName = url.pathname.slice(1);

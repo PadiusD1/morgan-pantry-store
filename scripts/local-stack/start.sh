@@ -26,7 +26,8 @@ refuse() { echo "local stack refused because $*" >&2; exit 2; }
 
 # Guards. Nothing named UPSTASH may reach the server, the database must be
 # local, and the server folder must hold no .env for dotenv to load.
-if compgen -e | grep -q '^UPSTASH'; then refuse "an UPSTASH variable is set in this shell"; fi
+# Redis.fromEnv also reads the KV_REST_API names, so those are refused too.
+if compgen -e | grep -qE '^(UPSTASH|KV_REST_API)'; then refuse "an UPSTASH or KV_REST_API variable is set in this shell"; fi
 [[ "$DATABASE_URL" =~ ^postgres://[a-z]+@localhost:[0-9]+/[a-z_]+$ ]] || refuse "DATABASE_URL is not localhost"
 [[ "$APP_PORT" =~ ^[0-9]+$ ]] || refuse "PORT is not a number"
 if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then refuse "a server from this script is already running, run stop.sh first"; fi
@@ -82,7 +83,7 @@ SERVER_ENV=(
   FRC_BARCODE_STUB="$FIXTURE"
   VITE_CACHE_DIR="$STACK_ROOT/vite-cache"
 )
-printf '%s\n' "${SERVER_ENV[@]}" | grep -q '^UPSTASH' && refuse "the allowlist names an UPSTASH variable"
+printf '%s\n' "${SERVER_ENV[@]}" | grep -qE '^(UPSTASH|KV_REST_API)' && refuse "the allowlist names an UPSTASH or KV_REST_API variable"
 
 cd "$RUN_DIR"
 setsid env -i "${SERVER_ENV[@]}" "$REPO/node_modules/.bin/tsx" --tsconfig "$REPO/tsconfig.json" \
