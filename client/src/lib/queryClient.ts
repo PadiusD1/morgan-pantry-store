@@ -109,7 +109,9 @@ const sentBodies = new Map<string, string>();
 
 /** Drops the body kept for a key, once its action has succeeded. */
 export function forgetSentBody(key: string): void {
-  sentBodies.delete(key);
+  for (const k of Array.from(sentBodies.keys())) {
+    if (k === key || k.startsWith(`${key}.`)) sentBodies.delete(k);
+  }
 }
 
 export async function apiRequest(
