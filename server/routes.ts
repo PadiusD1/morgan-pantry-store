@@ -15,6 +15,7 @@ import { findOrCreateDonor } from "./donor-find-or-create";
 import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
+import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { easternDate, generatedValue, monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
 import {
   insertInventoryItemSchema,
@@ -584,6 +585,10 @@ export async function registerRoutes(app: Express): Promise<void> {
     const parsedItems: Array<z.infer<typeof insertTransactionItemSchema>> = [];
     if (Array.isArray(rawItems)) {
       for (const rawItem of rawItems) {
+        // Checked before the schema so a scanner code in the quantity gets the plain limit message.
+        if (isOverLineLimit(Number(rawItem?.quantity))) {
+          return res.status(400).json({ message: LINE_QUANTITY_LIMIT_MESSAGE });
+        }
         const itemResult = insertTransactionItemSchema.safeParse({
           ...rawItem,
           transactionId: txId,

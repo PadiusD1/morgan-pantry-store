@@ -66,6 +66,67 @@ describe("save guard", () => {
     expect(keys).toEqual(["key-1", "key-2"]);
   });
 
+  it("keeps the lock after a success until the form reset has rendered", async () => {
+    let held = 0;
+    const guard = createSaveGuard(counterKeys(), () => {
+      held += 1;
+    });
+    const keys: string[] = [];
+    await guard.run((key) => {
+      keys.push(key);
+      return true;
+    });
+    expect(held).toBe(1);
+    expect(guard.isLocked()).toBe(true);
+    // A trailing Enter from the old render, with the quantity just saved.
+    await guard.run((key) => {
+      keys.push(key);
+      return true;
+    });
+    expect(keys).toEqual(["key-1"]);
+    guard.release();
+    expect(guard.isLocked()).toBe(false);
+    await guard.run((key) => {
+      keys.push(key);
+      return true;
+    });
+    expect(keys).toEqual(["key-1", "key-2"]);
+  });
+
+  it("frees the lock at once after a failure so a retry can run", async () => {
+    let held = 0;
+    const guard = createSaveGuard(counterKeys(), () => {
+      held += 1;
+    });
+    const keys: string[] = [];
+    await guard.run((key) => {
+      keys.push(key);
+      return false;
+    });
+    expect(held).toBe(0);
+    expect(guard.isLocked()).toBe(false);
+    await guard.run((key) => {
+      keys.push(key);
+      return true;
+    });
+    expect(keys).toEqual(["key-1", "key-1"]);
+  });
+
+  it("ignores a release while a save is still running", async () => {
+    const guard = createSaveGuard(counterKeys(), () => {});
+    let finish: (ok: boolean) => void = () => {};
+    const first = guard.run(() => new Promise<boolean>((resolve) => {
+      finish = resolve;
+    }));
+    guard.release();
+    expect(guard.isLocked()).toBe(true);
+    finish(true);
+    await first;
+    expect(guard.isLocked()).toBe(true);
+    guard.release();
+    expect(guard.isLocked()).toBe(false);
+  });
+
   it("uses a random UUID by default", () => {
     const guard = createSaveGuard();
     const key = guard.begin();

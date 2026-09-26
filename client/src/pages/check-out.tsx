@@ -7,6 +7,7 @@ import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
+import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -339,6 +340,14 @@ export default function CheckOutPage() {
       });
       return;
     }
+    if (findOverLimitLine(cart)) {
+      toast({
+        title: "Quantity too large",
+        description: LINE_QUANTITY_LIMIT_MESSAGE,
+        variant: "destructive",
+      });
+      return;
+    }
 
     const clientNameFinal = clientName.trim();
     if (!clientNameFinal) {
@@ -412,6 +421,7 @@ export default function CheckOutPage() {
         setIsEmergency(false);
         setFulfillingRequestId(null);
         setRequestItemIdByInventoryId({});
+        return true;
       } catch (e) {
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console

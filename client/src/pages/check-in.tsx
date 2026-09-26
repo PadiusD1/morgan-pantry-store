@@ -6,6 +6,7 @@ import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
+import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { itemOptions, nextSelectedId, resolveSelectedId } from "@/lib/check-in-selection";
@@ -183,6 +184,14 @@ export default function CheckInPage() {
       toast({
         title: "Quantity required",
         description: "Enter a quantity greater than zero to record this check-in.",
+      });
+      return;
+    }
+    if (isOverLineLimit(quantity)) {
+      toast({
+        title: "Quantity too large",
+        description: LINE_QUANTITY_LIMIT_MESSAGE,
+        variant: "destructive",
       });
       return;
     }
