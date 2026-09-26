@@ -3,6 +3,7 @@ import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategor
 import { currentLocation } from "@/lib/location";
 import { saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
+import { itemActionFailureText, runItemSave } from "@/lib/item-action";
 import { pickFields, postDonor, useDonationSources, type DonorPick, type SourceFields } from "@/lib/donation-source";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,7 +18,7 @@ import { CheckCircle2Icon, FileSpreadsheetIcon, PencilIcon, PlusIcon, SearchIcon
 import Papa from "papaparse";
 
 export default function InventoryPage() {
-  const { inventory, addOrUpdateItem, adjustItemQuantity, recordInbound, upsertBarcodeCache, barcodeCache, sources, addSource } = useRepository();
+  const { inventory, addOrUpdateItem, itemSaved, adjustItemQuantity, recordInbound, upsertBarcodeCache, barcodeCache, sources, addSource } = useRepository();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | "all">("all");
@@ -53,48 +54,47 @@ export default function InventoryPage() {
 
   async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }): Promise<boolean> {
     const item = addOrUpdateItem(form, { idempotencyKey: `${key}.item` });
-    
-    // If it's a new item (implied if we pass initialQuantity > 0)
-    if (form.initialQuantity && form.initialQuantity > 0) {
-      if (form.source) addSource(form.source);
-      // A donor pick sends donor_id, a partner pick client_id, a new name is found or created first.
-      let picked: SourceFields = {};
-      try {
-        picked = await pickFields(form.donorPick, key, postDonor);
-      } catch (err) {
-        toast({
-          title: "Stock not recorded",
-          description: saveErrorMessage(err, `${item.name} was saved but the new donor was not. Record the stock on Check in.`),
-          variant: "destructive",
-        });
-        setEditingItem(null);
-        return true;
-      }
+    const withStock = !!(form.initialQuantity && form.initialQuantity > 0);
+    if (withStock && form.source) addSource(form.source);
+    const location = withStock ? currentLocation() : undefined;
 
-      const location = currentLocation();
-      try {
-        await withIdempotencyKey(key, () => recordInbound({
-          itemId: item.id,
-          quantity: form.initialQuantity!,
-          source: form.source,
-          donor: picked.donor,
-          donorId: picked.donorId,
-          donorClientId: picked.donorClientId,
-          location
-        }));
-      } catch (err) {
-        toast({
-          title: "Stock not recorded",
-          description: saveErrorMessage(err, `${item.name} was saved but the ${form.initialQuantity} received were not recorded. Record them on Check in.`),
-          variant: "destructive",
-        });
-        // The dialog closes, so the next save is a new action with a new key.
-        setEditingItem(null);
-        return true;
-      }
+    // Saved shows and the dialog closes only after the item, the donor and the
+    // starting quantity are confirmed. A failure keeps the dialog, its entries
+    // and the key, so a retry of the same save reuses every component key.
+    const result = await runItemSave<SourceFields>({
+      saveItem: () => itemSaved(item.id),
+      pickDonor: withStock ? () => pickFields(form.donorPick, key, postDonor) : undefined,
+      recordStock: withStock
+        ? (itemId, picked) => withIdempotencyKey(key, () => recordInbound({
+            itemId,
+            quantity: form.initialQuantity!,
+            source: form.source,
+            donor: picked?.donor,
+            donorId: picked?.donorId,
+            donorClientId: picked?.donorClientId,
+            location,
+          }))
+        : undefined,
+    });
+
+    if (!result.ok) {
+      const refusal = {
+        item: `${item.name} was not saved. Please try again.`,
+        donor: "The new donor was not saved. Please try again.",
+        stock: "The starting quantity was not recorded. Please try again.",
+      }[result.stage];
+      toast({
+        title: result.stage === "item" ? "Not saved" : "Stock not recorded",
+        description: itemActionFailureText(result.error, saveErrorMessage(result.error, refusal)),
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    if (withStock) {
       toast({
         title: "Inventory added",
-        description: `Created ${item.name} and recorded ${form.initialQuantity} received${location ? " with location" : ""}.`,
+        description: `Saved ${item.name} and recorded ${form.initialQuantity} received${location ? " with location" : ""}.`,
       });
     } else {
       toast({

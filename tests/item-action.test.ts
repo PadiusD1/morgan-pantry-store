@@ -3,6 +3,7 @@ import {
   classifySaveError,
   componentKeys,
   runItemAction,
+  runItemSave,
   trackCreate,
   type RequestFn,
 } from "@/lib/item-action";
@@ -81,7 +82,7 @@ describe("runItemAction", () => {
 
   it("reports a held stock 409 as still running", async () => {
     const { request } = fakeRequest({
-      "POST /api/transactions": [() => new Response("held", { status: 409 })],
+      "POST /api/transactions": [() => new Response(JSON.stringify({ message: "This request is still being saved" }), { status: 409 })],
     });
     const err = await runItemAction(request, "k3", { itemId: "item-9", stock }).catch((e) => e);
     expect(err).toBeInstanceOf(Error);
@@ -117,6 +118,7 @@ describe("runItemAction", () => {
   it("sorts a plain 400 as a known refusal", () => {
     expect(classifySaveError(new Error("400: Name is required"))).toBe("refused");
     expect(classifySaveError(new Error("422: held"))).toBe("uncertain");
+    expect(classifySaveError(new Error("409: The count changed, reload and try again"))).toBe("refused");
     expect(classifySaveError(new TypeError("Failed to fetch"))).toBe("uncertain");
   });
 });
@@ -135,5 +137,51 @@ describe("trackCreate", () => {
     await trackCreate(pending, "temp-2", Promise.reject(new Error("500: boom"))).catch(() => {});
     await new Promise((r) => setTimeout(r, 0));
     expect(pending.has("temp-2")).toBe(false);
+  });
+});
+
+describe("runItemSave", () => {
+  function steps(fail?: "item" | "donor" | "stock") {
+    const done: string[] = [];
+    const { request } = fakeRequest({
+      "POST /api/inventory": [() => (fail === "item" ? new Response("boom", { status: 500 }) : ok({ id: "item-real" }))],
+      "POST /api/donors": [() => (fail === "donor" ? new Response("boom", { status: 500 }) : ok({ id: "d1", name: "Test Donor One" }))],
+      "POST /api/transactions": [() => (fail === "stock" ? new Response(JSON.stringify({ message: "This request is still being saved" }), { status: 409 }) : ok({ id: "tx1" }))],
+    });
+    return {
+      done,
+      steps: {
+        saveItem: async () => { done.push("item"); return (await (await request("POST", "/api/inventory", {}, { idempotencyKey: "k.item" })).json()).id; },
+        pickDonor: async () => { done.push("donor"); return (await request("POST", "/api/donors", {}, { idempotencyKey: "k:donor" })).json(); },
+        recordStock: async (itemId: string) => { done.push(`stock ${itemId}`); await request("POST", "/api/transactions", {}, { idempotencyKey: "k" }); },
+      },
+    };
+  }
+
+  it("confirms the item, donor and stock before reporting saved", async () => {
+    const s = steps();
+    expect(await runItemSave(s.steps)).toEqual({ ok: true, itemId: "item-real" });
+    expect(s.done).toEqual(["item", "donor", "stock item-real"]);
+  });
+
+  it("stops at an item create 500 with no donor or stock write", async () => {
+    const s = steps("item");
+    const result = await runItemSave(s.steps);
+    expect(result).toMatchObject({ ok: false, stage: "item" });
+    expect(s.done).toEqual(["item"]);
+    expect(classifySaveError((result as { error: unknown }).error)).toBe("uncertain");
+  });
+
+  it("reports a held stock 409 as not saved and still running", async () => {
+    const s = steps("stock");
+    const result = await runItemSave(s.steps);
+    expect(result).toMatchObject({ ok: false, stage: "stock" });
+    expect(classifySaveError((result as { error: unknown }).error)).toBe("running");
+  });
+
+  it("reports a donor failure before any stock write", async () => {
+    const s = steps("donor");
+    expect(await runItemSave(s.steps)).toMatchObject({ ok: false, stage: "donor" });
+    expect(s.done).toEqual(["item", "donor"]);
   });
 });

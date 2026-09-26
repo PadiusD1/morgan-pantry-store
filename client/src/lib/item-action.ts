@@ -79,14 +79,17 @@ function asError(err: unknown): Error {
 export type SaveOutcome = "refused" | "uncertain" | "running";
 
 /**
- * Sorts a failed write per the shared design. A 4xx other than 409 and 422 is
- * a known refusal the server rolled back. A 409 means the first try is still
- * running. Anything else, a 5xx, a held 422, a lost response or a timeout, is
+ * Sorts a failed write per the shared design. A 4xx other than the held 409
+ * and 422 is a known refusal the server rolled back. The held 409 means the
+ * first try is still running. Anything else, a 5xx, a held 422, a lost response or a timeout, is
  * uncertain and the save may already be recorded.
  */
 export function classifySaveError(err: unknown): SaveOutcome {
-  const status = Number(/^(\d{3}):/.exec(err instanceof Error ? err.message : "")?.[1]);
-  if (status === 409) return "running";
+  const message = err instanceof Error ? err.message : "";
+  const status = Number(/^(\d{3}):/.exec(message)?.[1]);
+  // Only the held 409 means the first try is still running. Another 409, a
+  // stale count for example, is a refusal the server rolled back.
+  if (status === 409 && /still being saved/i.test(message)) return "running";
   if (status >= 400 && status < 500 && status !== 422) return "refused";
   return "uncertain";
 }
@@ -114,4 +117,46 @@ export function trackCreate(
     if (pending.get(tempId) === create) pending.delete(tempId);
   });
   return create;
+}
+
+export type ItemSaveSteps<P> = {
+  /** Saves the item and resolves its canonical id once confirmed. */
+  saveItem: () => Promise<string>;
+  /** Picks or creates the donor, when a starting quantity is recorded. */
+  pickDonor?: () => Promise<P>;
+  /** Records the starting quantity against the canonical id. */
+  recordStock?: (itemId: string, picked: P | undefined) => Promise<void>;
+};
+
+export type ItemSaveResult =
+  | { ok: true; itemId: string }
+  | { ok: false; stage: "item" | "donor" | "stock"; error: unknown };
+
+/**
+ * The Inventory dialog save. Each write is awaited in turn and the first
+ * failure stops the rest, so the page shows Saved and closes only after the
+ * item, the donor and the starting quantity are all confirmed.
+ */
+export async function runItemSave<P>(steps: ItemSaveSteps<P>): Promise<ItemSaveResult> {
+  let itemId: string;
+  try {
+    itemId = await steps.saveItem();
+  } catch (error) {
+    return { ok: false, stage: "item", error };
+  }
+  if (!steps.recordStock) return { ok: true, itemId };
+  let picked: P | undefined;
+  if (steps.pickDonor) {
+    try {
+      picked = await steps.pickDonor();
+    } catch (error) {
+      return { ok: false, stage: "donor", error };
+    }
+  }
+  try {
+    await steps.recordStock(itemId, picked);
+  } catch (error) {
+    return { ok: false, stage: "stock", error };
+  }
+  return { ok: true, itemId };
 }

@@ -135,6 +135,8 @@ export type RepositoryState = {
 
 export type RepositoryContextValue = RepositoryState & {
   addOrUpdateItem: (partial: ItemChange, options?: ItemChangeOptions) => InventoryItem;
+  /** Resolves the canonical id once the item's create or edit is confirmed, rejects when it failed. */
+  itemSaved: (id: string) => Promise<string>;
   adjustItemQuantity: (itemId: string, delta: number) => void;
   recordInbound: (options: {
     itemId: string;
@@ -288,6 +290,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   // ── Pending item creates: temp ID → Promise<server ID> ─────────────────
   const pendingCreates = useRef<Map<string, Promise<string>>>(new Map());
+  const pendingSaves = useRef<Map<string, Promise<string>>>(new Map());
 
   // ── Pending client creates: temp ID → Promise<server ID> ──────────────
   const pendingClientCreates = useRef<Map<string, Promise<string>>>(new Map());
@@ -326,17 +329,24 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Fire API. On failure, invalidate to roll the optimistic edit back to the
       // server's truth instead of silently leaving a phantom change in the cache.
-      apiRequest("PATCH", `/api/inventory/${existing.id}`, body)
+      // A caller with a key awaits this save through itemSaved and shows the
+      // failure itself, and a retry of its action reuses the same keys.
+      const key = options?.idempotencyKey;
+      const save = apiRequest("PATCH", `/api/inventory/${existing.id}`, body, { idempotencyKey: key ?? uuid() })
         .then(() =>
           adds > 0
-            ? apiRequest("POST", `/api/inventory/${existing.id}/adjust`, { delta: adds, reason: "import" }, { idempotencyKey: uuid() })
+            ? apiRequest("POST", `/api/inventory/${existing.id}/adjust`, { delta: adds, reason: "import" }, { idempotencyKey: key ? `${key}.stock` : uuid() })
             : undefined,
         )
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/inventory"] }))
-        .catch((e) => {
-          showStockRefusal(e);
-          return queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+          return existing.id;
         });
+      pendingSaves.current.set(existing.id, save);
+      save.catch((e) => {
+        if (!key) showStockRefusal(e);
+        return queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+      });
 
       return updated;
     }
@@ -411,6 +421,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     createPromise.catch(() => {});
 
     return item;
+  }
+
+  function itemSaved(id: string): Promise<string> {
+    return pendingSaves.current.get(id) ?? pendingCreates.current.get(id) ?? Promise.resolve(id);
   }
 
   // A refused stock change is shown, never dropped.
@@ -869,6 +883,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     sources: local.sources,
     categories: local.categories,
     addOrUpdateItem,
+    itemSaved,
     adjustItemQuantity,
     recordInbound,
     recordOutbound,
