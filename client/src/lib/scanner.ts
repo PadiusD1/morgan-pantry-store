@@ -110,6 +110,51 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
   return { key, timeout, hasHeld };
 }
 
+/**
+ * A slower second check used only by the barcode fields. When keys reach the
+ * page further apart than gapMs above (a busy page or a slow scanner), the
+ * machine lets them into the field and only Enter used to end the code. A Tab
+ * ends the code too when the whole field was typed as one run with every gap
+ * and the Tab itself within gapMs, so ordinary typing followed by Tab still
+ * moves on.
+ */
+export const TAB_BURST_CONFIG = {
+  gapMs: 120,
+  minLength: 8,
+};
+
+export function createKeyRun(config: typeof TAB_BURST_CONFIG = TAB_BURST_CONFIG) {
+  let text = "";
+  let last = 0;
+  let ended: { text: string; gap: number } | null = null;
+
+  function key(ev: ScanKey & { shiftKey?: boolean }) {
+    if (IGNORED_KEYS.has(ev.key)) return;
+    ended = null;
+    const plain = !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
+    if (plain && ev.key.length === 1) {
+      if (!text || ev.time - last > config.gapMs) text = "";
+      text += ev.key;
+      last = ev.time;
+      return;
+    }
+    if (plain && !ev.shiftKey && text) ended = { text, gap: ev.time - last };
+    text = "";
+  }
+
+  /** True when the key just pressed ended a run that is exactly the field value. */
+  function endedBurst(value: string) {
+    return (
+      !!ended &&
+      ended.gap <= config.gapMs &&
+      ended.text.length >= config.minLength &&
+      value === ended.text
+    );
+  }
+
+  return { key, endedBurst };
+}
+
 export type ScanField = { value: string; selectionStart?: number | null; selectionEnd?: number | null };
 
 /**
@@ -293,6 +338,9 @@ export function setNativeValue(el: EditableField, value: string, caret?: number)
 export function useScanner(onScan: (code: string) => void) {
   const onScanRef = useRef(onScan);
   onScanRef.current = onScan;
+  const runRef = useRef<ReturnType<typeof createKeyRun> | null>(null);
+  if (!runRef.current) runRef.current = createKeyRun();
+  const run = runRef.current;
 
   useEffect(() => {
     const controller = createScannerController<EditableField>({
@@ -305,6 +353,15 @@ export function useScanner(onScan: (code: string) => void) {
       },
     });
     const listener = (e: KeyboardEvent) => {
+      run.key({
+        key: e.key,
+        time: e.timeStamp,
+        repeat: e.repeat,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+      });
       controller.handle({
         key: e.key,
         time: e.timeStamp,
@@ -322,4 +379,7 @@ export function useScanner(onScan: (code: string) => void) {
       controller.dispose();
     };
   }, []);
+
+  /** Ask from the barcode field keydown whether a Tab there ends a scan. */
+  return run.endedBurst;
 }
