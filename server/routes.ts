@@ -17,7 +17,7 @@ import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
-import { easternDate, generatedValue, monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
+import { easternDate, easternYearMonth, generatedValue, monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -1953,9 +1953,8 @@ export async function registerRoutes(app: Express): Promise<void> {
 
         const ts = new Date(r.ts);
         if (Number.isNaN(ts.getTime())) continue;
-        const year = ts.getFullYear();
+        const { year, month } = easternYearMonth(ts);
         if (yearFilter && String(year) !== yearFilter) continue;
-        const month = ts.getMonth() + 1;
 
         const qty = Number(r.quantity) || 0;
         const cost = parseFloat(r.value_per_unit) || 0;

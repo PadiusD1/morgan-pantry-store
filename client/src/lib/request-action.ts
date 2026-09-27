@@ -20,3 +20,16 @@ export function requestActionErrorText(err: unknown): string {
   const message = serverMessage(err);
   return saveErrorMessage(err, message ? plainWords(message) : REQUEST_ACTION_FALLBACK);
 }
+
+const REQUEST_ACTION_DONE: Record<string, string> = {
+  approve: "Request approved.",
+  deny: "Request denied.",
+  fulfill: "Request fulfilled.",
+  cancel: "Request cancelled.",
+  "no-show": "Request marked as no show.",
+};
+
+/** The text a successful request transition shows on the staff Requests page, in plain words with no hyphen. */
+export function requestActionSuccessText(action: string): string {
+  return REQUEST_ACTION_DONE[action] ?? "Request updated.";
+}
