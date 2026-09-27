@@ -9,6 +9,7 @@ import { earlierSaveText, savedCheckInText } from "@/lib/saved-result";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
+import { earlierComponentText, itemActionFailureText, runCheckInAction } from "@/lib/item-action";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { itemOptions, nextSelectedId, resolveSelectedId } from "@/lib/check-in-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +28,7 @@ type ScanState =
   | { phase: "error"; message: string };
 
 export default function CheckInPage() {
-  const { inventory, addOrUpdateItem, recordInbound, upsertBarcodeCache, sources, addSource, categories, addCategory } = useRepository();
+  const { inventory, addOrUpdateItem, itemSaved, recordInbound, upsertBarcodeCache, sources, addSource, categories, addCategory } = useRepository();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -205,6 +206,8 @@ export default function CheckInPage() {
     }
 
     let itemId = shownSelectedId;
+    // A new item is awaited through itemSaved, which resolves its canonical id.
+    let saveItem: (() => Promise<string>) | undefined;
 
     if (mode === "new") {
       if (!newItem.name.trim()) {
@@ -230,6 +233,7 @@ export default function CheckInPage() {
         allergens: newItem.allergens,
       }, { idempotencyKey: `${key}.item` });
       itemId = created.id;
+      saveItem = () => itemSaved(created.id);
       setPinnedItem(created);
       // Cache barcode so future scans remember all saved info
       if (newItem.barcode?.trim()) {
@@ -247,45 +251,43 @@ export default function CheckInPage() {
     if (isNewSource && source.trim()) {
         addSource(source.trim());
     }
-    // A donor pick sends donor_id and the name, a partner pick sends client_id.
-    // A new donor is found or created on the server first, with its own key.
-    let picked: SourceFields = {};
-    if (isDonationSource) {
-      try {
-        picked = await pickFields(
-          isNewDonor ? { newName: donor } : { option: donorOptions.find((o) => o.key === donorKey) },
-          key,
-          postDonor,
-        );
-      } catch (err) {
-        toast({
-          title: "Donor not saved",
-          description: saveErrorMessage(err, "The new donor could not be saved. Please try again."),
-          variant: "destructive",
-        });
-        return false;
-      }
-      if (isNewDonor && picked.donorId) {
-        queryClient.invalidateQueries({ queryKey: ["/api/donation-sources"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
-      }
-    }
-
     const location = locationFor(key);
 
-    let saved: unknown;
-    try {
-      saved = await withIdempotencyKey(key, () => recordInbound({
-        itemId,
+    // The item, the inline donor and the stock run as one action. The item and
+    // donor are both awaited before the stock posts once against the canonical
+    // id, and each keeps its own key, reused on a retry of this action.
+    // A donor pick sends donor_id and the name, a partner pick sends client_id.
+    const result = await runCheckInAction<SourceFields>({
+      saveItem,
+      itemId,
+      pickDonor: isDonationSource
+        ? async () => {
+            const picked = await pickFields(
+              isNewDonor ? { newName: donor } : { option: donorOptions.find((o) => o.key === donorKey) },
+              key,
+              postDonor,
+            );
+            if (isNewDonor && picked.donorId) {
+              queryClient.invalidateQueries({ queryKey: ["/api/donation-sources"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
+            }
+            return picked;
+          }
+        : undefined,
+      recordStock: (id, picked) => withIdempotencyKey(key, () => recordInbound({
+        itemId: id,
         quantity,
         source: source.trim() || undefined,
-        donor: picked.donor,
-        donorId: picked.donorId,
-        donorClientId: picked.donorClientId,
+        donor: picked?.donor,
+        donorId: picked?.donorId,
+        donorClientId: picked?.donorClientId,
         location,
         timestamp: startedAt,
-      }));
-    } catch (err) {
+      })),
+    });
+
+    if (!result.ok) {
+      const err = result.error;
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.error("Failed to record check-in:", err);
@@ -293,16 +295,26 @@ export default function CheckInPage() {
       if (isEarlierSaveRecorded(err)) {
         // The first try was recorded. Keep the edited form and start a new key.
         saveGuard.renew();
-        toast({ title: "Not saved", description: earlierSaveText(err.recorded, "in"), variant: "destructive" });
+        const text = result.stage === "stock" ? earlierSaveText(err.recorded, "in") : earlierComponentText(result.stage);
+        toast({ title: "Not saved", description: text, variant: "destructive" });
         return;
       }
+      // A known refusal shows the server's message, the held 409 asks to wait,
+      // and an uncertain outcome says the save may already be recorded. The
+      // form and the key are kept either way.
+      const refusal = {
+        item: "The new item was not saved. Please try again.",
+        donor: "The new donor could not be saved. Please try again.",
+        stock: "The stock could not be recorded. Please try again.",
+      }[result.stage];
       toast({
-        title: "Check-in failed",
-        description: saveErrorMessage(err, "The stock could not be recorded. Please try again."),
+        title: result.stage === "donor" ? "Donor not saved" : "Check-in failed",
+        description: saveErrorMessage(err, itemActionFailureText(err, refusal)),
         variant: "destructive",
       });
-      return;
+      return false;
     }
+    const saved = result.saved;
 
     toast({
       title: "Stock received",
