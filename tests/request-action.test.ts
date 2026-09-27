@@ -47,3 +47,17 @@ describe("Requests page transition error path", () => {
     expect(catchBlock).toContain('queryKey: ["/api/requests"]');
   });
 });
+
+describe("requestActionSuccessText", () => {
+  it("says what happened in plain words with no hyphen for every staff action", async () => {
+    const { requestActionSuccessText } = await import("@/lib/request-action");
+    expect(requestActionSuccessText("approve")).toBe("Request approved.");
+    expect(requestActionSuccessText("deny")).toBe("Request denied.");
+    expect(requestActionSuccessText("fulfill")).toBe("Request fulfilled.");
+    expect(requestActionSuccessText("cancel")).toBe("Request cancelled.");
+    expect(requestActionSuccessText("no-show")).toBe("Request marked as no show.");
+    for (const action of ["approve", "deny", "fulfill", "cancel", "no-show", "something-new"]) {
+      expect(requestActionSuccessText(action)).not.toMatch(/[-–—:;]/);
+    }
+  });
+});
