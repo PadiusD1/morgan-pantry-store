@@ -51,6 +51,13 @@ export default function InventoryPage() {
   const saveGuard = useSaveGuard();
   // A success dismisses the earlier failure toast of the dialog.
   const saveToasts = useRef(failureToastSlot(toast)).current;
+  // The location read when a logical save began, reused by its retries so an
+  // unchanged retry sends an unchanged body.
+  const actionLocation = useRef<{ key: string; location: ReturnType<typeof currentLocation> } | null>(null);
+  function locationFor(key: string) {
+    if (actionLocation.current?.key !== key) actionLocation.current = { key, location: currentLocation() };
+    return actionLocation.current.location;
+  }
   async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }) {
     await saveGuard.run((key, startedAt) => saveItem(key, startedAt, form));
   }
@@ -59,7 +66,7 @@ export default function InventoryPage() {
     const item = addOrUpdateItem(form, { idempotencyKey: `${key}.item` });
     const withStock = !!(form.initialQuantity && form.initialQuantity > 0);
     if (withStock && form.source) addSource(form.source);
-    const location = withStock ? currentLocation() : undefined;
+    const location = withStock ? locationFor(key) : undefined;
     let saved: unknown;
 
     // Saved shows and the dialog closes only after the item, the donor and the

@@ -94,4 +94,9 @@ describe("E. an unchanged retry of the starting quantity sends the same body", (
     expect(source).toMatch(/saveGuard\.run\(\(key, startedAt\) => saveItem\(key, startedAt, form\)\)/);
     expect(save.slice(save.indexOf("recordInbound({"))).toMatch(/^recordInbound\(\{[\s\S]*?timestamp: startedAt,[\s\S]*?\}\)/);
   });
+
+  it("reuses the location read when the save began on its retries", () => {
+    expect(save).toMatch(/const location = withStock \? locationFor\(key\) : undefined;/);
+    expect(source).toMatch(/function locationFor\(key: string\)/);
+  });
 });
