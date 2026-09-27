@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, saveErrorMessage } from "./queryClient";
-import { planItemChange, serverMessage, type ItemChange, type ItemChangeOptions } from "./stock-change";
+import { apiRequest } from "./queryClient";
+import { planItemChange, type ItemChange, type ItemChangeOptions } from "./stock-change";
 import { toast } from "@/hooks/use-toast";
 import { duplicateRefusal } from "@shared/identity";
 import {
@@ -17,6 +17,7 @@ import {
 import { findCachedItem } from "./inventory-cache";
 import { trackCreate } from "./item-action";
 import { upsertCreatedRow } from "./inventory-save";
+import { stockAdjustFailure } from "./stock-adjust";
 import { newClientRecord } from "./new-client";
 import { sendClientUpdate } from "./client-update";
 import { loadGate } from "./load-gate";
@@ -431,13 +432,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     return pendingSaves.current.get(id) ?? pendingCreates.current.get(id) ?? Promise.resolve(id);
   }
 
-  // A refused stock change is shown, never dropped.
+  // A failed stock change is shown, never dropped. Only a refusal says the
+  // stock was not changed, an unknown outcome may already be recorded.
   function showStockRefusal(e: unknown) {
-    toast({
-      title: "Not saved",
-      description: saveErrorMessage(e, serverMessage(e) ?? "The stock was not changed. Please try again."),
-      variant: "destructive",
-    });
+    toast({ ...stockAdjustFailure(e), variant: "destructive" });
   }
 
   function adjustItemQuantity(itemId: string, delta: number) {
