@@ -492,7 +492,9 @@ export default function CheckOutPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       setCart([]);
       setIsEmergency(false);
-      setClientFromId(result.client.id);
+      // Finding J, a kept selection would take the next student's name and
+      // email onto this person. The receipt shows who was served.
+      setClientFromId("");
       return true;
     }
   }
