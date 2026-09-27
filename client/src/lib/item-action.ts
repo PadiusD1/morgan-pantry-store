@@ -163,6 +163,43 @@ export async function runItemSave<P>(steps: ItemSaveSteps<P>): Promise<ItemSaveR
   return { ok: true, itemId };
 }
 
+export type CheckInSteps<P> = {
+  /** Resolves the canonical id once the new item's create is confirmed, absent for an existing item. */
+  saveItem?: () => Promise<string>;
+  /** Id of an existing item, used when there is no new item. */
+  itemId?: string;
+  /** Picks or creates the donor. */
+  pickDonor?: () => Promise<P>;
+  /** Records the stock against the canonical id and resolves the saved response. */
+  recordStock: (itemId: string, picked: P | undefined) => Promise<unknown>;
+};
+
+export type CheckInResult =
+  | { ok: true; itemId: string; saved: unknown }
+  | { ok: false; stage: "item" | "donor" | "stock"; error: unknown };
+
+/**
+ * The check in page action. The item and donor writes run together and both
+ * are awaited before the stock, which is posted once against the canonical
+ * id, so a donor answering after the item never loses the stock.
+ */
+export async function runCheckInAction<P>(steps: CheckInSteps<P>): Promise<CheckInResult> {
+  const [itemResult, donorResult] = await Promise.allSettled([
+    steps.saveItem ? steps.saveItem() : Promise.resolve(steps.itemId ?? ""),
+    steps.pickDonor ? steps.pickDonor() : Promise.resolve(undefined),
+  ]);
+  if (itemResult.status === "rejected") return { ok: false, stage: "item", error: itemResult.reason };
+  if (donorResult.status === "rejected") return { ok: false, stage: "donor", error: donorResult.reason };
+  const itemId = itemResult.value;
+  if (!itemId) return { ok: false, stage: "item", error: new Error("The item was not found. Nothing was recorded.") };
+  try {
+    const saved = await steps.recordStock(itemId, donorResult.value);
+    return { ok: true, itemId, saved };
+  } catch (error) {
+    return { ok: false, stage: "stock", error };
+  }
+}
+
 /** Saves one import row, and resolves only after the server confirmed it. */
 export async function importRow<T>(
   counts: { created: number },
