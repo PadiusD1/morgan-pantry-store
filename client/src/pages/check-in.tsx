@@ -4,6 +4,7 @@ import { useRepository } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
 import { lookupBarcode, type EnrichedProduct } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
+import { refocusScanField } from "@/lib/scan-focus";
 import { apiRequest, isEarlierSaveRecorded, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { earlierSaveText, savedCheckInText } from "@/lib/saved-result";
 import { useSaveGuard } from "@/lib/save-guard";
@@ -171,7 +172,16 @@ export default function CheckInPage() {
   // that arrives during a lookup waits its turn.
   const lookupRef = useRef(handleBarcodeLookup);
   lookupRef.current = handleBarcodeLookup;
-  const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
+  // The field is disabled during a lookup, which drops the caret to the page,
+  // so it goes back to the field once the field is enabled again.
+  const scanInputRef = useRef<HTMLInputElement>(null);
+  const [scanQueue] = useState(() =>
+    createScanQueue((code) =>
+      Promise.resolve(lookupRef.current(code)).finally(() => {
+        setTimeout(() => refocusScanField(scanInputRef.current, document), 100);
+      }),
+    ),
+  );
   const tabEndsScan = useScanner(scanQueue.push);
 
   // One save at a time, and a retry keeps the same Idempotency-Key.
@@ -369,6 +379,7 @@ export default function CheckInPage() {
               }}
               disabled={scanState.phase === "scanning"}
               autoFocus
+              ref={scanInputRef}
               data-testid="input-checkin-barcode-scan"
             />
           </div>
