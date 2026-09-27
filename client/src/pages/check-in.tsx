@@ -314,7 +314,6 @@ export default function CheckInPage() {
       return false;
     }
     const saved = result.saved;
-    itemId = result.itemId;
 
     toast({
       title: "Stock received",
