@@ -18,12 +18,26 @@ export function inventoryFailureToast(
   stage: "item" | "donor" | "stock",
   error: unknown,
   itemName: string,
+  withStock = false,
 ): { toast: SaveToast; close: boolean } {
   if (isEarlierSaveRecorded(error)) {
-    const description = stage === "stock"
-      ? earlierSaveText(error.recorded, "in")
-      : `An earlier try already saved ${itemName}. Your change was not saved.`;
-    return { toast: { title: "Already recorded", description }, close: true };
+    if (stage === "stock") {
+      return { toast: { title: "Already recorded", description: earlierSaveText(error.recorded, "in") }, close: true };
+    }
+    // The read back proves only the item or the donor. The stock stage was not
+    // reached in this try, so the starting quantity is never called recorded.
+    if (!withStock) {
+      return { toast: { title: "Already recorded", description: `An earlier try already saved ${itemName}. Your change was not saved.` }, close: true };
+    }
+    const what = stage === "item" ? itemName : "the new donor";
+    return {
+      toast: {
+        title: stage === "item" ? "Item saved earlier" : "Donor saved earlier",
+        description: `An earlier try already saved ${what} with other details. The starting quantity of ${itemName} may not be recorded. Check its quantity in the list before you add stock again.`,
+        variant: "destructive",
+      },
+      close: true,
+    };
   }
   const refusal = {
     item: `${itemName} was not saved. Please try again.`,
