@@ -507,7 +507,11 @@ export default function CheckOutPage() {
           queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
           queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
         }
-        toast({ title: "Not saved", description: earlierSaveText(earlier.recorded, "out"), variant: "destructive" });
+        if (earlier.kind === "visit") {
+          toast({ title: "Already recorded", description: earlierSaveText(earlier.recorded, "out") });
+        } else {
+          toast({ title: "Not saved", description: earlierSaveText(earlier.recorded, "out"), variant: "destructive" });
+        }
         return;
       }
       // A lost response, a 5xx or a timeout may already be recorded. The cart and key are kept.
