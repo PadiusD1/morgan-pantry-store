@@ -1,9 +1,10 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
-import { saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
-import { importRow, itemActionFailureText, runItemSave } from "@/lib/item-action";
+import { importRow, runItemSave } from "@/lib/item-action";
+import { failureToastSlot, importFailureText, inventoryFailureToast, inventorySuccessToast } from "@/lib/inventory-save";
 import { pickFields, postDonor, useDonationSources, type DonorPick, type SourceFields } from "@/lib/donation-source";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -48,15 +49,18 @@ export default function InventoryPage() {
 
   // One save at a time, and the first check in carries an Idempotency-Key.
   const saveGuard = useSaveGuard();
+  // A success dismisses the earlier failure toast of the dialog.
+  const saveToasts = useRef(failureToastSlot(toast)).current;
   async function handleSave(form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }) {
-    await saveGuard.run((key) => saveItem(key, form));
+    await saveGuard.run((key, startedAt) => saveItem(key, startedAt, form));
   }
 
-  async function saveItem(key: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }): Promise<boolean> {
+  async function saveItem(key: string, startedAt: string, form: Partial<InventoryItem> & { name: string; initialQuantity?: number; source?: string; donor?: string; expectedQuantity?: number; donorPick?: DonorPick }): Promise<boolean> {
     const item = addOrUpdateItem(form, { idempotencyKey: `${key}.item` });
     const withStock = !!(form.initialQuantity && form.initialQuantity > 0);
     if (withStock && form.source) addSource(form.source);
     const location = withStock ? currentLocation() : undefined;
+    let saved: unknown;
 
     // Saved shows and the dialog closes only after the item, the donor and the
     // starting quantity are confirmed. A failure keeps the dialog, its entries
@@ -65,43 +69,36 @@ export default function InventoryPage() {
       saveItem: () => itemSaved(item.id),
       pickDonor: withStock ? () => pickFields(form.donorPick, key, postDonor) : undefined,
       recordStock: withStock
-        ? (itemId, picked) => withIdempotencyKey(key, () => recordInbound({
-            itemId,
-            quantity: form.initialQuantity!,
-            source: form.source,
-            donor: picked?.donor,
-            donorId: picked?.donorId,
-            donorClientId: picked?.donorClientId,
-            location,
-          }))
+        ? async (itemId, picked) => {
+            // The save's start time, so an unchanged retry sends the same body.
+            saved = await withIdempotencyKey(key, () => recordInbound({
+              itemId,
+              quantity: form.initialQuantity!,
+              source: form.source,
+              donor: picked?.donor,
+              donorId: picked?.donorId,
+              donorClientId: picked?.donorClientId,
+              timestamp: startedAt,
+              location,
+            }));
+          }
         : undefined,
     });
 
     if (!result.ok) {
-      const refusal = {
-        item: `${item.name} was not saved. Please try again.`,
-        donor: "The new donor was not saved. Please try again.",
-        stock: "The starting quantity was not recorded. Please try again.",
-      }[result.stage];
-      toast({
-        title: result.stage === "item" ? "Not saved" : "Stock not recorded",
-        description: saveErrorMessage(result.error, itemActionFailureText(result.error, refusal)),
-        variant: "destructive",
-      });
+      const failure = inventoryFailureToast(result.stage, result.error, item.name);
+      if (!failure.close) {
+        saveToasts.fail(failure.toast);
+        return false;
+      }
+      // An earlier try already recorded this save. Say what was recorded and start a new key.
+      saveGuard.renew();
+      saveToasts.succeed(failure.toast);
+      setEditingItem(null);
       return false;
     }
 
-    if (withStock) {
-      toast({
-        title: "Inventory added",
-        description: `Saved ${item.name} and recorded ${form.initialQuantity} received${location ? " with location" : ""}.`,
-      });
-    } else {
-      toast({
-        title: "Inventory updated",
-        description: `Saved ${item.name}.`,
-      });
-    }
+    saveToasts.succeed(inventorySuccessToast(item.name, saved, withStock, !!location));
     setEditingItem(null);
     return true;
   }
@@ -908,7 +905,7 @@ function CsvImportDialog({
         }
       } catch (err) {
         importResult.failed++;
-        importResult.errors.push(`Row ${i + 2}: ${err instanceof Error ? err.message : "Unknown error"}`);
+        importResult.errors.push(importFailureText(i + 2, err));
       }
 
       setProgress(Math.round(((i + 1) / rows.length) * 100));

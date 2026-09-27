@@ -16,6 +16,7 @@ import {
 } from "./api-types";
 import { findCachedItem } from "./inventory-cache";
 import { trackCreate } from "./item-action";
+import { upsertCreatedRow } from "./inventory-save";
 import { newClientRecord } from "./new-client";
 import { sendClientUpdate } from "./client-update";
 import { loadGate } from "./load-gate";
@@ -405,7 +406,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         // Replace temp ID in cache with real data. If a refetch removed the
         // optimistic row while the create was in flight, append the server row.
         queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
-          upsertApiRow(old, tempId, created),
+          upsertCreatedRow(old, tempId, created),
         );
         return created.id;
       })
@@ -537,7 +538,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       .then(async (res) => {
         const created: ApiClient = await res.json();
         queryClient.setQueryData<ApiClient[]>(["/api/clients"], (old) =>
-          upsertApiRow(old, tempId, created),
+          upsertCreatedRow(old, tempId, created),
         );
         pendingClientCreates.current.delete(tempId);
         return created.id;
@@ -1058,22 +1059,6 @@ export function suggestCategory(itemName: string): { category: string; confidenc
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function upsertApiRow<T extends { id: string }>(
-  old: T[] | undefined,
-  tempId: string,
-  created: T,
-): T[] {
-  const rows = old ?? [];
-  let foundTemp = false;
-  const replaced = rows.map((row) => {
-    if (row.id !== tempId) return row;
-    foundTemp = true;
-    return created;
-  });
-  if (foundTemp) return replaced;
-  return rows.some((row) => row.id === created.id) ? rows : [...rows, created];
-}
 
 function toOptimisticApiItem(item: InventoryItem): ApiInventoryItem {
   return {
