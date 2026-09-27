@@ -291,6 +291,25 @@ describe("approval claims the request inside its transaction", () => {
     expect(await approvals(request)).toBe(ra.status === 200 ? 1 : 0);
   });
 
+  it("a staff cancel landing after an approval audits the approved status it claimed", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const approve = post(`/api/requests/${request}/approve`);
+    await lockWaiters(1);
+    const cancel = post(`/api/requests/${request}/cancel`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [ra, rc] = await Promise.all([approve, cancel]);
+    expect(bothWaited).toBe(true);
+    expect(ra.status).toBe(200);
+    expect(rc.status).toBe(200);
+    const { rows } = await t.pool.query(
+      `SELECT previous_status FROM request_audit_log WHERE request_id = $1 AND action = 'cancelled'`,
+      [request],
+    );
+    expect(rows.map((r) => r.previous_status)).toEqual(["approved"]);
+  });
+
   it("a staff cancel first then an approval, the approval gets 409 and reserves nothing", async () => {
     const { item, request } = await pendingRequest();
     const release = await hold(`SELECT id FROM requests WHERE id = $1 FOR UPDATE`, request);
@@ -379,5 +398,26 @@ describe("deny, review, ready and the student cancel take the same claim", () =>
     expect(rr.status).toBe(409);
     expect(await statusOf(request)).toBe("cancelled");
     expect(await stock(item)).toEqual([10, 0]);
+  });
+});
+
+describe("every transition audits the status it claimed", () => {
+  it("a fulfil landing after ready audits ready for pickup", async () => {
+    const { request } = await approvedRequest();
+    const release = await hold(`SELECT id FROM requests WHERE id = $1 FOR UPDATE`, request);
+    const ready = post(`/api/requests/${request}/ready`);
+    await lockWaiters(1);
+    const fulfil = post(`/api/requests/${request}/fulfill`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [rr, rf] = await Promise.all([ready, fulfil]);
+    expect(bothWaited).toBe(true);
+    expect(rr.status).toBe(200);
+    expect(rf.status).toBe(200);
+    const { rows } = await t.pool.query(
+      `SELECT previous_status FROM request_audit_log WHERE request_id = $1 AND action = 'fulfilled'`,
+      [request],
+    );
+    expect(rows.map((r) => r.previous_status)).toEqual(["ready_for_pickup"]);
   });
 });

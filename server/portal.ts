@@ -140,7 +140,8 @@ export function registerPortalRoutes(app: Express): void {
       });
     }
 
-    if (!(await moveRequestStatus(req.params.id, "cancelled", ["pending", "under_review"]))) {
+    const previousStatus = await moveRequestStatus(req.params.id, "cancelled", ["pending", "under_review"]);
+    if (!previousStatus) {
       return res.status(409).json({ message: "This request was already changed" });
     }
     await storage.createAuditLogEntry({
@@ -148,7 +149,7 @@ export function registerPortalRoutes(app: Express): void {
       action: "cancelled",
       actor: req.user!.name,
       details: "Cancelled by student",
-      previousStatus: request.status,
+      previousStatus,
       newStatus: "cancelled",
     });
 
