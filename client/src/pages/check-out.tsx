@@ -9,7 +9,7 @@ import { apiRequest, isEarlierSaveRecorded, withIdempotencyKey } from "@/lib/que
 import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
 import { receiptFromFulfilled, receiptFromSaved } from "@/lib/receipt";
 import { clientUpdateFailureText } from "@/lib/client-update";
-import { checkOutFailure } from "@/lib/checkout-failure";
+import { checkOutFailure, fulfilFailure } from "@/lib/checkout-failure";
 import { settleEarlierSave, type EarlierCheckOut } from "@/lib/checkout-earlier";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
@@ -438,11 +438,12 @@ export default function CheckOutPage() {
           // eslint-disable-next-line no-console
           console.error("Failed to mark request as fulfilled:", e);
         }
-        toast({
-          title: "Fulfillment failed",
-          description: "The request could not be completed. Check the Requests tab and try again.",
-          variant: "destructive",
-        });
+        // A lost response or a 5xx may already have completed the request, so the lists are refreshed.
+        queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+        const failure = fulfilFailure(e);
+        toast({ title: failure.title, description: failure.description, variant: "destructive" });
       }
       return;
     }
