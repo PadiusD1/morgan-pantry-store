@@ -60,3 +60,23 @@ describe("finding H, a picked person with another person's email", () => {
     expect(resolveCheckoutIdentity([p, q], { studentId: "", email: "", name: "Pat", selected: p })).toMatchObject({ ok: true });
   });
 });
+
+describe("finding J, a selection kept after a successful check out", () => {
+  // The page passes the kept selection as `selected` (check-out.tsx near line 382).
+  // Typing in the ID, name and email fields never clears it.
+  it("a kept selection resolves the next student's new name and email to the previous student", () => {
+    const r = resolveCheckoutIdentity([p, q], { studentId: "", email: "next@x.edu", name: "Next Student", selected: p });
+    expect(r.ok && r.existing?.id).toBe("row-p");
+  });
+
+  it("with the selection cleared the next student is a new person", () => {
+    const r = resolveCheckoutIdentity([p, q], { studentId: "", email: "next@x.edu", name: "Next Student", selected: null });
+    expect(r).toEqual({ ok: true, existing: undefined, name: "Next Student" });
+  });
+
+  it("a kept selection with the next student's typed new ID still resolves to the previous student when the previous has no stored ID", () => {
+    const legacy = { id: "row-leg", name: "Lee", identifier: "lee@x.edu", email: null, clientType: "student" };
+    const r = resolveCheckoutIdentity([legacy], { studentId: "IDNEXT", email: "", name: "Next Student", selected: legacy });
+    expect(r.ok && r.existing?.id).toBe("row-leg");
+  });
+});
