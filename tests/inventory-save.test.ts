@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { EarlierSaveRecordedError } from "@/lib/queryClient";
+import { EarlierSaveRecordedError, SaveStillRunningError } from "@/lib/queryClient";
 import {
   failureToastSlot,
   importFailureText,
@@ -29,6 +29,12 @@ describe("inventory dialog failure toast", () => {
     expect(t.toast.description).toMatch(/recorded 4 units received/);
     expect(t.close).toBe(true);
     expect(`${t.toast.title} ${t.toast.description}`).not.toMatch(plain);
+  });
+
+  it("titles a held 409 still running as still saving", () => {
+    const t = inventoryFailureToast("stock", new SaveStillRunningError(JSON.stringify({ message: "This request is still being saved" })), "Test Beans One");
+    expect(t.toast.title).toBe("Still saving");
+    expect(t.close).toBe(false);
   });
 
   it("keeps the refusal title for a known refusal", () => {
