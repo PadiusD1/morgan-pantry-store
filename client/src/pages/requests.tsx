@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { requestActionErrorText, requestActionSuccessText } from "@/lib/request-action";
+import { requestActionErrorText, requestActionErrorTitle, requestActionSuccessText } from "@/lib/request-action";
 import {
   InboxIcon, CheckCircleIcon, XCircleIcon, ChevronDownIcon, ChevronRightIcon,
   Loader2, ClockIcon, PackageIcon, UserXIcon, BanIcon, SearchIcon,
@@ -81,7 +81,7 @@ export default function RequestsPage() {
     } catch (e: any) {
       queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      toast({ title: "Not changed", description: requestActionErrorText(e), variant: "destructive" });
+      toast({ title: requestActionErrorTitle(e), description: requestActionErrorText(e), variant: "destructive" });
     } finally {
       setActionLoading(false);
       setApproveTarget(null);
