@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { receiptFromSaved } from "@/lib/receipt";
+import { receiptFromFulfilled, receiptFromSaved } from "@/lib/receipt";
 
 const people = [
   { id: "c1", identifier: "TESTID001" },
@@ -60,5 +60,34 @@ describe("the receipt is built from the saved check out", () => {
     expect(receiptFromSaved(undefined, people, "x")).toBeNull();
     expect(receiptFromSaved({ id: "c9", name: "Test Student Nine", identifier: "TESTID009" }, people, "x")).toBeNull();
     expect(receiptFromSaved({ ...stored, items: [] }, people, "x")).toBeNull();
+  });
+});
+
+describe("the receipt of a fulfilled request is built from the saved request", () => {
+  const fulfilled = {
+    id: "r1",
+    status: "completed",
+    clientName: "Test Student Two",
+    clientIdentifier: "TESTID002",
+    fulfilledAt: "2026-09-27T01:30:00.000Z",
+    items: [
+      { id: "ri1", itemName: "Test Rice", requestedQuantity: 5, fulfilledQuantity: 3 },
+      { id: "ri2", itemName: "Test Beans", requestedQuantity: 2, fulfilledQuantity: 0 },
+    ],
+    transaction: { id: "tx9", timestamp: "2026-09-27T01:29:00.000Z" },
+  };
+
+  it("lists the fulfilled quantities, not the requested or carted ones", () => {
+    expect(receiptFromFulfilled(fulfilled, "2026-09-27T02:00:00.000Z")).toEqual({
+      clientName: "Test Student Two",
+      clientIdentifier: "TESTID002",
+      items: [{ name: "Test Rice", quantity: 3 }],
+      timestamp: "2026-09-27T01:29:00.000Z",
+    });
+  });
+
+  it("shows no receipt when nothing fulfilled was saved", () => {
+    expect(receiptFromFulfilled(null, "x")).toBeNull();
+    expect(receiptFromFulfilled({ ...fulfilled, items: [] }, "x")).toBeNull();
   });
 });

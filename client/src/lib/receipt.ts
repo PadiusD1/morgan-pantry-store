@@ -37,3 +37,32 @@ export function receiptFromSaved(
     timestamp: tx.timestamp ? String(tx.timestamp) : fallbackTimestamp,
   };
 }
+
+type SavedFulfilment = {
+  clientName?: string | null;
+  clientIdentifier?: string | null;
+  fulfilledAt?: string | null;
+  items?: Array<{ itemName?: string | null; fulfilledQuantity?: number | null }> | null;
+  transaction?: { timestamp?: string | null } | null;
+};
+
+/**
+ * The receipt for a fulfilled request, from the saved request the server
+ * returned. Only lines with a fulfilled quantity above zero were given out.
+ * Returns null when nothing fulfilled was saved.
+ */
+export function receiptFromFulfilled(saved: unknown, fallbackTimestamp: string): ReceiptData | null {
+  if (!saved || typeof saved !== "object") return null;
+  const request = saved as SavedFulfilment;
+  const items = (Array.isArray(request.items) ? request.items : [])
+    .map((line) => ({ name: String(line?.itemName ?? ""), quantity: Number(line?.fulfilledQuantity) || 0 }))
+    .filter((line) => line.quantity > 0);
+  if (items.length === 0) return null;
+  const time = request.transaction?.timestamp ?? request.fulfilledAt;
+  return {
+    clientName: request.clientName?.trim() ?? "",
+    clientIdentifier: request.clientIdentifier ?? "",
+    items,
+    timestamp: time ? String(time) : fallbackTimestamp,
+  };
+}
