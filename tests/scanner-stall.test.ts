@@ -104,6 +104,16 @@ describe("a burst that began inside a key run", () => {
     expect(page.run.endedBurst(page.field.value)).toBe(true);
   });
 
+  it.each([60, 110])("is refused when a %i ms stall lets the hold timer flush the front first", (stall) => {
+    const page = makePage();
+    const last = page.type(CODE.slice(0, 4), 0, 10);
+    const tail = page.type(CODE.slice(4), last + stall, 10);
+    const passed = page.press("Enter", tail + 10);
+    expect(page.scans).toEqual([]);
+    expect(page.field.value).toBe(CODE);
+    expect(passed).toBe(true);
+  });
+
   it("still scans a clean burst", () => {
     const page = makePage();
     const last = page.type("012345678905", 0, 10);
