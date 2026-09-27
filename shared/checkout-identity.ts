@@ -135,6 +135,7 @@ export const ID_EMAIL_CONFLICT_MESSAGE = "The student ID and email belong to dif
 export const ALREADY_ON_FILE_MESSAGE = "This student is already on file with a different student ID";
 export const ID_TAKEN_MESSAGE = "That student ID belongs to a different person on file";
 export const ID_CHANGE_MESSAGE = "This person already has a different student ID on file";
+export const SHARED_EMAIL_MESSAGE = "More than one student on file has this email. Type the student ID or pick the person";
 
 export type CheckoutIdentity<T extends LookupClient> =
   | { ok: true; existing: T | undefined; name: string }
@@ -168,6 +169,10 @@ export function resolveCheckoutIdentity<T extends LookupClient>(
   const selected = inputs.selected ?? undefined;
   if (selected) {
     if (byId && byId.id !== selected.id) return { ok: false, message: ID_TAKEN_MESSAGE };
+    // Finding H, a picked person never takes another person's email.
+    if (byEmail.length > 0 && !byEmail.some((c) => c.id === selected.id)) {
+      return { ok: false, message: ID_EMAIL_CONFLICT_MESSAGE };
+    }
     const stored = storedStudentId(selected);
     if (studentId && stored && stored !== studentId) return { ok: false, message: ID_CHANGE_MESSAGE };
     return { ok: true, existing: selected, name };
@@ -183,6 +188,14 @@ export function resolveCheckoutIdentity<T extends LookupClient>(
     if (!sameName) return { ok: true, existing: undefined, name };
     if (storedStudentId(sameName)) return { ok: false, message: ALREADY_ON_FILE_MESSAGE };
     return { ok: true, existing: sameName, name: (sameName.name ?? "").trim() || name };
+  }
+  // Finding B, with no ID typed the typed name picks among the holders of the
+  // email. Several holders and no single name match is refused.
+  if (byEmail.length > 1) {
+    const named = byEmail.filter((c) => normaliseName(c.name) === normaliseName(name));
+    if (named.length !== 1) return { ok: false, message: SHARED_EMAIL_MESSAGE };
+    const one = named[0];
+    return { ok: true, existing: one, name: (one.name ?? "").trim() || name };
   }
   const q = byEmail[0];
   if (q) return { ok: true, existing: q, name: (q.name ?? "").trim() || name };
