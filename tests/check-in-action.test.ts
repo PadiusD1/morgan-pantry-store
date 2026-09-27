@@ -13,7 +13,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** Builds the check in steps the page builds, over a fake request function. */
+/** Builds the check in steps the page builds, over a fake request function. The page posts the stock under the action key itself. */
 function stepsFor(
   actionKey: string,
   calls: Call[],
@@ -34,7 +34,7 @@ function stepsFor(
       return answers.donor().then((d) => ({ donor: d.name, donorId: d.id }));
     },
     recordStock: (itemId: string, picked: { donor?: string; donorId?: string } | undefined) => {
-      calls.push({ method: "POST", url: "/api/transactions", key: keys.stock, body: { itemId, donorId: picked?.donorId } });
+      calls.push({ method: "POST", url: "/api/transactions", key: actionKey, body: { itemId, donorId: picked?.donorId } });
       return answers.stock();
     },
   };
@@ -125,7 +125,7 @@ describe("runCheckInAction", () => {
     const second = await runCheckInAction(stepsFor("k5", calls, answers));
     expect(second).toEqual({ ok: true, itemId: "item-real", saved: { id: "tx-1", quantity: 3 } });
     expect(calls.map((c) => c.key)).toEqual(firstKeys);
-    expect(firstKeys).toEqual(["k5.item", "k5:donor", "k5.stock"]);
+    expect(firstKeys).toEqual(["k5.item", "k5:donor", "k5"]);
   });
 
   it("uses an existing item id without a create", async () => {
