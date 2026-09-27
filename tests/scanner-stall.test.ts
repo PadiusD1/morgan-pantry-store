@@ -80,11 +80,13 @@ function makePage(value = "") {
   return { field, scans, run, press, type, advance };
 }
 
+const CODE = "012345678905";
+
 describe("a burst that began inside a key run", () => {
   it("is refused, and Enter reaches the field holding the whole code", () => {
     const page = makePage();
-    const last = page.type("0123", 0, 10);
-    const tail = page.type("45678905", last + 50, 10);
+    const last = page.type(CODE.slice(0, 4), 0, 10);
+    const tail = page.type(CODE.slice(4), last + 50, 10);
     const passed = page.press("Enter", tail + 10);
     expect(page.scans).toEqual([]);
     expect(page.field.value).toBe("012345678905");
@@ -93,8 +95,8 @@ describe("a burst that began inside a key run", () => {
 
   it("is refused on Tab too, and the 120 ms Tab rule sees the whole code", () => {
     const page = makePage();
-    const last = page.type("0123", 0, 10);
-    const tail = page.type("45678905", last + 50, 10);
+    const last = page.type(CODE.slice(0, 4), 0, 10);
+    const tail = page.type(CODE.slice(4), last + 50, 10);
     const passed = page.press("Tab", tail + 10);
     expect(page.scans).toEqual([]);
     expect(page.field.value).toBe("012345678905");
@@ -123,11 +125,11 @@ describe("a burst that began inside a key run", () => {
 
   it("still scans a second code that follows a scan and its Enter at once", () => {
     const page = makePage();
-    let last = page.type("11112222", 0, 10);
+    let last = page.type("A1B2C3D4", 0, 10);
     page.press("Enter", last + 10);
-    last = page.type("33334444", last + 30, 10);
+    last = page.type("E5F6G7H8", last + 30, 10);
     page.press("Enter", last + 10);
-    expect(page.scans).toEqual(["11112222", "33334444"]);
+    expect(page.scans).toEqual(["A1B2C3D4", "E5F6G7H8"]);
     expect(page.field.value).toBe("");
   });
 });
