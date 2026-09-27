@@ -10,6 +10,7 @@ import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
 import { receiptFromFulfilled, receiptFromSaved } from "@/lib/receipt";
 import { clientUpdateFailureText } from "@/lib/client-update";
 import { checkOutFailure } from "@/lib/checkout-failure";
+import { settleEarlierSave, type EarlierCheckOut } from "@/lib/checkout-earlier";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -463,12 +464,29 @@ export default function CheckOutPage() {
         console.error("Failed to record check-out:", e);
       }
       if (isEarlierSaveRecorded(e)) {
-        // The first try was recorded. Keep the edited form and cart, start a new key.
+        // A held person create may hide a visit already recorded under this key,
+        // so that visit is read back under the old key before the key is renewed.
+        let earlier: EarlierCheckOut;
+        try {
+          earlier = await settleEarlierSave(e, key);
+        } catch (settleError) {
+          // The visit may already be recorded. The old key and the cart are kept.
+          const failure = checkOutFailure(settleError, null);
+          toast({ title: failure.title, description: failure.description, variant: "destructive" });
+          return;
+        }
         saveGuard.renew();
-        // The receipt shows what the first try recorded, never the edited cart.
-        const earlier = receiptFromSaved(e.recorded, clients, new Date().toISOString());
-        if (earlier) setReceipt(earlier);
-        toast({ title: "Not saved", description: earlierSaveText(e.recorded, "out"), variant: "destructive" });
+        // The receipt shows what the earlier try recorded, never the edited cart.
+        const earlierReceipt = receiptFromSaved(earlier.recorded, clients, new Date().toISOString());
+        if (earlierReceipt) setReceipt(earlierReceipt);
+        if (earlier.kind === "visit") {
+          // The cart shown was not saved. It is cleared so one more Save cannot record it again.
+          setCart([]);
+          queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+        }
+        toast({ title: "Not saved", description: earlierSaveText(earlier.recorded, "out"), variant: "destructive" });
         return;
       }
       // A lost response, a 5xx or a timeout may already be recorded. The cart and key are kept.

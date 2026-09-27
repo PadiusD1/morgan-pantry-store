@@ -153,6 +153,17 @@ export function forgetSentBody(key: string): void {
   }
 }
 
+/**
+ * Sends the latest body kept for a key once more under that same key. A later
+ * part of a save whose answer was lost is read back, or recorded once if it
+ * never arrived. Returns null when no body was kept, so nothing was sent.
+ */
+export async function finishKeptSave(method: string, url: string, key: string): Promise<Response | null> {
+  const kept = sentBodies.get(key);
+  if (!kept || kept.length === 0) return null;
+  return apiRequest(method, url, JSON.parse(kept[kept.length - 1]), { idempotencyKey: key });
+}
+
 export async function apiRequest(
   method: string,
   url: string,
