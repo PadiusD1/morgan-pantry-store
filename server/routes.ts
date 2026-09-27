@@ -1362,12 +1362,8 @@ export async function registerRoutes(app: Express): Promise<void> {
     try {
       await client.query("BEGIN");
 
-      const claimed = await client.query(
-        `UPDATE requests SET status = 'completed', updated_at = now()
-         WHERE id = $1 AND status = ANY($2) RETURNING id`,
-        [req.params.id, PICKUP_STATUSES],
-      );
-      if (claimed.rowCount === 0) {
+      const previousStatus = await claimRequest(client, req.params.id, PICKUP_STATUSES);
+      if (!previousStatus) {
         await client.query("ROLLBACK");
         client.release();
         return res.status(409).json({ message: "This request was already changed" });
@@ -1423,7 +1419,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       await client.query(
         `INSERT INTO request_audit_log (request_id, action, details, actor, previous_status, new_status)
          VALUES ($1, 'fulfilled', 'Request fulfilled and items distributed', $2, $3, 'completed')`,
-        [req.params.id, actor, request.status],
+        [req.params.id, actor, previousStatus],
       );
 
       await client.query(

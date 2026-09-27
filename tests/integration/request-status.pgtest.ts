@@ -400,3 +400,24 @@ describe("deny, review, ready and the student cancel take the same claim", () =>
     expect(await stock(item)).toEqual([10, 0]);
   });
 });
+
+describe("every transition audits the status it claimed", () => {
+  it("a fulfil landing after ready audits ready for pickup", async () => {
+    const { request } = await approvedRequest();
+    const release = await hold(`SELECT id FROM requests WHERE id = $1 FOR UPDATE`, request);
+    const ready = post(`/api/requests/${request}/ready`);
+    await lockWaiters(1);
+    const fulfil = post(`/api/requests/${request}/fulfill`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [rr, rf] = await Promise.all([ready, fulfil]);
+    expect(bothWaited).toBe(true);
+    expect(rr.status).toBe(200);
+    expect(rf.status).toBe(200);
+    const { rows } = await t.pool.query(
+      `SELECT previous_status FROM request_audit_log WHERE request_id = $1 AND action = 'fulfilled'`,
+      [request],
+    );
+    expect(rows.map((r) => r.previous_status)).toEqual(["ready_for_pickup"]);
+  });
+});
