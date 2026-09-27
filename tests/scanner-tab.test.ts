@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TAB_BURST_CONFIG, createKeyRun, type ScanKey } from "@/lib/scanner";
+import { TAB_BURST_CONFIG, createKeyRun, createScannerController, type ScanKey } from "@/lib/scanner";
 
 /** Feeds text as keydowns gapMs apart starting at start, returns the time of the last key. */
 function typeRun(run: ReturnType<typeof createKeyRun>, text: string, start: number, gapMs: number) {
@@ -79,5 +79,44 @@ describe("a Tab that ends a burst in the barcode field", () => {
     press(run, { key: "Tab", time: last + 10 });
     expect(run.endedBurst("2000000200089")).toBe(true);
     expect(run.endedBurst("hello2000000200089")).toBe(false);
+  });
+
+  it("shows the rendered failure, the late Tab passes the machine with the code flushed into the field", () => {
+    const field = {
+      value: "",
+      get selectionStart() {
+        return this.value.length;
+      },
+      get selectionEnd() {
+        return this.value.length;
+      },
+    };
+    const scans: string[] = [];
+    const controller = createScannerController({
+      getFocused: () => field,
+      writeField: (f, v) => {
+        f.value = v;
+      },
+      onScan: (code) => scans.push(code),
+      schedule: () => () => {},
+    });
+    const run = createKeyRun();
+    const send = (key: string, time: number) => {
+      let prevented = false;
+      run.key({ key, time });
+      controller.handle({ key, time, preventDefault: () => (prevented = true), stopPropagation: () => {} });
+      if (!prevented && key.length === 1) field.value += key;
+      return prevented;
+    };
+    let t = 1000;
+    for (const key of "2000000200089") {
+      send(key, t);
+      t += 5;
+    }
+    const tabPrevented = send("Tab", t - 5 + 45);
+    expect(scans).toEqual([]);
+    expect(tabPrevented).toBe(false);
+    expect(field.value).toBe("2000000200089");
+    expect(run.endedBurst(field.value)).toBe(true);
   });
 });
