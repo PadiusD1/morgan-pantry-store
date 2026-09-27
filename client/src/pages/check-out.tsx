@@ -7,6 +7,7 @@ import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest, isEarlierSaveRecorded, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
 import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
+import { receiptFromFulfilled, receiptFromSaved } from "@/lib/receipt";
 import { clientUpdateFailureText } from "@/lib/client-update";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
@@ -398,17 +399,9 @@ export default function CheckOutPage() {
       // Seeded by the save key, so a retry after a failed save sends the same identifier.
       random: () => key,
     });
-    const identifierFinal = clientPayload.identifier;
 
     // No stock validation — checkout always proceeds.
     // If inventory is insufficient, it will be auto-adjusted.
-
-    const receiptItems = cart
-      .map((c) => {
-        const item = inventory.find((i) => i.id === c.itemId);
-        return item ? { name: item.brand ? `${item.brand} - ${item.name}` : item.name, quantity: c.quantity } : null;
-      })
-      .filter(Boolean) as { name: string; quantity: number }[];
 
     if (fulfillingRequestId) {
       try {
@@ -417,24 +410,21 @@ export default function CheckOutPage() {
         const fulfillItems = cart
           .map((c) => ({ id: requestItemIdByInventoryId[c.itemId], fulfilledQuantity: c.quantity }))
           .filter((it): it is { id: string; fulfilledQuantity: number } => Boolean(it.id));
-        await apiRequest(
+        const res = await apiRequest(
           "POST",
           `/api/requests/${fulfillingRequestId}/fulfill`,
           fulfillItems.length > 0 ? { items: fulfillItems } : undefined,
         );
+        // The receipt shows what the server saved, never the cart.
+        const saved: unknown = await res.json().catch(() => null);
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
         queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
         queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-        setReceipt({
-          clientName: clientNameFinal,
-          clientIdentifier: identifierFinal,
-          items: receiptItems,
-          timestamp: new Date().toISOString(),
-        });
+        setReceipt(receiptFromFulfilled(saved, new Date().toISOString()));
         toast({
           title: "Request fulfilled",
-          description: `Request marked as completed for ${clientNameFinal}.`,
+          description: `Request marked as completed for ${savedCheckOutName(saved, clientNameFinal)}.`,
         });
         setCart([]);
         setIsEmergency(false);
@@ -474,6 +464,9 @@ export default function CheckOutPage() {
       if (isEarlierSaveRecorded(e)) {
         // The first try was recorded. Keep the edited form and cart, start a new key.
         saveGuard.renew();
+        // The receipt shows what the first try recorded, never the edited cart.
+        const earlier = receiptFromSaved(e.recorded, clients, new Date().toISOString());
+        if (earlier) setReceipt(earlier);
         toast({ title: "Not saved", description: earlierSaveText(e.recorded, "out"), variant: "destructive" });
         return;
       }
@@ -486,12 +479,8 @@ export default function CheckOutPage() {
     }
 
     if (result?.client) {
-      setReceipt({
-        clientName: clientNameFinal,
-        clientIdentifier: identifierFinal,
-        items: receiptItems,
-        timestamp: new Date().toISOString(),
-      });
+      // The receipt shows what the server saved, never the cart.
+      setReceipt(receiptFromSaved(result.saved, [result.client, ...clients], new Date().toISOString()));
 
       toast({
         title: isEmergency ? "Emergency shop recorded" : "Check-out recorded",
