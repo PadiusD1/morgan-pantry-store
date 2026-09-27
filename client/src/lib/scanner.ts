@@ -41,11 +41,17 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
   let first = "";
   let held = "";
   let lastTime = 0;
+  // Time of the last plain character key, null once a run was ended by another key.
+  let lastChar: number | null = null;
+  // True when the burst began within the key run gap of an earlier character,
+  // so the field already holds the front of the code and the burst is only its tail.
+  let joinedRun = false;
 
   function reset() {
     inBurst = false;
     first = "";
     held = "";
+    joinedRun = false;
   }
 
   function takeHeld(): string | undefined {
@@ -56,6 +62,8 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
 
   function key(ev: ScanKey): ScanDecision {
     if (IGNORED_KEYS.has(ev.key)) return { action: "pass" };
+    const previousChar = lastChar;
+    lastChar = null;
 
     if (ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) {
       const flush = takeHeld();
@@ -67,7 +75,10 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
 
     if (config.suffixes.includes(ev.key)) {
       const code = first + held;
-      if (fast && code.length >= config.minLength) {
+      // A burst that joined a run is refused, the held keys go back into the
+      // field and the suffix reaches it, so the field's own Enter or Tab rule
+      // sees the whole typed code instead of its tail.
+      if (fast && !joinedRun && code.length >= config.minLength) {
         reset();
         return { action: "scan", code };
       }
@@ -82,6 +93,8 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
       return { action: "pass", flush };
     }
 
+    lastChar = ev.time;
+
     if (fast) {
       held += ev.key;
       lastTime = ev.time;
@@ -93,6 +106,7 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
     first = ev.key;
     held = "";
     lastTime = ev.time;
+    joinedRun = previousChar !== null && ev.time - previousChar <= TAB_BURST_CONFIG.gapMs;
     return { action: "pass", flush, snapshot: true };
   }
 
