@@ -11,6 +11,7 @@ import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
 import { earlierComponentText, heldItemId, itemActionFailureText, runCheckInAction } from "@/lib/item-action";
+import { settleEarlierCheckIn, type EarlierCheckIn } from "@/lib/checkin-earlier";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { itemOptions, nextSelectedId, resolveSelectedId, selectedAfterCheckIn } from "@/lib/check-in-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -303,9 +304,47 @@ export default function CheckInPage() {
         console.error("Failed to record check-in:", err);
       }
       if (isEarlierSaveRecorded(err)) {
-        // The first try was recorded. Start a new key. A held item or donor
-        // stage switches the form to the saved item, so the next Save checks in
-        // that item and never creates a second one.
+        // A held item or donor stage may follow an earlier try whose stock was
+        // already sent under this key. That stock is sent once more under the
+        // old key before the key is renewed, so it is read back, or recorded
+        // once, and never recorded a second time under a new key.
+        if (result.stage !== "stock") {
+          let earlier: EarlierCheckIn;
+          try {
+            earlier = await settleEarlierCheckIn(key);
+          } catch (settleError) {
+            // The stock may already be recorded. The old key and the form are kept.
+            toast({
+              title: "Check-in not confirmed",
+              description: saveErrorMessage(
+                settleError,
+                itemActionFailureText(settleError, "The stock could not be recorded. Please try again."),
+              ),
+              variant: "destructive",
+            });
+            return false;
+          }
+          if (earlier.kind === "stock") {
+            saveGuard.renew();
+            queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+            // The quantity shown was not saved again. It is cleared so one more
+            // Save cannot record the earlier check in a second time.
+            setQuantity(0);
+            setScanState({ phase: "idle" });
+            const recordedId = mode === "new" ? heldItemId(result) : undefined;
+            if (recordedId) {
+              setMode("existing");
+              setSelectedId(recordedId);
+            }
+            toast({ title: "Already recorded", description: earlierSaveText(earlier.recorded, "in") });
+            return;
+          }
+        }
+        // No stock of an earlier try was sent. Start a new key. A held item or
+        // donor stage switches the form to the saved item, so the next Save
+        // checks in that item and never creates a second one.
         saveGuard.renew();
         const savedId = mode === "new" ? heldItemId(result) : undefined;
         if (savedId) {
