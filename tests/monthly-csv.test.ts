@@ -50,3 +50,21 @@ describe("donor export dates", () => {
     expect(generatedValue(new Date("2026-07-15T16:05:09Z"))).toBe("7/15/2026, 12:05:09 PM EDT");
   });
 });
+
+describe("monthly summary CSV month", () => {
+  it("counts an 8.30 PM Eastern check out on September 30 in September, not October", async () => {
+    const { easternYearMonth } = await import("../server/monthly-csv");
+    expect(easternYearMonth(new Date("2026-10-01T00:30:00Z"))).toEqual({ year: 2026, month: 9 });
+  });
+
+  it("counts a 12.30 AM Eastern check out on October 1 in October", async () => {
+    const { easternYearMonth } = await import("../server/monthly-csv");
+    expect(easternYearMonth(new Date("2026-10-01T04:30:00Z"))).toEqual({ year: 2026, month: 10 });
+  });
+
+  it("counts a 10 PM Eastern check out on December 31 in December of that year, in winter time", async () => {
+    const { easternYearMonth } = await import("../server/monthly-csv");
+    expect(easternYearMonth(new Date("2027-01-01T03:00:00Z"))).toEqual({ year: 2026, month: 12 });
+    expect(easternYearMonth(new Date("2027-01-01T05:30:00Z"))).toEqual({ year: 2027, month: 1 });
+  });
+});
