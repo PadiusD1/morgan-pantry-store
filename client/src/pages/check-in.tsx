@@ -172,7 +172,7 @@ export default function CheckInPage() {
   const lookupRef = useRef(handleBarcodeLookup);
   lookupRef.current = handleBarcodeLookup;
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
-  useScanner(scanQueue.push);
+  const tabEndsScan = useScanner(scanQueue.push);
 
   // One save at a time, and a retry keeps the same Idempotency-Key.
   const saveGuard = useSaveGuard();
@@ -361,7 +361,7 @@ export default function CheckInPage() {
               placeholder="Scan barcode to find or add..."
               className="pl-8"
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (e.key === "Enter" || (e.key === "Tab" && tabEndsScan(e.currentTarget.value))) {
                   e.preventDefault();
                   scanQueue.push(e.currentTarget.value);
                   e.currentTarget.value = "";

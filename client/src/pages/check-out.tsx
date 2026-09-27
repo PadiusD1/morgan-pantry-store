@@ -284,7 +284,7 @@ export default function CheckOutPage() {
   const lookupRef = useRef(handleBarcodeScanned);
   lookupRef.current = handleBarcodeScanned;
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
-  useScanner(scanQueue.push);
+  const tabEndsScan = useScanner(scanQueue.push);
 
   // The Enter key and the Add button share one lock.
   const addGuard = useSaveGuard();
@@ -833,10 +833,11 @@ export default function CheckOutPage() {
                       value={barcode}
                       onChange={(e) => setBarcode(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") {
+                        if (e.key === "Enter" || (e.key === "Tab" && tabEndsScan(e.currentTarget.value))) {
                           e.preventDefault();
-                          if (barcode.trim()) {
-                            scanQueue.push(barcode);
+                          const code = e.key === "Enter" ? barcode : e.currentTarget.value;
+                          if (code.trim()) {
+                            scanQueue.push(code);
                             setBarcode("");
                           }
                         }
