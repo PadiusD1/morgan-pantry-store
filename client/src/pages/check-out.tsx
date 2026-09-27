@@ -12,6 +12,7 @@ import { clientUpdateFailureText } from "@/lib/client-update";
 import { checkOutFailure, fulfilFailure } from "@/lib/checkout-failure";
 import { settleEarlierSave, type EarlierCheckOut } from "@/lib/checkout-earlier";
 import { useSaveGuard } from "@/lib/save-guard";
+import { addManualItem } from "@/lib/manual-item";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -288,13 +289,15 @@ export default function CheckOutPage() {
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
   const tabEndsScan = useScanner(scanQueue.push);
 
-  // The Enter key and the Add button share one lock.
+  // The Enter key and the Add button share one lock, and one key kept across
+  // retries of the same item until it is saved.
   const addGuard = useSaveGuard();
+  const { itemSaved } = useRepository();
   function handleAddNewItem() {
     void addGuard.run(addNewItem);
   }
 
-  function addNewItem(): boolean | void {
+  async function addNewItem(key: string): Promise<boolean | void> {
     if (!newItemForm) return;
     if (!newItemForm.name.trim()) {
       toast({
@@ -303,28 +306,45 @@ export default function CheckOutPage() {
       });
       return;
     }
-    const created = addOrUpdateItem({
-      name: newItemForm.name.trim(),
-      category: newItemForm.category || "Uncategorized",
-      barcode: newItemForm.barcode.trim() || undefined,
-      quantity: 0,
-      weightPerUnitLbs: newItemForm.weightPerUnitLbs,
-      valuePerUnitUsd: newItemForm.valuePerUnitUsd,
+    const form = newItemForm;
+    const name = form.name.trim();
+    const category = form.category || "Uncategorized";
+    const barcode = form.barcode.trim();
+    // The create is awaited, and the item goes into the cart only after the
+    // server answered with its canonical id.
+    const result = await addManualItem(key, {
+      saveItem: (idempotencyKey) => {
+        const created = addOrUpdateItem({
+          name,
+          category,
+          barcode: barcode || undefined,
+          quantity: 0,
+          weightPerUnitLbs: form.weightPerUnitLbs,
+          valuePerUnitUsd: form.valuePerUnitUsd,
+        }, { idempotencyKey });
+        return itemSaved(created.id);
+      },
+      addToCart: (itemId) => addToCart(itemId, 1),
     });
-    if (newItemForm.barcode.trim()) {
-      upsertBarcodeCache(newItemForm.barcode.trim(), {
-        name: newItemForm.name.trim(),
-        category: newItemForm.category || "Uncategorized",
-        weightPerUnitLbs: newItemForm.weightPerUnitLbs,
+    if (!result.ok) {
+      if (result.renew) addGuard.renew();
+      if (result.closeForm) setNewItemForm(null);
+      toast({ title: "Not added", description: result.text, variant: "destructive" });
+      return false;
+    }
+    if (barcode) {
+      upsertBarcodeCache(barcode, {
+        name,
+        category,
+        weightPerUnitLbs: form.weightPerUnitLbs,
         allergens: [],
       });
     }
     queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-    addToCart(created.id, 1);
     setNewItemForm(null);
     toast({
       title: "Item added to cart",
-      description: `${newItemForm.name.trim()} saved and added to cart.`,
+      description: `${name} saved and added to cart.`,
     });
     setTimeout(() => barcodeInputRef.current?.focus(), 100);
     return true;
