@@ -5,10 +5,11 @@ import { currentLocation } from "@/lib/location";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
-import { apiRequest, isEarlierSaveRecorded, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
+import { apiRequest, isEarlierSaveRecorded, withIdempotencyKey } from "@/lib/queryClient";
 import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
 import { receiptFromFulfilled, receiptFromSaved } from "@/lib/receipt";
 import { clientUpdateFailureText } from "@/lib/client-update";
+import { checkOutFailure } from "@/lib/checkout-failure";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, findOverLimitLine } from "@shared/line-quantity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -470,9 +471,11 @@ export default function CheckOutPage() {
         toast({ title: "Not saved", description: earlierSaveText(e.recorded, "out"), variant: "destructive" });
         return;
       }
+      // A lost response, a 5xx or a timeout may already be recorded. The cart and key are kept.
+      const failure = checkOutFailure(e, duplicateRefusal(e) ?? clientUpdateFailureText(e));
       toast({
-        title: "Check-out failed",
-        description: duplicateRefusal(e) ?? clientUpdateFailureText(e) ?? saveErrorMessage(e, "The distribution could not be recorded. Please try again."),
+        title: failure.title,
+        description: failure.description,
         variant: "destructive",
       });
       return;
