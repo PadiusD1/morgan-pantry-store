@@ -53,6 +53,27 @@ export function inventoryFailureToast(
   };
 }
 
+/**
+ * The line a confirmed save adds when an earlier try of it had already saved
+ * the item or the donor with other details, which were kept (finding A2).
+ */
+export function inventoryEarlierNote(earlier: { stage: "item" | "donor"; recorded: unknown } | undefined, itemName: string): string {
+  if (!earlier) return "";
+  const name = (earlier.recorded as { name?: unknown } | null | undefined)?.name;
+  const saved = typeof name === "string" && name.trim() ? name.trim() : earlier.stage === "item" ? itemName : "";
+  if (earlier.stage === "item") return `An earlier try already saved this item as ${saved}, so its earlier details were kept.`;
+  return saved
+    ? `An earlier try already saved the donor as ${saved}, so that donor was used.`
+    : "An earlier try already saved the donor, so that donor was used.";
+}
+
+/** The donor fields of a donor row an earlier try recorded, or undefined when the row has no id. */
+export function donorFieldsFromRecorded(recorded: unknown): { donor?: string; donorId: string } | undefined {
+  const row = recorded as { id?: unknown; name?: unknown } | null | undefined;
+  if (!row || (typeof row.id !== "string" && typeof row.id !== "number")) return undefined;
+  return { donor: typeof row.name === "string" ? row.name : undefined, donorId: String(row.id) };
+}
+
 /** The toast of a confirmed dialog save, built from the saved transaction. */
 export function inventorySuccessToast(itemName: string, saved: unknown, withStock: boolean, withLocation: boolean): SaveToast {
   return withStock

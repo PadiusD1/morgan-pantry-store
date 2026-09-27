@@ -4,7 +4,7 @@ import { currentLocation } from "@/lib/location";
 import { withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
 import { importRow, runItemSave } from "@/lib/item-action";
-import { failureToastSlot, importFailureText, inventoryFailureToast, inventorySuccessToast } from "@/lib/inventory-save";
+import { donorFieldsFromRecorded, failureToastSlot, importFailureText, inventoryEarlierNote, inventoryFailureToast, inventorySuccessToast } from "@/lib/inventory-save";
 import { pickFields, postDonor, useDonationSources, type DonorPick, type SourceFields } from "@/lib/donation-source";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -75,6 +75,8 @@ export default function InventoryPage() {
     const result = await runItemSave<SourceFields>({
       saveItem: () => itemSaved(item.id),
       pickDonor: withStock ? () => pickFields(form.donorPick, key, postDonor) : undefined,
+      // A donor an earlier try of this save recorded is used, so the starting quantity is still recorded once.
+      donorFromRecorded: withStock ? (row) => donorFieldsFromRecorded(row) as SourceFields | undefined : undefined,
       recordStock: withStock
         ? async (itemId, picked) => {
             // The save's start time, so an unchanged retry sends the same body.
@@ -105,7 +107,10 @@ export default function InventoryPage() {
       return false;
     }
 
-    saveToasts.succeed(inventorySuccessToast(item.name, saved, withStock, !!location));
+    // A held item or donor stage went on with the earlier row, so the toast says which details were kept.
+    const success = inventorySuccessToast(item.name, saved, withStock, !!location);
+    const note = inventoryEarlierNote(result.earlier, item.name);
+    saveToasts.succeed(note ? { ...success, description: `${success.description} ${note}` } : success);
     setEditingItem(null);
     return true;
   }

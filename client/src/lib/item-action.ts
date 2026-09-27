@@ -129,11 +129,23 @@ export type ItemSaveSteps<P> = {
   pickDonor?: () => Promise<P>;
   /** Records the starting quantity against the canonical id. */
   recordStock?: (itemId: string, picked: P | undefined) => Promise<unknown>;
+  /** The donor pick of a donor an earlier try of this save recorded, or undefined when the read back has no id. */
+  donorFromRecorded?: (recorded: unknown) => P | undefined;
 };
 
+/** A stage an earlier try of the same save recorded with other details, and what it recorded. */
+export type EarlierStage = { stage: "item" | "donor"; recorded: unknown };
+
 export type ItemSaveResult =
-  | { ok: true; itemId: string }
+  | { ok: true; itemId: string; earlier?: EarlierStage }
   | { ok: false; stage: "item" | "donor" | "stock"; error: unknown };
+
+/** The id of the row a held 422 read back, when the read back is a row. */
+function recordedId(error: unknown): string | undefined {
+  if (!isEarlierSaveRecorded(error)) return undefined;
+  const id = (error.recorded as { id?: unknown } | null | undefined)?.id;
+  return typeof id === "string" || typeof id === "number" ? String(id) : undefined;
+}
 
 /**
  * The Inventory dialog save. Each write is awaited in turn and the first
@@ -142,10 +154,17 @@ export type ItemSaveResult =
  */
 export async function runItemSave<P>(steps: ItemSaveSteps<P>): Promise<ItemSaveResult> {
   let itemId: string;
+  let earlier: EarlierStage | undefined;
   try {
     itemId = await steps.saveItem();
   } catch (error) {
-    return { ok: false, stage: "item", error };
+    // A held item stage with a starting quantity proves an earlier try of this
+    // save created the item, so the save goes on with that item and records
+    // the quantity once under its own stock key instead of losing it.
+    const heldId = steps.recordStock ? recordedId(error) : undefined;
+    if (heldId === undefined) return { ok: false, stage: "item", error };
+    itemId = heldId;
+    earlier = { stage: "item", recorded: (error as { recorded: unknown }).recorded };
   }
   if (!steps.recordStock) return { ok: true, itemId };
   let picked: P | undefined;
@@ -153,7 +172,11 @@ export async function runItemSave<P>(steps: ItemSaveSteps<P>): Promise<ItemSaveR
     try {
       picked = await steps.pickDonor();
     } catch (error) {
-      return { ok: false, stage: "donor", error };
+      // The same for a donor an earlier try of this save created.
+      const fromRecorded = isEarlierSaveRecorded(error) ? steps.donorFromRecorded?.(error.recorded) : undefined;
+      if (fromRecorded === undefined) return { ok: false, stage: "donor", error };
+      picked = fromRecorded;
+      earlier = earlier ?? { stage: "donor", recorded: (error as { recorded: unknown }).recorded };
     }
   }
   try {
@@ -161,7 +184,7 @@ export async function runItemSave<P>(steps: ItemSaveSteps<P>): Promise<ItemSaveR
   } catch (error) {
     return { ok: false, stage: "stock", error };
   }
-  return { ok: true, itemId };
+  return earlier ? { ok: true, itemId, earlier } : { ok: true, itemId };
 }
 
 export type CheckInSteps<P> = {
