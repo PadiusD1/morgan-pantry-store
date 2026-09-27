@@ -24,8 +24,10 @@ describe("check out page receipt", () => {
 
   it("shows what the earlier try recorded when a retry reads it back", () => {
     const earlier = outbound.slice(outbound.indexOf("if (isEarlierSaveRecorded(e))"));
-    const branch = earlier.slice(0, earlier.indexOf("return;"));
-    expect(branch).toMatch(/receiptFromSaved\(e\.recorded,/);
+    // The read back is settled under the old key first (finding A1), then shown.
+    const branch = earlier.slice(0, earlier.indexOf("earlierSaveText("));
+    expect(branch).toMatch(/settleEarlierSave\(e, key\)/);
+    expect(branch).toMatch(/receiptFromSaved\(earlier\.recorded,/);
     expect(branch).toMatch(/setReceipt\(/);
   });
 });

@@ -19,3 +19,18 @@ export function checkOutFailure(err: unknown, personText: string | null | undefi
   if (classifySaveError(err) === "uncertain") return { title: "Save not confirmed", description: CHECK_OUT_UNCERTAIN };
   return { title: "Check-out failed", description: saveErrorMessage(err, itemActionFailureText(err, CHECK_OUT_REFUSAL)) };
 }
+
+/** The text for a fulfil the server refused. */
+export const FULFIL_REFUSAL = "The request could not be completed. Check the Requests tab and try again.";
+
+/** The text for a lost response, a 5xx or a timeout on a fulfil. The request list is refreshed. */
+export const FULFIL_UNCERTAIN = "The request may already be completed. Check the Requests tab before you try again.";
+
+/**
+ * The toast a failed fulfil shows. A lost response, a 5xx or a timeout says the
+ * request may already be completed, never that it could not be.
+ */
+export function fulfilFailure(err: unknown): { title: string; description: string } {
+  if (classifySaveError(err) === "uncertain") return { title: "Fulfillment not confirmed", description: FULFIL_UNCERTAIN };
+  return { title: "Fulfillment failed", description: saveErrorMessage(err, itemActionFailureText(err, FULFIL_REFUSAL)) };
+}
