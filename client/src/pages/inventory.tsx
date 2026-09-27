@@ -93,12 +93,12 @@ export default function InventoryPage() {
     });
 
     if (!result.ok) {
-      const failure = inventoryFailureToast(result.stage, result.error, item.name);
+      const failure = inventoryFailureToast(result.stage, result.error, item.name, withStock);
       if (!failure.close) {
         saveToasts.fail(failure.toast);
         return false;
       }
-      // An earlier try already recorded this save. Say what was recorded and start a new key.
+      // An earlier try recorded a stage. Say only what the read back proves and start a new key.
       saveGuard.renew();
       saveToasts.succeed(failure.toast);
       setEditingItem(null);

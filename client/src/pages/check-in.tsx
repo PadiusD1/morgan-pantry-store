@@ -10,9 +10,9 @@ import { earlierSaveText, savedCheckInText } from "@/lib/saved-result";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
-import { earlierComponentText, itemActionFailureText, runCheckInAction } from "@/lib/item-action";
+import { earlierComponentText, heldItemId, itemActionFailureText, runCheckInAction } from "@/lib/item-action";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
-import { itemOptions, nextSelectedId, resolveSelectedId } from "@/lib/check-in-selection";
+import { itemOptions, nextSelectedId, resolveSelectedId, selectedAfterCheckIn } from "@/lib/check-in-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -303,9 +303,16 @@ export default function CheckInPage() {
         console.error("Failed to record check-in:", err);
       }
       if (isEarlierSaveRecorded(err)) {
-        // The first try was recorded. Keep the edited form and start a new key.
+        // The first try was recorded. Start a new key. A held item or donor
+        // stage switches the form to the saved item, so the next Save checks in
+        // that item and never creates a second one.
         saveGuard.renew();
-        const text = result.stage === "stock" ? earlierSaveText(err.recorded, "in") : earlierComponentText(result.stage);
+        const savedId = mode === "new" ? heldItemId(result) : undefined;
+        if (savedId) {
+          setMode("existing");
+          setSelectedId(savedId);
+        }
+        const text = result.stage === "stock" ? earlierSaveText(err.recorded, "in") : earlierComponentText(result.stage, !!savedId);
         toast({ title: "Not saved", description: text, variant: "destructive" });
         return;
       }
@@ -335,7 +342,7 @@ export default function CheckInPage() {
     setScanState({ phase: "idle" });
     if (mode === "new") {
       setMode("existing");
-      setSelectedId(itemId);
+      setSelectedId(selectedAfterCheckIn(result));
       setNewItem({
         name: "",
         category: "Uncategorized",

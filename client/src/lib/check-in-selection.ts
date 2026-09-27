@@ -39,3 +39,12 @@ export function itemOptions<T extends SelectableItem>(
 export function nextSelectedId(current: string, incoming: string): string {
   return incoming === "" ? current : incoming;
 }
+
+/**
+ * The id the picker selects after a new item check in. It is the saved row's
+ * real id from the action result, never the temporary id, so the name match
+ * above can never pick an older item that shares the name.
+ */
+export function selectedAfterCheckIn(result: { itemId: string }): string {
+  return result.itemId;
+}

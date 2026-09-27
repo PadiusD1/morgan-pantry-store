@@ -1,3 +1,4 @@
+import { isEarlierSaveRecorded } from "./queryClient";
 import { serverMessage } from "./stock-change";
 
 /**
@@ -176,7 +177,7 @@ export type CheckInSteps<P> = {
 
 export type CheckInResult =
   | { ok: true; itemId: string; saved: unknown }
-  | { ok: false; stage: "item" | "donor" | "stock"; error: unknown };
+  | { ok: false; stage: "item" | "donor" | "stock"; error: unknown; itemId?: string };
 
 /**
  * The check in page action. The item and donor writes run together and both
@@ -189,7 +190,9 @@ export async function runCheckInAction<P>(steps: CheckInSteps<P>): Promise<Check
     steps.pickDonor ? steps.pickDonor() : Promise.resolve(undefined),
   ]);
   if (itemResult.status === "rejected") return { ok: false, stage: "item", error: itemResult.reason };
-  if (donorResult.status === "rejected") return { ok: false, stage: "donor", error: donorResult.reason };
+  if (donorResult.status === "rejected") {
+    return { ok: false, stage: "donor", error: donorResult.reason, itemId: itemResult.value || undefined };
+  }
   const itemId = itemResult.value;
   if (!itemId) return { ok: false, stage: "item", error: new Error("The item was not found. Nothing was recorded.") };
   try {
@@ -204,9 +207,24 @@ export async function runCheckInAction<P>(steps: CheckInSteps<P>): Promise<Check
  * The held 422 read back for the new item or the inline donor carries that
  * record, not a stock count, so the page names what the earlier try saved.
  */
-export function earlierComponentText(stage: "item" | "donor"): string {
+export function earlierComponentText(stage: "item" | "donor", switched = false): string {
   const what = stage === "item" ? "the new item" : "the new donor";
-  return `An earlier try already saved ${what} with other details. Your change was not saved. Check the list, then save again.`;
+  const next = switched ? "The saved item is now selected. Check it, then save again." : "Check the list, then save again.";
+  return `An earlier try already saved ${what} with other details. Your change was not saved. ${next}`;
+}
+
+/**
+ * The saved item a held 422 on the item or donor stage proves, so the check in
+ * form switches to it and the next Save never creates a second item. The item
+ * stage reads the id from the read back, the donor stage from the confirmed item.
+ */
+export function heldItemId(result: { stage: "item" | "donor" | "stock"; error: unknown; itemId?: string }): string | undefined {
+  if (!isEarlierSaveRecorded(result.error)) return undefined;
+  if (result.stage === "donor") return result.itemId || undefined;
+  if (result.stage !== "item") return undefined;
+  const recorded = result.error.recorded;
+  const id = recorded && typeof recorded === "object" ? (recorded as { id?: unknown }).id : undefined;
+  return typeof id === "string" && id ? id : undefined;
 }
 
 /** Saves one import row, and resolves only after the server confirmed it. */
