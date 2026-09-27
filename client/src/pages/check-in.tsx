@@ -12,7 +12,7 @@ import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quant
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
 import { earlierComponentText, heldItemId, itemActionFailureText, runCheckInAction } from "@/lib/item-action";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
-import { itemOptions, nextSelectedId, resolveSelectedId } from "@/lib/check-in-selection";
+import { itemOptions, nextSelectedId, resolveSelectedId, selectedAfterCheckIn } from "@/lib/check-in-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -342,7 +342,7 @@ export default function CheckInPage() {
     setScanState({ phase: "idle" });
     if (mode === "new") {
       setMode("existing");
-      setSelectedId(itemId);
+      setSelectedId(selectedAfterCheckIn(result));
       setNewItem({
         name: "",
         category: "Uncategorized",
