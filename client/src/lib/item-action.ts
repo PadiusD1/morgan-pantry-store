@@ -200,6 +200,15 @@ export async function runCheckInAction<P>(steps: CheckInSteps<P>): Promise<Check
   }
 }
 
+/**
+ * The held 422 read back for the new item or the inline donor carries that
+ * record, not a stock count, so the page names what the earlier try saved.
+ */
+export function earlierComponentText(stage: "item" | "donor"): string {
+  const what = stage === "item" ? "the new item" : "the new donor";
+  return `An earlier try already saved ${what} with other details. Your change was not saved. Check the list, then save again.`;
+}
+
 /** Saves one import row, and resolves only after the server confirmed it. */
 export async function importRow<T>(
   counts: { created: number },

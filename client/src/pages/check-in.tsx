@@ -9,7 +9,7 @@ import { earlierSaveText, savedCheckInText } from "@/lib/saved-result";
 import { useSaveGuard } from "@/lib/save-guard";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
 import { pickFields, postDonor, useDonationSources, type SourceFields } from "@/lib/donation-source";
-import { itemActionFailureText, runCheckInAction } from "@/lib/item-action";
+import { earlierComponentText, itemActionFailureText, runCheckInAction } from "@/lib/item-action";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { itemOptions, nextSelectedId, resolveSelectedId } from "@/lib/check-in-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -295,7 +295,8 @@ export default function CheckInPage() {
       if (isEarlierSaveRecorded(err)) {
         // The first try was recorded. Keep the edited form and start a new key.
         saveGuard.renew();
-        toast({ title: "Not saved", description: earlierSaveText(err.recorded, "in"), variant: "destructive" });
+        const text = result.stage === "stock" ? earlierSaveText(err.recorded, "in") : earlierComponentText(result.stage);
+        toast({ title: "Not saved", description: text, variant: "destructive" });
         return;
       }
       // A known refusal shows the server's message, the held 409 asks to wait,

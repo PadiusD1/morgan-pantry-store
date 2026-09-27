@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifySaveError, componentKeys, runCheckInAction } from "@/lib/item-action";
+import { classifySaveError, componentKeys, earlierComponentText, runCheckInAction } from "@/lib/item-action";
 
 type Call = { method: string; url: string; key?: string; body?: unknown };
 
@@ -139,5 +139,15 @@ describe("runCheckInAction", () => {
     });
     expect(calls).toEqual([{ method: "POST", url: "/api/transactions", body: { itemId: "item-old" } }]);
     expect(result).toEqual({ ok: true, itemId: "item-old", saved: { id: "tx-2" } });
+  });
+
+  it("names the new item or donor an earlier try saved with other details, never a stock count", () => {
+    expect(earlierComponentText("item")).toBe(
+      "An earlier try already saved the new item with other details. Your change was not saved. Check the list, then save again.",
+    );
+    expect(earlierComponentText("donor")).toBe(
+      "An earlier try already saved the new donor with other details. Your change was not saved. Check the list, then save again.",
+    );
+    expect(earlierComponentText("item")).not.toMatch(/[:;]|\s-\s/);
   });
 });
