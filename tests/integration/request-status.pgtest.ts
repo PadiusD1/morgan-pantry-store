@@ -291,6 +291,25 @@ describe("approval claims the request inside its transaction", () => {
     expect(await approvals(request)).toBe(ra.status === 200 ? 1 : 0);
   });
 
+  it("a staff cancel landing after an approval audits the approved status it claimed", async () => {
+    const { item, request } = await pendingRequest();
+    const release = await hold(`SELECT id FROM inventory_items WHERE id = $1 FOR UPDATE`, item);
+    const approve = post(`/api/requests/${request}/approve`);
+    await lockWaiters(1);
+    const cancel = post(`/api/requests/${request}/cancel`);
+    const bothWaited = await lockWaiters(2);
+    await release();
+    const [ra, rc] = await Promise.all([approve, cancel]);
+    expect(bothWaited).toBe(true);
+    expect(ra.status).toBe(200);
+    expect(rc.status).toBe(200);
+    const { rows } = await t.pool.query(
+      `SELECT previous_status FROM request_audit_log WHERE request_id = $1 AND action = 'cancelled'`,
+      [request],
+    );
+    expect(rows.map((r) => r.previous_status)).toEqual(["approved"]);
+  });
+
   it("a staff cancel first then an approval, the approval gets 409 and reserves nothing", async () => {
     const { item, request } = await pendingRequest();
     const release = await hold(`SELECT id FROM requests WHERE id = $1 FOR UPDATE`, request);

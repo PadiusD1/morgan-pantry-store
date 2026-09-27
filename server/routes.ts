@@ -1092,12 +1092,13 @@ export async function registerRoutes(app: Express): Promise<void> {
 
       for (const r of expired) {
         // Another request may have expired this row already, so skip it.
-        if (!(await moveRequestStatus(r.id, "expired", PICKUP_STATUSES))) continue;
+        const previousStatus = await moveRequestStatus(r.id, "expired", PICKUP_STATUSES);
+        if (!previousStatus) continue;
         await storage.createAuditLogEntry({
           requestId: r.id,
           action: "expired",
           details: "Auto-expired: pickup deadline passed",
-          previousStatus: "approved",
+          previousStatus,
           newStatus: "expired",
         });
       }
@@ -1455,7 +1456,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot cancel request with status '${request.status}'` });
     }
 
-    if (!(await moveRequestStatus(req.params.id, "cancelled", OPEN_STATUSES))) {
+    const previousStatus = await moveRequestStatus(req.params.id, "cancelled", OPEN_STATUSES);
+    if (!previousStatus) {
       return res.status(409).json({ message: "This request was already changed" });
     }
 
@@ -1464,7 +1466,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       action: "cancelled",
       actor: actorName(req),
       details: "Request cancelled",
-      previousStatus: request.status,
+      previousStatus,
       newStatus: "cancelled",
     });
 
@@ -1491,7 +1493,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot mark no-show for request with status '${request.status}'` });
     }
 
-    if (!(await moveRequestStatus(req.params.id, "no_show", OPEN_STATUSES))) {
+    const previousStatus = await moveRequestStatus(req.params.id, "no_show", OPEN_STATUSES);
+    if (!previousStatus) {
       return res.status(409).json({ message: "This request was already changed" });
     }
 
@@ -1500,7 +1503,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       action: "no_show",
       actor: actorName(req),
       details: "Client did not pick up",
-      previousStatus: request.status,
+      previousStatus,
       newStatus: "no_show",
     });
 
@@ -1578,7 +1581,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: `Cannot mark as under review from status '${request.status}'` });
     }
 
-    if (!(await changeRequestStatus(req.params.id, "under_review", ["pending"]))) {
+    const previousStatus = await changeRequestStatus(req.params.id, "under_review", ["pending"]);
+    if (!previousStatus) {
       return res.status(409).json({ message: "This request was already changed" });
     }
 
@@ -1587,7 +1591,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       action: "review_started",
       actor: actorName(req),
       details: "Request marked as under review",
-      previousStatus: "pending",
+      previousStatus,
       newStatus: "under_review",
     });
 

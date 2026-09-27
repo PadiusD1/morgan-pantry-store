@@ -207,29 +207,31 @@ export async function changeRequestStatus(
 /**
  * Moves a request to `next` only while it is still in one of `expected`, as
  * the first statement of its transaction, then releases any reservation.
- * Returns false when another request already moved it (PLAN.md defect 4).
+ * Returns the status it claimed under the lock, for the audit row, or null
+ * when another request already moved it (PLAN.md defect 4).
  */
 export async function moveRequestStatus(
   requestId: string,
   next: "cancelled" | "no_show" | "expired",
   expected: readonly string[],
-): Promise<boolean> {
+): Promise<string | null> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const moved = await client.query(
+    const previous = await claimRequest(client, requestId, expected);
+    if (!previous) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    await client.query(
       `UPDATE requests SET status = $2, updated_at = now(),
          cancelled_at = CASE WHEN $2 = 'cancelled' THEN now() ELSE cancelled_at END
-       WHERE id = $1 AND status = ANY($3) RETURNING id`,
-      [requestId, next, expected],
+       WHERE id = $1`,
+      [requestId, next],
     );
-    if (moved.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return false;
-    }
     await releaseRequestReservations(requestId, client);
     await client.query("COMMIT");
-    return true;
+    return previous;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;
