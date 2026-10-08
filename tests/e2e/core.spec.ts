@@ -155,7 +155,7 @@ test("dashboard aggregates return real counts and display a retryable failure", 
   expect(stats.activeClients).toBe(clients.filter((client: any) => client.status === "active").length);
   expect(stats.topDistributedItems.length).toBeLessThanOrEqual(10);
   expect(Number.isInteger(stats.pendingRequests)).toBeTruthy();
-  await page.route("**/api/dashboard/stats", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Database temporarily unavailable" }) }));
+  await page.context().route("**/api/dashboard/stats", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Database temporarily unavailable" }) }));
   await page.goto("/");
   await expect(page.getByText(/unable to load request stats|could not load request|request stats.*unavailable/i)).toBeVisible();
 });

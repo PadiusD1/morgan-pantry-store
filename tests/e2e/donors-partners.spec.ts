@@ -82,7 +82,7 @@ test("a lost existing-donor response cannot turn an edited retry into an update 
   const newName = unique("Different donor after lost response");
   const original = await seedDonor(request, originalName, { email: "original-replay@example.test" });
   let lostFirstReply = false;
-  await page.route("**/api/donors", async (route) => {
+  await page.context().route("**/api/donors", async (route) => {
     if (route.request().method() !== "POST" || lostFirstReply) return route.continue();
     lostFirstReply = true;
     // Complete the real request, including its idempotency record, then

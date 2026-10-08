@@ -143,7 +143,7 @@ test("mobile controls support a download and reject an inverted date range", asy
 });
 
 test("report failures remain visible instead of becoming false zero statistics", async ({ page }) => {
-  await page.route("**/api/reports/emergencies", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "Simulated database report failure" }) }));
+  await page.context().route("**/api/reports/emergencies", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "Simulated database report failure" }) }));
   await selectReportDay(page);
   await expect(page.getByTestId("text-emergency-total")).toContainText("Unavailable");
   await expect(page.getByText("Could not load the lifetime emergency report.")).toBeVisible();
