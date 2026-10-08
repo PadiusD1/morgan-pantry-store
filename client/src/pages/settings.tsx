@@ -242,8 +242,10 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="pt-4 space-y-2">
           <p className="text-sm text-muted-foreground">
-            Data is stored in a local SQLite database on the server. Settings are persisted
-            across sessions. Use the Reports page to export data as CSV for backups.
+            Your records and settings are saved in the shared database and remain
+            available across sessions. Use Reports to download board updates and
+            detailed data exports. Exports are not a complete database backup;
+            database backups are managed separately by your administrator.
           </p>
         </CardContent>
       </Card>

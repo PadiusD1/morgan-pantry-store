@@ -25,7 +25,7 @@ beforeAll(async () => {
   });
   await registerRoutes(app);
   app.use((err: any, _req: any, res: any, _next: any) => {
-    res.status(500).json({ message: String(err?.message ?? err) });
+    res.status(err?.status || 500).json({ message: String(err?.message ?? err) });
   });
   server = app.listen(0);
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -184,5 +184,72 @@ describe("a line above the quantity limit is refused", () => {
     const ok = await send("POST", "/api/transactions", checkIn(id, 10000), "limit-at-1");
     expect(ok.status).toBeLessThan(300);
     expect(await stock(id)).toBe(10012);
+  });
+});
+
+describe("transaction validation and auditable checkout stock", () => {
+  it("rejects empty and nonpositive/fractional movements without recording visits or stock changes", async () => {
+    const id = await newItem("Validation Stock", 10);
+    for (const quantity of [0, -1, 1.5]) {
+      const response = await send("POST", "/api/transactions", checkIn(id, quantity));
+      expect(response.status).toBe(400);
+    }
+    for (const items of [undefined, [], {}]) {
+      const response = await send("POST", "/api/transactions", { type: "OUT", items });
+      expect(response.status).toBe(400);
+    }
+    expect(await stock(id)).toBe(10);
+    expect(await count(`SELECT count(*) AS n FROM transaction_items WHERE inventory_item_id = $1`, [id])).toBe(0);
+  });
+
+  it("keeps reserved stock and records a shortage correction once across retries", async () => {
+    const id = await newItem("Reserved Checkout Stock", 3);
+    await t.pool.query("UPDATE inventory_items SET reserved_quantity = 2 WHERE id = $1", [id]);
+    const body = { ...checkIn(id, 9), type: "OUT" };
+    const response = await send("POST", "/api/transactions", body, "audit-out-once");
+    expect(response.status).toBe(201);
+    const saved = await response.json();
+    expect(saved.stockAdjustments).toEqual([{ inventoryItemId: id, name: "Reserved Checkout Stock", addedUnits: 8 }]);
+    const retry = await send("POST", "/api/transactions", body, "audit-out-once");
+    expect((await retry.json()).id).toBe(saved.id);
+    expect(await stock(id)).toBe(2);
+    const { rows } = await t.pool.query(
+      "SELECT delta, quantity_before, quantity_after, reason FROM stock_adjustments WHERE inventory_item_id = $1", [id],
+    );
+    expect(rows).toEqual([{ delta: 8, quantity_before: 3, quantity_after: 11, reason: `checkout reconciliation for transaction ${saved.id}` }]);
+    expect(await count("SELECT count(*) AS n FROM transaction_items WHERE inventory_item_id = $1", [id])).toBe(1);
+  });
+
+  it("aggregates repeated cart lines before recording a count correction", async () => {
+    const id = await newItem("Repeated Checkout Stock", 5);
+    const a = checkIn(id, 3).items[0];
+    const response = await send("POST", "/api/transactions", { type: "OUT", items: [a, { ...a, quantity: 4 }] });
+    expect(response.status).toBe(201);
+    expect(await stock(id)).toBe(0);
+    const { rows } = await t.pool.query("SELECT delta FROM stock_adjustments WHERE inventory_item_id = $1", [id]);
+    expect(rows).toEqual([{ delta: 2 }]);
+  });
+
+  it("an item deleted before save leaves the entire transaction unchanged", async () => {
+    const id = await newItem("Atomic Checkout Stock", 5);
+    const body = { type: "OUT", items: [checkIn(id, 2).items[0], checkIn("00000000-0000-4000-8000-000000000099", 3).items[0]] };
+    const response = await send("POST", "/api/transactions", body, "audit-out-deleted");
+    expect(response.status).toBe(409);
+    expect(await stock(id)).toBe(5);
+    expect(await count("SELECT count(*) AS n FROM transaction_items WHERE inventory_item_id = $1", [id])).toBe(0);
+    expect(await count("SELECT count(*) AS n FROM idempotency_keys WHERE key = 'audit-out-deleted'")).toBe(0);
+  });
+
+  it("concurrent carts with reversed item order both apply without lost stock", async () => {
+    const a = await newItem("Concurrent Checkout A", 10);
+    const b = await newItem("Concurrent Checkout B", 10);
+    const lines = [checkIn(a, 2).items[0], checkIn(b, 2).items[0]];
+    const responses = await Promise.all([
+      send("POST", "/api/transactions", { type: "OUT", items: lines }, "audit-cart-a"),
+      send("POST", "/api/transactions", { type: "OUT", items: [...lines].reverse() }, "audit-cart-b"),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([201, 201]);
+    expect(await stock(a)).toBe(6);
+    expect(await stock(b)).toBe(6);
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 /**
  * USB barcode scanners type a code as a very fast burst of keys ending in a
@@ -121,7 +121,13 @@ export function createScanMachine(config: ScannerConfig = SCANNER_CONFIG) {
     return held.length > 0;
   }
 
-  return { key, timeout, hasHeld };
+  function cancel() {
+    const flush = timeout();
+    lastChar = null;
+    return flush;
+  }
+
+  return { key, timeout, hasHeld, cancel };
 }
 
 /**
@@ -166,7 +172,12 @@ export function createKeyRun(config: typeof TAB_BURST_CONFIG = TAB_BURST_CONFIG)
     );
   }
 
-  return { key, endedBurst };
+  function reset() {
+    text = "";
+    ended = null;
+  }
+
+  return { key, endedBurst, reset };
 }
 
 export type ScanField = { value: string; selectionStart?: number | null; selectionEnd?: number | null };
@@ -209,6 +220,10 @@ export type ScanKeyEvent = ScanKey & {
 export type ScannerControllerOptions<F extends ScanField> = {
   config?: ScannerConfig;
   getFocused: () => F | null;
+  /** Ordinary text editing takes precedence over global scan detection. */
+  canCapture?: () => boolean;
+  /** A barcode field contributes its complete value, including an earlier prefix. */
+  isBarcodeField?: (field: F) => boolean;
   /** caret, when given, is where the caret goes after the write */
   writeField: (field: F, value: string, caret?: number) => void;
   onScan: (code: string) => void;
@@ -217,9 +232,10 @@ export type ScannerControllerOptions<F extends ScanField> = {
 
 /**
  * Glue between the machine and a page. It snapshots the focused field at the
- * first key, restores it when a scan is confirmed and flushes held keys back
- * into it when no suffix arrives. It takes its field access as functions so it
- * runs in tests without a DOM.
+ * first key, restores ordinary fields when a scan is confirmed and flushes
+ * held keys back when no suffix arrives. Dedicated barcode fields contribute
+ * their whole value and are cleared on a scan. Its field access is injected
+ * so the same logic runs in tests without a DOM.
  */
 export function createScannerController<F extends ScanField>(opts: ScannerControllerOptions<F>) {
   const config = opts.config ?? SCANNER_CONFIG;
@@ -243,6 +259,11 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
   }
 
   function handle(ev: ScanKeyEvent) {
+    if (opts.getFocused() !== field) pause();
+    if (opts.canCapture && !opts.canCapture()) {
+      pause();
+      return;
+    }
     const decision = machine.key(ev);
     if (decision.flush) flushInto(decision.flush);
 
@@ -272,13 +293,29 @@ export function createScannerController<F extends ScanField>(opts: ScannerContro
     }
 
     clearTimer();
-    if (field && field.value !== snapshot) opts.writeField(field, snapshot);
+    let code = decision.code!;
+    if (field && opts.isBarcodeField?.(field)) {
+      // The burst's first character already reached the input; its remaining
+      // characters were held. Include any prefix entered before capture was
+      // attached or resumed, so a busy first render cannot scan only the tail.
+      code = insertAtSelection(field.value, code.slice(1), heldAt?.start, heldAt?.end).value;
+      opts.writeField(field, "");
+    } else if (field && field.value !== snapshot) {
+      opts.writeField(field, snapshot);
+    }
     field = null;
     heldAt = null;
-    opts.onScan(decision.code!);
+    opts.onScan(code);
   }
 
-  return { handle, dispose: clearTimer };
+  function pause() {
+    clearTimer();
+    flushInto(machine.cancel());
+    field = null;
+    heldAt = null;
+  }
+
+  return { handle, pause, dispose: pause };
 }
 
 /**
@@ -314,12 +351,33 @@ export function createScanQueue(run: (code: string) => Promise<unknown> | unknow
 
   return {
     push,
+    clearPending: () => { waiting.length = 0; },
     isBusy: () => busy,
     pending: () => waiting.length,
   };
 }
 
 type EditableField = HTMLInputElement | HTMLTextAreaElement;
+
+type ScanTarget = {
+  tagName?: string;
+  isContentEditable?: boolean;
+  getAttribute?: (name: string) => string | null;
+  closest?: (selector: string) => unknown;
+};
+
+/**
+ * Timing alone cannot distinguish a fast typist from scanner hardware. Keep
+ * Enter/Tab and every character in ordinary fields. Scanners still work in
+ * the dedicated barcode fields and while focus is on the page or a button.
+ */
+export function allowsScannerCapture(target: ScanTarget | null): boolean {
+  if (!target) return true;
+  if (target.getAttribute?.("data-barcode-input") === "true") return true;
+  if (target.isContentEditable || target.closest?.('[contenteditable="true"], [data-scanner-ignore="true"]')) return false;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName?.toUpperCase() ?? "")) return false;
+  return !["textbox", "combobox", "listbox"].includes(target.getAttribute?.("role") ?? "");
+}
 
 function focusedEditable(): EditableField | null {
   const el = typeof document === "undefined" ? null : document.activeElement;
@@ -346,8 +404,8 @@ export function setNativeValue(el: EditableField, value: string, caret?: number)
 }
 
 /**
- * Listens on window in the capture phase, so a scan is caught before it reaches
- * whatever field has focus. onScan receives every confirmed code.
+ * Capture scanner bursts in a barcode field or on the page without taking
+ * normal editing keys from other fields. onScan receives each confirmed code.
  */
 export function useScanner(onScan: (code: string) => void) {
   const onScanRef = useRef(onScan);
@@ -356,9 +414,11 @@ export function useScanner(onScan: (code: string) => void) {
   if (!runRef.current) runRef.current = createKeyRun();
   const run = runRef.current;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const controller = createScannerController<EditableField>({
       getFocused: focusedEditable,
+      canCapture: () => allowsScannerCapture(document.activeElement),
+      isBarcodeField: (field) => field.getAttribute("data-barcode-input") === "true",
       writeField: setNativeValue,
       onScan: (code) => onScanRef.current(code),
       schedule: (fn, ms) => {
@@ -367,6 +427,11 @@ export function useScanner(onScan: (code: string) => void) {
       },
     });
     const listener = (e: KeyboardEvent) => {
+      if (e.isComposing || !allowsScannerCapture(document.activeElement)) {
+        controller.pause();
+        run.reset();
+        return;
+      }
       run.key({
         key: e.key,
         time: e.timeStamp,

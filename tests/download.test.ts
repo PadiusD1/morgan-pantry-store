@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CSV_BOM } from "@shared/csv";
-import { REVOKE_DELAY_MS, canUseServerExports, downloadBlob, downloadCsvText } from "@/lib/download";
+import { REVOKE_DELAY_MS, canUseServerExports, downloadBlob, downloadCsvText, downloadServerCsv } from "@/lib/download";
 
 type FakeLink = { href: string; download: string; style: Record<string, string>; click: () => void; remove: () => void };
 
@@ -79,5 +79,28 @@ describe("canUseServerExports", () => {
     expect(canUseServerExports("volunteer")).toBe(false);
     expect(canUseServerExports("student")).toBe(false);
     expect(canUseServerExports(undefined)).toBe(false);
+  });
+});
+
+describe("downloadServerCsv", () => {
+  it("surfaces a server report error and does not save an error body as a CSV", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: "Report unavailable. Please retry." }), { status: 500, headers: { "Content-Type": "application/json" } })));
+    await expect(downloadServerCsv("/api/reports/monthly-csv", "report.csv")).rejects.toThrow("Report unavailable");
+    expect(lastBlob).toBeUndefined();
+  });
+
+  it("refuses a successful HTML sign-in or fallback page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>Sign in</html>", { headers: { "Content-Type": "text/html" } })));
+    await expect(downloadServerCsv("/api/reports/monthly-csv", "report.csv")).rejects.toThrow("did not return a CSV");
+    expect(lastBlob).toBeUndefined();
+  });
+
+  it("saves an authenticated CSV response once", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response("type,quantity\r\nOUT,2", { headers: { "Content-Type": "text/csv; charset=utf-8" } }));
+    vi.stubGlobal("fetch", fetcher);
+    await downloadServerCsv("/api/reports/monthly-csv", "report.csv");
+    expect(fetcher).toHaveBeenCalledWith("/api/reports/monthly-csv", { credentials: "include", cache: "no-store" });
+    expect(clickedWhileAttached).toEqual([true]);
+    expect(await lastBlob!.text()).toBe("type,quantity\r\nOUT,2");
   });
 });

@@ -54,8 +54,6 @@ export type BarcodeLookupResult =
       logs: LookupLog[];
     };
 
-// ─── Debounce Guard ──────────────────────────────────────────────────────────
-
 // Dev-only logger — stripped from production builds via Vite's import.meta.env.DEV
 const debugLog = (...args: unknown[]) => {
   if (import.meta.env.DEV) {
@@ -70,19 +68,6 @@ const debugError = (...args: unknown[]) => {
   }
 };
 
-const recentScans = new Map<string, number>();
-const DEBOUNCE_MS = 2000;
-
-function isDuplicate(barcode: string): boolean {
-  const last = recentScans.get(barcode);
-  const now = Date.now();
-  if (last && now - last < DEBOUNCE_MS) {
-    return true;
-  }
-  recentScans.set(barcode, now);
-  return false;
-}
-
 // ─── Lookup Function ─────────────────────────────────────────────────────────
 
 export async function lookupBarcode(
@@ -93,16 +78,13 @@ export async function lookupBarcode(
     return { status: "not_found", barcode: trimmed, logs: [] };
   }
 
-  if (isDuplicate(trimmed)) {
-    debugLog(`[barcode-lookup] Debounced duplicate scan: ${trimmed}`);
-    return { status: "debounced" };
-  }
-
+  // Each scan represents a unit. The pages serialize their scan queues, so a
+  // quick second scan of the same product must not be discarded as a duplicate.
   const start = Date.now();
   debugLog(`[barcode-lookup] Looking up barcode: ${trimmed}`);
 
   try {
-    const res = await apiRequest("GET", `/api/barcode-lookup/${trimmed}`);
+    const res = await apiRequest("GET", `/api/barcode-lookup/${encodeURIComponent(trimmed)}`);
     const data: BarcodeLookupResult = await res.json();
     const totalMs = Date.now() - start;
 
@@ -131,7 +113,7 @@ export async function lookupBarcode(
   } catch (err) {
     const totalMs = Date.now() - start;
     debugError(`[barcode-lookup] Network error (${totalMs}ms):`, err);
-    // Return not_found on network failure so manual entry form opens
-    return { status: "not_found", barcode: trimmed, logs: [] };
+    // An outage, expired session or rate limit is not a confirmed missing item.
+    throw err;
   }
 }

@@ -21,6 +21,7 @@ import { stockAdjustFailure } from "./stock-adjust";
 import { newClientRecord } from "./new-client";
 import { sendClientUpdate } from "./client-update";
 import { loadGate } from "./load-gate";
+import { invalidateDonorData } from "./donor-cache";
 
 export type PackageType = "single" | "multi_pack" | "variety_pack" | "case";
 
@@ -108,6 +109,7 @@ export type Transaction = {
   items: TransactionItem[];
   source?: string;
   donor?: string;
+  donorId?: string;
   clientId?: string;
   clientName?: string;
   isEmergency?: boolean;
@@ -318,7 +320,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
   function addOrUpdateItem(partial: ItemChange, options?: ItemChangeOptions): InventoryItem {
     const now = new Date().toISOString();
-    const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
+    // A barcode lookup can publish the canonical row before React rerenders.
+    // Read the live cache so saving that row updates it instead of creating it again.
+    const currentInventory = (queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"]) ?? inventoryQuery.data ?? []).map(toInventoryItem);
     const existing =
       (partial.id && currentInventory.find((i) => i.id === partial.id)) ||
       (partial.barcode ? currentInventory.find((i) => i.barcode && i.barcode === partial.barcode) : undefined);
@@ -628,6 +632,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       timestamp,
       source: source ?? null,
       donor: donor ?? null,
+      donorId: donorId ?? null,
       clientId: donorClientId ?? null,
       clientName: donorClientId ? donor ?? null : null,
       latitude: location?.latitude ?? null,
@@ -685,6 +690,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      void invalidateDonorData(queryClient);
       return saved;
     } catch (err) {
       // Roll back every optimistic mutation to the server's truth, then rethrow
@@ -692,6 +698,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      // A lost response may still have recorded this donation. Reconcile the
+      // donor's totals/history along with inventory when retrying the save.
+      void invalidateDonorData(queryClient);
       throw err instanceof Error ? err : new Error(String(err));
     }
   }
@@ -721,15 +730,13 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
     const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
 
-    // Optimistic inventory update — auto-adjust if insufficient, never block. The
-    // SERVER is the source of truth: it subtracts the given quantity (clamped at 0)
-    // atomically when the OUT transaction is posted (see cross-agent contract).
+    // The server records any required stock correction and preserves request
+    // reservations. This optimistic hint is replaced by the confirmed count.
     queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) =>
       (old ?? []).map((apiItem) => {
         const cartItem = options.items.find((i) => i.itemId === apiItem.id);
         if (!cartItem) return apiItem;
-        // If stock is insufficient, the net result is 0 (auto-adjusted)
-        const newQty = Math.max(0, apiItem.quantity - cartItem.quantity);
+        const newQty = Math.max(apiItem.reservedQuantity ?? 0, apiItem.quantity - cartItem.quantity);
         return { ...apiItem, quantity: newQty, updatedAt: timestamp };
       }),
     );
@@ -817,6 +824,14 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           items: apiItems,
         });
         saved = await res.json().catch(() => null);
+        const corrections = (saved as { stockAdjustments?: { addedUnits: number }[] } | null)?.stockAdjustments;
+        const addedUnits = corrections?.reduce((total, correction) => total + correction.addedUnits, 0) ?? 0;
+        if (addedUnits > 0) {
+          toast({
+            title: "Stock count reconciled",
+            description: `${addedUnits} unrecorded unit${addedUnits === 1 ? " was" : "s were"} added to the stock audit trail to complete this check-out. Please verify the shelf count.`,
+          });
+        }
       }
 
       // Confirmed — reconcile the optimistic cache with the server's truth.

@@ -1,5 +1,10 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
+import { lookupBarcode } from "@/lib/barcode-lookup";
+import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
+import { createItemLookupGuard, itemEntryFields } from "@/lib/item-entry";
+import { ItemNameInput } from "@/components/item-name-input";
 import { currentLocation } from "@/lib/location";
 import { withIdempotencyKey } from "@/lib/queryClient";
 import { useSaveGuard } from "@/lib/save-guard";
@@ -11,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -331,17 +336,11 @@ function InventoryEditDialog({
   sources: string[];
 }) {
   const isNew = !item.id;
+  const { inventory } = useRepository();
+  const queryClient = useQueryClient();
   const { data: donorOptions = [] } = useDonationSources();
   const [form, setForm] = useState({
-    id: item.id || undefined,
-    name: item.name || "",
-    category: item.category || "Uncategorized",
-    barcode: item.barcode || "",
-    quantity: item.quantity,
-    weightPerUnitLbs: item.weightPerUnitLbs,
-    valuePerUnitUsd: item.valuePerUnitUsd,
-    reorderThreshold: item.reorderThreshold ?? undefined,
-    allergens: item.allergens || [] as string[],
+    ...itemEntryFields(item),
     // extra fields for new item check-in
     initialQuantity: 0,
     source: "",
@@ -349,58 +348,101 @@ function InventoryEditDialog({
   });
   const [isNewSource, setIsNewSource] = useState(false);
   const [isNewDonor, setIsNewDonor] = useState(false);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupGuard] = useState(createItemLookupGuard);
+  const lastLookupCode = useRef("");
   const { toast } = useToast();
+  useEffect(() => () => lookupGuard.invalidate(), [lookupGuard]);
+
+  function cancelLookup() {
+    lookupGuard.invalidate();
+    lastLookupCode.current = "";
+    setLookingUp(false);
+  }
+
+  function selectExistingItem(selected: InventoryItem) {
+    cancelLookup();
+    setForm((prev) => ({ ...prev, ...itemEntryFields(selected) }));
+  }
 
   async function handleBarcodeLookup(code: string) {
-    if (!code) return;
+    const trimmed = code.trim();
+    if (!trimmed || lastLookupCode.current === trimmed) return;
+    const existing = inventory.find((row) => row.barcode?.trim() === trimmed);
+    if (existing) {
+      selectExistingItem(existing);
+      lastLookupCode.current = trimmed;
+      return;
+    }
+    const isCurrent = lookupGuard.start();
+    lastLookupCode.current = trimmed;
+    setLookingUp(true);
     try {
-      const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${code}.json`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === 1) {
-          const p = data.product;
-          const name = p.product_name || p.generic_name || "";
-          const category = (Array.isArray(p.categories_tags) && p.categories_tags[0]?.split(":").pop()) || "Uncategorized";
-          const grams = p.product_quantity && p.product_quantity_unit === "g" ? Number(p.product_quantity) : undefined;
-          const weight = grams && !isNaN(grams) ? grams / 453.592 : 0;
-          const allergens = (p.allergens_tags || []).map((a: string) => a.split(":").pop()?.replace(/-/g, " ") || a);
-
-          setForm(prev => ({
-            ...prev,
-            name: name || prev.name,
-            category: category || prev.category,
-            weightPerUnitLbs: weight || prev.weightPerUnitLbs,
-            allergens: allergens.length ? allergens : prev.allergens
-          }));
-          upsertBarcodeCache(code, { name, category, weightPerUnitLbs: weight, allergens });
-          toast({ title: "Product found", description: "Prefilled details from global database." });
-          return;
-        }
+      // The server handles external providers; production CSP permits only
+      // same-origin connections from the browser. It also returns a saved id.
+      const result = await lookupBarcode(trimmed);
+      if (!isCurrent()) {
+        queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        return;
       }
-    } catch {}
-
-    const cached = barcodeCache[code];
-    if (cached) {
-      setForm(prev => ({
-        ...prev,
-        name: cached.name || prev.name,
-        category: cached.category || prev.category,
-        weightPerUnitLbs: cached.weightPerUnitLbs || prev.weightPerUnitLbs,
-        allergens: cached.allergens || prev.allergens
-      }));
-      toast({ title: "Cache found", description: "Prefilled details from local cache." });
+      if (result.status === "exists" || result.status === "created") {
+        queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) => [
+          ...(old ?? []).filter((row) => row.id !== result.item.id),
+          result.item,
+        ]);
+        const selected = toInventoryItem(result.item);
+        setForm((prev) => ({ ...prev, ...itemEntryFields(selected) }));
+        upsertBarcodeCache(trimmed, {
+          name: selected.name,
+          category: selected.category,
+          weightPerUnitLbs: selected.weightPerUnitLbs,
+          allergens: selected.allergens,
+        });
+        toast({ title: "Product found", description: `${selected.name}: saved item details filled in. Enter the quantity to receive below.` });
+        return;
+      }
+      const cached = barcodeCache[trimmed];
+      if (cached) {
+        setForm((prev) => ({
+          ...prev,
+          name: cached.name || prev.name,
+          category: cached.category || prev.category,
+          weightPerUnitLbs: cached.weightPerUnitLbs ?? prev.weightPerUnitLbs,
+          allergens: [...(cached.allergens || prev.allergens)],
+        }));
+        toast({ title: "Saved details found", description: "Filled in details from the barcode cache. Review before saving." });
+      } else {
+        toast({ title: "Barcode not recognized", description: "Search for an existing item by name, or enter the new item details." });
+      }
+    } catch {
+      if (isCurrent()) {
+        lastLookupCode.current = "";
+        toast({ title: "Lookup failed", description: "Could not look up this barcode. Try again or select an existing item by name.", variant: "destructive" });
+      }
+    } finally {
+      if (isCurrent()) setLookingUp(false);
     }
   }
 
   function handleChange<K extends keyof typeof form>(key: K, value: typeof form[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    cancelLookup();
+    setForm((prev) => ({
+      ...prev,
+      ...(isNew && prev.id && key === "barcode" && value !== prev.barcode ? itemEntryFields(item) : {}),
+      [key]: value,
+    }));
   }
 
   function handleNameChange(newName: string) {
+    cancelLookup();
     setForm((prev) => {
-      const updated = { ...prev, name: newName };
+      const updated = {
+        ...prev,
+        ...(isNew && prev.id && newName !== prev.name ? itemEntryFields(item) : {}),
+        name: newName,
+      };
       // Auto-suggest category only if still "Uncategorized" (user hasn't picked one)
-      if (prev.category === "Uncategorized" && newName.trim().length >= 3) {
+      if (updated.category === "Uncategorized" && newName.trim().length >= 3) {
         const suggestion = suggestCategory(newName);
         if (suggestion.confidence >= 0.8) {
           updated.category = suggestion.category;
@@ -418,6 +460,7 @@ function InventoryEditDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (lookingUp) return;
     if (!form.name.trim()) {
       toast({ title: "Item name is required", description: "Enter a name before saving this item." });
       return;
@@ -444,8 +487,11 @@ function InventoryEditDialog({
     <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-item">
       <DialogHeader>
         <DialogTitle data-testid="text-edit-item-heading">
-          {item.id ? "Edit item" : "Add new item"}
+          {item.id ? "Edit item" : form.id ? "Receive existing item" : "Add new item"}
         </DialogTitle>
+        <DialogDescription>
+          {item.id ? "Update this item's details and stock count." : "Choose a saved item by name to receive stock, or enter the details for a new item."}
+        </DialogDescription>
       </DialogHeader>
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="space-y-1.5">
@@ -465,24 +511,33 @@ function InventoryEditDialog({
                 }
               }}
               placeholder={isNew ? "Scan to prefill..." : ""}
+              data-barcode-input="true"
               autoFocus={isNew}
               data-testid="input-item-barcode"
             />
           </div>
-          {isNew && <p className="text-[10px] text-muted-foreground">Scan or type and press Enter to lookup.</p>}
+          {isNew && <p className="text-[10px] text-muted-foreground">{lookingUp ? "Looking up barcode…" : "Scan or type and press Enter to look up."}</p>}
         </div>
 
         <div className="space-y-1.5">
           <label className="text-sm font-medium" htmlFor="item-name" data-testid="label-item-name">
             Item name
           </label>
-          <Input
+          <ItemNameInput
             id="item-name"
             value={form.name}
-            onChange={(e) => handleNameChange(e.target.value)}
+            items={isNew ? inventory : []}
+            onChange={handleNameChange}
+            onSelect={selectExistingItem}
+            placeholder={isNew ? "Type an item name to find saved details" : undefined}
             required
             data-testid="input-item-name"
           />
+          {isNew && form.id && <p className="text-xs text-muted-foreground" data-testid="text-existing-item-selected">Existing item selected. Stock on hand is kept; quantity received is added below.</p>}
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="item-brand">Brand (optional)</label>
+          <Input id="item-brand" value={form.brand} onChange={(e) => handleChange("brand", e.target.value)} data-testid="input-item-brand" />
         </div>
         <div className="space-y-1.5">
           <label className="text-sm font-medium" htmlFor="item-category" data-testid="label-item-category">
@@ -568,7 +623,7 @@ function InventoryEditDialog({
           <div className="grid gap-3 pt-2 border-t border-dashed">
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="initial-quantity">
-                Initial Quantity
+                {form.id ? "Quantity to receive" : "Initial Quantity"}
               </label>
               <Input
                 id="initial-quantity"
@@ -711,8 +766,8 @@ function InventoryEditDialog({
           >
             Cancel
           </Button>
-          <Button type="submit" data-testid="button-save-item">
-            {isNew ? "Create Item" : "Save Changes"}
+          <Button type="submit" disabled={lookingUp} data-testid="button-save-item">
+            {isNew && !form.id ? "Create Item" : "Save Changes"}
           </Button>
         </DialogFooter>
       </form>

@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, type TestDb } from "../helpers/pg";
 
 // The monthly summary groups check outs by their calendar month in Baltimore,
@@ -79,5 +79,50 @@ describe("monthly summary CSV month boundaries", () => {
     const only2026 = await (await fetch(`${base}/api/reports/monthly-csv?year=2026`)).text();
     expect(only2026).toContain("New Year Eve Soup");
     expect(only2026).toContain("2026 GRAND TOTAL,,,,15.00");
+  });
+});
+
+describe("report API regression cases", () => {
+  it("rejects invalid year queries before generating an export", async () => {
+    for (const query of ["year=hello", "year=2026&year=2025", "year=2026%0D%0Aextra"]) {
+      const response = await fetch(`${base}/api/reports/monthly-csv?${query}`);
+      expect(response.status).toBe(400);
+      expect((await response.json()).message).toContain("reporting year");
+    }
+  });
+
+  it("counts a multi-item emergency once and weights historical unit values", async () => {
+    const rice = (await t.pool.query("INSERT INTO inventory_items (name, category, quantity) VALUES ('Weighted Rice', 'Grains', 100) RETURNING id")).rows[0].id;
+    const beans = (await t.pool.query("INSERT INTO inventory_items (name, category, quantity) VALUES ('Emergency Beans', 'Grains', 100) RETURNING id")).rows[0].id;
+    const emergency = (await t.pool.query("INSERT INTO transactions (type, timestamp, is_emergency) VALUES ('OUT', '2028-05-03T18:00:00Z', true) RETURNING id")).rows[0].id;
+    const regular = (await t.pool.query("INSERT INTO transactions (type, timestamp) VALUES ('OUT', '2028-05-04T18:00:00Z') RETURNING id")).rows[0].id;
+    await t.pool.query(`INSERT INTO transaction_items (transaction_id, inventory_item_id, name, quantity, weight_per_unit_lbs, value_per_unit_usd)
+      VALUES ($1, $3, 'Weighted Rice', 2, 1, 1), ($1, $4, 'Emergency Beans', 1, 1, 5), ($2, $3, 'Weighted Rice', 4, 1, 2.5)`, [emergency, regular, rice, beans]);
+    const response = await fetch(`${base}/api/reports/monthly-csv?year=2028`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("charset=utf-8");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const csv = new TextDecoder().decode(bytes);
+    expect(csv).toContain("Grains,Weighted Rice,6,2.00,12.00");
+    expect(csv).toContain("Emergency Shop Appointments,1\r\n");
+    expect(csv).toContain("2028 Emergency Shop Appointments,,,,1");
+    expect(csv).toContain("2028 GRAND TOTAL,,,,17.00");
+    const onlyEmergency = await (await fetch(`${base}/api/reports/monthly-csv?year=2028&emergency=1`)).text();
+    expect(onlyEmergency).toContain("Grains,Weighted Rice,2,1.00,2.00");
+    expect(onlyEmergency).toContain("2028 GRAND TOTAL,,,,7.00");
+  });
+
+  it("returns a retryable error instead of fabricated zero emergency statistics", async () => {
+    const { pool } = await import("../../server/pg");
+    const query = vi.spyOn(pool, "query").mockRejectedValueOnce(new Error("Simulated report query failure") as never);
+    try {
+      const response = await fetch(`${base}/api/reports/emergencies`);
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body.message).toContain("retry");
+      expect(body).not.toHaveProperty("totalEmergencies");
+    } finally { query.mockRestore(); }
   });
 });

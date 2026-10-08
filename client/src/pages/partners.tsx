@@ -2,8 +2,12 @@ import React, { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
-import { apiRequest, saveErrorMessage } from "@/lib/queryClient";
-import { toApiClientBody } from "@/lib/api-types";
+import { apiRequest, isEarlierSaveRecorded, saveErrorMessage } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
+import { useDonationSources } from "@/lib/donation-source";
+import { isPartnerContribution } from "@/lib/partner-contributions";
+import { cacheSavedPartner, partnerSaveRequest, type PartnerForm } from "@/lib/partner-save";
+import { duplicateRefusal } from "@shared/identity";
 import { useSaveGuard } from "@/lib/save-guard";
 import type { ClientRecord } from "@/lib/repository";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,20 +27,6 @@ import { Handshake, PlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
 // the `clients` table with client_type='partner' so they can still appear as
 // recipients during check-out, but they are kept on a dedicated page so the
 // staff-facing Clients list only shows students.
-
-type PartnerForm = {
-  id?: string;
-  name: string;
-  identifier: string;
-  organization: string;
-  partnershipType: string;
-  contact?: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  status: string;
-  notes?: string;
-};
 
 const emptyForm: PartnerForm = {
   id: undefined,
@@ -65,9 +55,13 @@ export default function PartnersPage() {
   const { clients, transactions } = useRepository();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const { data: donationSources = [] } = useDonationSources();
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<PartnerForm | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Only show partner-type clients on this surface.
   const partners = useMemo<ClientRecord[]>(
@@ -90,12 +84,7 @@ export default function PartnersPage() {
   }, [partners, query]);
 
   function partnerContributions(partner: ClientRecord) {
-    const partnerName = partner.name.trim().toLowerCase();
-    return transactions.filter(
-      (t) =>
-        t.type === "IN" &&
-        (t.clientId === partner.id || t.donor?.trim().toLowerCase() === partnerName),
-    );
+    return transactions.filter((transaction) => isPartnerContribution(transaction, partner, donationSources));
   }
 
   function partnerDistributions(partnerId: string) {
@@ -103,11 +92,10 @@ export default function PartnersPage() {
   }
 
   function lastPartnerActivity(partner: ClientRecord) {
-    const partnerName = partner.name.trim().toLowerCase();
     const visit = transactions.find(
       (t) =>
         (t.type === "OUT" && t.clientId === partner.id) ||
-        (t.type === "IN" && (t.clientId === partner.id || t.donor?.trim().toLowerCase() === partnerName)),
+        isPartnerContribution(t, partner, donationSources),
     );
     return visit ? new Date(visit.timestamp) : undefined;
   }
@@ -142,78 +130,70 @@ export default function PartnersPage() {
 
   // One save at a time, and saved is shown only after the server accepts it.
   const saveGuard = useSaveGuard();
+  const deleteGuard = useSaveGuard();
   function handleSave() {
     void saveGuard.run(savePartner);
   }
 
-  async function savePartner(): Promise<boolean | void> {
+  async function savePartner(key: string): Promise<boolean | void> {
     if (!editing) return;
     if (!editing.name.trim() || !editing.identifier.trim()) {
-      toast({ title: "Missing required fields", description: "Partner name and identifier are required." });
+      toast({ title: "Missing required fields", description: "Partner name and identifier are required.", variant: "destructive" });
       return;
     }
-    const partner = {
-      id: editing.id,
-      name: editing.name.trim(),
-      identifier: editing.identifier.trim(),
-      contact: editing.contact?.trim() || undefined,
-      phone: editing.phone?.trim() || undefined,
-      email: editing.email?.trim() || undefined,
-      address: editing.address?.trim() || undefined,
-      organization: editing.organization.trim() || undefined,
-      partnershipType: editing.partnershipType || undefined,
-      status: editing.status,
-      notes: editing.notes?.trim() || undefined,
-      clientType: "partner" as const,
-      householdSize: 1,
-      allergies: [] as string[],
-    };
-    // Same match as upsertClient, by id or by identifier among partners.
-    const normalize = (s: string | undefined | null) => (s ?? "").trim().toLowerCase();
-    const existing = partner.id
-      ? clients.find((c) => c.id === partner.id)
-      : clients.find(
-          (c) =>
-            normalize(c.identifier) === normalize(partner.identifier) &&
-            (c.clientType ?? "student") === "partner",
-        );
+    const request = partnerSaveRequest(editing);
+    setSaving(true);
     try {
-      if (existing) {
-        // Keep existing values for any field left blank, as upsertClient does.
-        const merged: Partial<ClientRecord> = {};
-        for (const [key, value] of Object.entries(partner)) {
-          if (value !== undefined && value !== null && value !== "") {
-            (merged as Record<string, unknown>)[key] = value;
-          }
-        }
-        await apiRequest("PATCH", `/api/clients/${existing.id}`, toApiClientBody(merged));
-      } else {
-        await apiRequest("POST", "/api/clients", toApiClientBody(partner));
-      }
+      const response = await apiRequest(request.method, request.url, request.body, request.method === "POST" ? { idempotencyKey: key } : undefined);
+      const saved = await cacheSavedPartner(queryClient, await response.json());
+      toast({ title: "Partner saved", description: saved.name });
+      setQuery("");
+      setEditing(null);
+      return true;
     } catch (err) {
+      if (isEarlierSaveRecorded(err)) {
+        try {
+          const recorded = await cacheSavedPartner(queryClient, err.recorded);
+          setEditing((current) => current ? { ...current, id: recorded.id } : current);
+          saveGuard.renew();
+          toast({ title: "Earlier partner saved", description: `${recorded.name} was saved from your earlier attempt. Your latest entries are kept. Review them and save again to update that partner.`, variant: "destructive" });
+          return;
+        } catch {
+          // Keep the form when the earlier answer cannot be interpreted.
+        }
+      }
       toast({
         title: "Partner not saved",
-        description: saveErrorMessage(err, "The server did not save this partner. Your entries are kept, check them and try again."),
+        description: duplicateRefusal(err) ?? saveErrorMessage(err, "The server did not save this partner. Your entries are kept, check them and try again."),
         variant: "destructive",
       });
       return;
+    } finally {
+      setSaving(false);
     }
-    queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-    toast({ title: "Partner saved", description: partner.name });
-    setEditing(null);
-    return true;
   }
 
-  async function handleDelete() {
+  function handleDelete() {
+    void deleteGuard.run(deletePartner);
+  }
+
+  async function deletePartner(): Promise<boolean | void> {
     if (!deleteConfirm) return;
+    setDeleting(true);
     try {
       await apiRequest("DELETE", `/api/clients/${deleteConfirm.id}`);
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/clients"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/donation-sources"] }),
+      ]);
       toast({ title: "Partner removed", description: `${deleteConfirm.name} has been removed.` });
-    } catch {
-      toast({ title: "Delete failed", description: "Could not delete partner. Try again.", variant: "destructive" });
+      setDeleteConfirm(null);
+      return true;
+    } catch (err) {
+      toast({ title: "Delete failed", description: saveErrorMessage(err, "Could not delete partner. If they have transaction history, set their status to inactive instead."), variant: "destructive" });
+    } finally {
+      setDeleting(false);
     }
-    setDeleteConfirm(null);
   }
 
   return (
@@ -224,6 +204,7 @@ export default function PartnersPage() {
             <SearchIcon className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               type="search"
+              aria-label="Search partners"
               placeholder="Search by name, organization, partnership type..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -233,7 +214,7 @@ export default function PartnersPage() {
           </div>
           <Button
             size="sm"
-            onClick={() => setEditing({ ...emptyForm })}
+            onClick={() => { saveGuard.renew(); setEditing({ ...emptyForm }); }}
             data-testid="button-add-partner"
           >
             <PlusIcon className="h-4 w-4" />
@@ -334,7 +315,8 @@ export default function PartnersPage() {
                           variant="ghost"
                           size="sm"
                           className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
-                          onClick={() =>
+                          onClick={() => {
+                            saveGuard.renew();
                             setEditing({
                               id: p.id,
                               name: p.name,
@@ -347,22 +329,23 @@ export default function PartnersPage() {
                               address: p.address,
                               status: p.status ?? "active",
                               notes: p.notes,
-                            })
-                          }
+                            });
+                          }}
                           data-testid={`button-edit-partner-${p.id}`}
                         >
                           Edit
                         </Button>
-                        <Button
+                        {user?.role === "admin" && <Button
                           type="button"
                           variant="ghost"
                           size="sm"
                           className="h-7 px-2 text-xs text-destructive hover:text-destructive max-md:min-h-[40px] max-md:px-3"
                           onClick={() => setDeleteConfirm({ id: p.id, name: p.name })}
+                          aria-label={`Remove ${p.name}`}
                           data-testid={`button-delete-partner-${p.id}`}
                         >
                           <Trash2Icon className="h-3.5 w-3.5" />
-                        </Button>
+                        </Button>}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -373,7 +356,7 @@ export default function PartnersPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
+      <Dialog open={!!editing} onOpenChange={(open) => { if (!open && !saveGuard.isLocked()) setEditing(null); }}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle data-testid="text-edit-partner-heading">
@@ -392,7 +375,9 @@ export default function PartnersPage() {
                 handleSave();
               }}
               className="space-y-3"
+              aria-busy={saving}
             >
+              <fieldset disabled={saving} className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="partner-name">Partner name *</label>
@@ -522,24 +507,25 @@ export default function PartnersPage() {
                 <Button type="button" variant="ghost" onClick={() => setEditing(null)} data-testid="button-cancel-edit-partner">
                   Cancel
                 </Button>
-                <Button type="submit" data-testid="button-save-partner">Save partner</Button>
+                <Button type="submit" disabled={saving} data-testid="button-save-partner">{saving ? "Saving..." : "Save partner"}</Button>
               </DialogFooter>
+              </fieldset>
             </form>
           )}
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
+      <Dialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open && !deleteGuard.isLocked()) setDeleteConfirm(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Remove partner</DialogTitle>
             <DialogDescription>
-              Remove <strong>{deleteConfirm?.name}</strong>? Their distribution history will be preserved but unlinked.
+              Remove <strong>{deleteConfirm?.name}</strong>? Partners with linked transaction history must be set to inactive instead.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Remove</Button>
+            <Button variant="outline" disabled={deleting} onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={deleting} onClick={handleDelete}>{deleting ? "Removing..." : "Remove"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

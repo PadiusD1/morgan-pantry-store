@@ -3,6 +3,8 @@ import { Link, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useClientWithHistory, useRepository } from "@/lib/repository";
 import { apiRequest } from "@/lib/queryClient";
+import { useDonationSources } from "@/lib/donation-source";
+import { isPartnerContribution } from "@/lib/partner-contributions";
 import { StatusBadge } from "@/components/request/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,6 +16,7 @@ export default function PartnerDetailPage() {
   const [, params] = useRoute<{ id: string }>("/partners/:id");
   const { client: partner, visits } = useClientWithHistory(params?.id);
   const { transactions } = useRepository();
+  const { data: donationSources = [] } = useDonationSources();
 
   const { data: requests = [] } = useQuery<any[]>({
     queryKey: ["/api/requests/lookup", partner?.identifier],
@@ -49,11 +52,7 @@ export default function PartnerDetailPage() {
     (sum, tx) => sum + tx.items.reduce((s, item) => s + item.quantity * item.valuePerUnitUsd, 0),
     0,
   );
-  const contributions = transactions.filter(
-    (tx) =>
-      tx.type === "IN" &&
-      (tx.clientId === partner.id || tx.donor?.trim().toLowerCase() === partner.name.trim().toLowerCase()),
-  );
+  const contributions = transactions.filter((transaction) => isPartnerContribution(transaction, partner, donationSources));
   const contributionUnits = contributions.reduce((sum, tx) => sum + tx.items.reduce((s, item) => s + item.quantity, 0), 0);
   const contributionWeight = contributions.reduce(
     (sum, tx) => sum + tx.items.reduce((s, item) => s + item.quantity * item.weightPerUnitLbs, 0),

@@ -13,11 +13,14 @@ import { lookupBarcode } from "./barcode-lookup";
 import { candidateLookupOn, checkClientDuplicate } from "./client-duplicates";
 import { findOrCreateDonor } from "./donor-find-or-create";
 import { donorStoreOn } from "./pg-storage";
+import { loadDonorHistory } from "./donor-history";
+import { applyTransactionStock } from "./transaction-stock";
+import { loadDashboardStats } from "./dashboard-stats";
 import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
-import { easternDate, easternYearMonth, generatedValue, monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "./monthly-csv";
+import { buildMonthlyCsv, easternDate, generatedValue } from "./monthly-csv";
 import {
   insertInventoryItemSchema,
   insertClientSchema,
@@ -567,7 +570,11 @@ export async function registerRoutes(app: Express): Promise<void> {
   });
 
   app.post("/api/transactions", async (req, res) => {
-    const { items: rawItems, ...txBody } = req.body;
+    const { items: rawItems, ...txBody } = req.body ?? {};
+
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return res.status(400).json({ message: "A transaction requires at least one item." });
+    }
 
     if (typeof txBody.timestamp === "string") {
       txBody.timestamp = new Date(txBody.timestamp);
@@ -584,23 +591,21 @@ export async function registerRoutes(app: Express): Promise<void> {
     // opening the DB transaction — validation failures never leave a half-write.
     const txId = randomUUID();
     const parsedItems: Array<z.infer<typeof insertTransactionItemSchema>> = [];
-    if (Array.isArray(rawItems)) {
-      for (const rawItem of rawItems) {
-        // Checked before the schema so a scanner code in the quantity gets the plain limit message.
-        if (isOverLineLimit(Number(rawItem?.quantity))) {
-          return res.status(400).json({ message: LINE_QUANTITY_LIMIT_MESSAGE });
-        }
-        const itemResult = insertTransactionItemSchema.safeParse({
-          ...rawItem,
-          transactionId: txId,
-        });
-        if (!itemResult.success) {
-          return res
-            .status(400)
-            .json({ message: "Invalid item data", errors: zodErrors(itemResult.error) });
-        }
-        parsedItems.push(itemResult.data);
+    for (const rawItem of rawItems) {
+      // Checked before the schema so a scanner code in the quantity gets the plain limit message.
+      if (isOverLineLimit(Number(rawItem?.quantity))) {
+        return res.status(400).json({ message: LINE_QUANTITY_LIMIT_MESSAGE });
       }
+      const itemResult = insertTransactionItemSchema.safeParse({
+        ...rawItem,
+        transactionId: txId,
+      });
+      if (!itemResult.success) {
+        return res
+          .status(400)
+          .json({ message: "Invalid item data", errors: zodErrors(itemResult.error) });
+      }
+      parsedItems.push(itemResult.data);
     }
 
     const d = txResult.data;
@@ -618,6 +623,11 @@ export async function registerRoutes(app: Express): Promise<void> {
         await client.query("ROLLBACK");
         return sendClaim(res, claim);
       }
+
+      const stockAdjustments = await applyTransactionStock(client, d.type, parsedItems, {
+        transactionId: txId,
+        userId: req.user?.id ?? null,
+      });
 
       const txRow = (
         await client.query(
@@ -662,21 +672,9 @@ export async function registerRoutes(app: Express): Promise<void> {
           )
         ).rows[0];
         createdItems.push(mapTransactionItemRow(insertedItem));
-
-        if (d.type === "IN") {
-          await client.query(
-            `UPDATE inventory_items SET quantity = quantity + $1 WHERE id = $2`,
-            [it.quantity, it.inventoryItemId],
-          );
-        } else if (d.type === "OUT") {
-          await client.query(
-            `UPDATE inventory_items SET quantity = GREATEST(0, quantity - $1) WHERE id = $2`,
-            [it.quantity, it.inventoryItemId],
-          );
-        }
       }
 
-      responsePayload = { ...mapTransactionRow(txRow), items: createdItems };
+      responsePayload = { ...mapTransactionRow(txRow), items: createdItems, stockAdjustments };
       await saveRequestKey(client, req, 201, responsePayload);
       await client.query("COMMIT");
     } catch (err) {
@@ -855,74 +853,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   // ─── Dashboard Stats ──────────────────────────────────────────────
 
   app.get("/api/dashboard/stats", async (_req, res) => {
-    const [items, transactions, clients] = await Promise.all([
-      storage.getInventoryItems(),
-      storage.getTransactions(),
-      storage.getClients(),
-    ]);
-
-    const now = new Date();
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const weeklyOuts = transactions.filter(
-      (t) => t.type === "OUT" && new Date(t.timestamp) >= weekAgo,
-    );
-
-    const categoryMap = new Map<string, number>();
-    for (const item of items) {
-      const cat = item.category || "Uncategorized";
-      categoryMap.set(cat, (categoryMap.get(cat) || 0) + item.quantity);
-    }
-
-    const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const recentTxIds = transactions
-      .filter((t) => t.type === "OUT" && new Date(t.timestamp) >= monthAgo)
-      .map((t) => t.id);
-
-    const itemDistMap = new Map<string, { name: string; total: number }>();
-    for (const txId of recentTxIds) {
-      const txItems = await storage.getTransactionItems(txId);
-      for (const ti of txItems) {
-        const entry = itemDistMap.get(ti.inventoryItemId) || { name: ti.name, total: 0 };
-        entry.total += ti.quantity;
-        itemDistMap.set(ti.inventoryItemId, entry);
-      }
-    }
-    const topItems = Array.from(itemDistMap.entries())
-      .map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
-
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    let pendingRequests = 0;
-    let approvedReadyForPickup = 0;
-    let todayRequests = 0;
-    let expiredNoShowCount = 0;
-    try {
-      const [pending, ready, today, expired] = await Promise.all([
-        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status IN ('pending','under_review')`),
-        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status IN ('approved','partially_approved','ready_for_pickup')`),
-        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE created_at >= $1::timestamptz`, [todayStart]),
-        pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status IN ('expired','no_show') AND updated_at >= $1::timestamptz`, [weekAgo.toISOString()]),
-      ]);
-      pendingRequests = pending.rows[0]?.count ?? 0;
-      approvedReadyForPickup = ready.rows[0]?.count ?? 0;
-      todayRequests = today.rows[0]?.count ?? 0;
-      expiredNoShowCount = expired.rows[0]?.count ?? 0;
-    } catch {
-      // stats are best-effort
-    }
-
-    res.json({
-      weeklyVisits: weeklyOuts.length,
-      categoryBreakdown: Array.from(categoryMap.entries()).map(([name, count]) => ({ name, count })),
-      topDistributedItems: topItems,
-      totalClients: clients.length,
-      activeClients: clients.filter((c) => c.status === "active").length,
-      pendingRequests,
-      approvedReadyForPickup,
-      todayRequests,
-      expiredNoShowCount,
-    });
+    res.json(await loadDashboardStats());
   });
 
   // ─── 1. Public Inventory ─────────────────────────────────────────────
@@ -1110,7 +1041,10 @@ export async function registerRoutes(app: Express): Promise<void> {
     const conditions: string[] = [];
     const params: any[] = [];
 
-    if (status && typeof status === "string") {
+    if (status === "pickup") {
+      params.push(PICKUP_STATUSES);
+      conditions.push(`status = ANY($${params.length}::text[])`);
+    } else if (status && typeof status === "string") {
       params.push(status);
       conditions.push(`status = $${params.length}`);
     }
@@ -1169,7 +1103,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       }
       const { items: bodyItems, adminNote } = bodyResult.data;
 
-      const requestItems = await storage.getRequestItems(req.params.id);
+      const requestItems = (await storage.getRequestItems(req.params.id))
+        .sort((a, b) => a.inventoryItemId.localeCompare(b.inventoryItemId) || a.id.localeCompare(b.id));
       const actor = actorName(req);
 
       const approvalMap = new Map<string, number>();
@@ -1340,7 +1275,7 @@ export async function registerRoutes(app: Express): Promise<void> {
 
     const requestItems = (await storage.getRequestItems(req.params.id)).filter(
       (ri: any) => (ri.approvedQuantity ?? 0) > 0,
-    );
+    ).sort((a, b) => a.inventoryItemId.localeCompare(b.inventoryItemId) || a.id.localeCompare(b.id));
 
     const bodyResult = fulfillBodySchema.safeParse(req.body ?? {});
     if (!bodyResult.success) {
@@ -1354,6 +1289,13 @@ export async function registerRoutes(app: Express): Promise<void> {
       for (const bi of bodyItems) {
         fulfillMap.set(bi.id, bi.fulfilledQuantity);
       }
+    }
+    const unitsToDistribute = requestItems.reduce((total, ri) => {
+      const approved = ri.approvedQuantity ?? 0;
+      return total + Math.min(fulfillMap.get(ri.id) ?? approved, approved);
+    }, 0);
+    if (unitsToDistribute <= 0) {
+      return res.status(400).json({ message: "Distribute at least one item to complete pickup. If nothing is collected, cancel the request or mark it as no-show." });
     }
     const actor = actorName(req);
 
@@ -1397,6 +1339,8 @@ export async function registerRoutes(app: Express): Promise<void> {
           "UPDATE request_items SET fulfilled_quantity = $1, reserved = false WHERE id = $2",
           [fulfilledQty, ri.id],
         );
+
+        if (fulfilledQty === 0) continue;
 
         const invItem = (await client.query(
           "SELECT weight_per_unit_lbs, value_per_unit_usd FROM inventory_items WHERE id = $1",
@@ -1649,22 +1593,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   // ─── Donor Management ─────────────────────────────────────────────
 
   async function donorTransactions(donorId: string, donorName: string) {
-    const { rows } = await pool.query(
-      `SELECT * FROM transactions
-       WHERE type = 'IN' AND (donor_id = $1
-         OR (donor_id IS NULL AND lower(btrim(regexp_replace(donor, '\\s+', ' ', 'g'))) = $2))
-       ORDER BY timestamp DESC`,
-      [donorId, normaliseDonorName(donorName)],
-    );
-    return rows;
-  }
-
-  async function transactionItemsFor(txId: string) {
-    const { rows } = await pool.query(
-      "SELECT * FROM transaction_items WHERE transaction_id = $1",
-      [txId],
-    );
-    return rows;
+    return loadDonorHistory(pool, donorId, donorName);
   }
 
   app.get("/api/donors", async (_req, res) => {
@@ -1678,6 +1607,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         `SELECT
            t.id        AS tx_id,
            t.donor_id  AS donor_id,
+           t.client_id AS client_id,
            t.donor     AS donor_name,
            t.timestamp AS ts,
            COALESCE(SUM(ti.quantity), 0)::int AS items,
@@ -1686,14 +1616,14 @@ export async function registerRoutes(app: Express): Promise<void> {
          FROM transactions t
          LEFT JOIN transaction_items ti ON ti.transaction_id = t.id
          WHERE t.type = 'IN'
-         GROUP BY t.id, t.donor_id, t.donor, t.timestamp`,
+         GROUP BY t.id, t.donor_id, t.client_id, t.donor, t.timestamp`,
       )
     ).rows;
 
     // Each row goes to one donor, by donor_id, or by a case blind name for old rows.
     const byDonor = new Map<string, any[]>();
     for (const r of aggRows) {
-      const owner = attributeDonor({ donorId: r.donor_id, donor: r.donor_name }, donors as any[]);
+      const owner = attributeDonor({ donorId: r.donor_id, donor: r.donor_name, clientId: r.client_id }, donors as any[]);
       if (!owner) continue;
       const arr = byDonor.get(owner);
       if (arr) arr.push(r);
@@ -1755,7 +1685,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     lines.push("");
     lines.push("Date,Items,Total Qty,Total Weight (lbs),Total Value ($)");
     for (const tx of txRows) {
-      const items = await transactionItemsFor(tx.id);
+      const items = tx.line_items;
       let qty = 0, wt = 0, val = 0;
       const names: string[] = [];
       for (const item of items) {
@@ -1791,8 +1721,8 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!donor) return res.status(404).json({ message: "Donor not found" });
     const txRows = await donorTransactions(donor.id, donor.name);
 
-    const history = await Promise.all(txRows.map(async (tx: any) => {
-      const rawItems = await transactionItemsFor(tx.id);
+    const history = txRows.map((tx: any) => {
+      const rawItems = tx.line_items as any[];
       const items = rawItems.map((item: any) => {
         const weightPerUnit = parseFloat(item.weight_per_unit_lbs) || 0;
         const valuePerUnit = parseFloat(item.value_per_unit_usd) || 0;
@@ -1802,13 +1732,13 @@ export async function registerRoutes(app: Express): Promise<void> {
           inventoryItemId: item.inventory_item_id ?? null,
           name: item.name,
           quantity,
-          weight: Math.round(weightPerUnit * quantity * 100) / 100,
-          value: Math.round(valuePerUnit * quantity * 100) / 100,
+          weight: weightPerUnit * quantity,
+          value: valuePerUnit * quantity,
         };
       });
       const totalQuantity = items.reduce((s, i) => s + i.quantity, 0);
-      const totalWeight = Math.round(items.reduce((s, i) => s + i.weight, 0) * 100) / 100;
-      const totalValue = Math.round(items.reduce((s, i) => s + i.value, 0) * 100) / 100;
+      const totalWeight = items.reduce((s, i) => s + i.weight, 0);
+      const totalValue = items.reduce((s, i) => s + i.value, 0);
       return {
         id: tx.id,
         type: tx.type,
@@ -1823,7 +1753,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         totalWeight,
         totalValue,
       };
-    }));
+    });
     res.json(history);
   });
 
@@ -1833,7 +1763,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     const txRows = await donorTransactions(donor.id, donor.name);
     let totalItems = 0, totalWeight = 0, totalValue = 0;
     for (const tx of txRows) {
-      const items = await transactionItemsFor(tx.id);
+      const items = tx.line_items;
       for (const item of items) {
         totalItems += item.quantity || 0;
         totalWeight += (parseFloat(item.weight_per_unit_lbs) || 0) * (item.quantity || 0);
@@ -1877,9 +1807,23 @@ export async function registerRoutes(app: Express): Promise<void> {
   });
 
   app.delete("/api/donors/:id", async (req, res) => {
-    const deleted = await storage.deleteDonor(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "Donor not found" });
-    res.json({ success: true });
+    try {
+      const donor = await storage.getDonor(req.params.id);
+      if (!donor) return res.status(404).json({ message: "Donor not found" });
+      // Legacy name-only donations have no foreign key to stop deletion.
+      // Preserve the history currently shown on this donor's page as well.
+      if ((await loadDonorHistory(pool, donor.id, donor.name)).length > 0) {
+        return res.status(409).json({ message: "This donor has donation history. Make the donor inactive to preserve those records." });
+      }
+      const deleted = await storage.deleteDonor(req.params.id);
+      if (!deleted) return res.status(404).json({ message: "Donor not found" });
+      res.json({ success: true });
+    } catch (err: any) {
+      if (err?.code === "23503" || err?.cause?.code === "23503") {
+        return res.status(409).json({ message: "This donor has donation history. Make the donor inactive to preserve those records." });
+      }
+      throw err;
+    }
   });
 
   // ─── Emergency Shop Appointment Reports ─────────────────────────────
@@ -1900,9 +1844,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         ORDER BY emergency_count DESC, last_emergency_at DESC
       `)).rows;
 
-      const totalEmergencies = (await pool.query(
-        `SELECT COUNT(*)::int AS count FROM transactions WHERE type = 'OUT' AND is_emergency = true`,
-      )).rows[0]?.count ?? 0;
+      const totalEmergencies = perClient.reduce((total, row) => total + Number(row.emergency_count), 0);
 
       const flaggedStudents = perClient.filter((r) => r.emergency_count > 1);
 
@@ -1913,7 +1855,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       });
     } catch (err: any) {
       console.error("[reports/emergencies] error:", err);
-      res.json({ totalEmergencies: 0, flaggedStudents: [], perClient: [] });
+      res.status(500).json({ message: "Failed to load the emergency report. Please retry." });
     }
   });
 
@@ -1921,127 +1863,36 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   app.get("/api/reports/monthly-csv", async (req, res) => {
     try {
+      if (req.query.year !== undefined && (typeof req.query.year !== "string" || !/^[1-9]\d{3}$/.test(req.query.year))) {
+        return res.status(400).json({ message: "Choose a valid four-digit reporting year." });
+      }
       const yearFilter = typeof req.query.year === "string" ? req.query.year : null;
       const includeEmergencyOnly = req.query.emergency === "1" || req.query.emergency === "true";
-
+      const filters = ["t.type = 'OUT'"];
+      const values: number[] = [];
+      if (yearFilter) {
+        values.push(Number(yearFilter));
+        // Filter before transferring lines out of PostgreSQL; retain indexable
+        // timestamp bounds and handle the Baltimore year boundary on Vercel.
+        filters.push("t.timestamp >= make_timestamptz($1::int, 1, 1, 0, 0, 0, 'America/New_York')");
+        filters.push("t.timestamp < make_timestamptz($1::int + 1, 1, 1, 0, 0, 0, 'America/New_York')");
+      }
+      if (includeEmergencyOnly) filters.push("t.is_emergency = true");
       const rows = (await pool.query(`
-        SELECT
-          t.id           AS tx_id,
-          t.timestamp    AS ts,
-          t.is_emergency AS is_emergency,
-          t.client_name  AS client_name,
-          ti.inventory_item_id AS inv_id,
-          ti.name        AS item_name,
-          ti.quantity    AS quantity,
-          ti.weight_per_unit_lbs AS weight_per_unit,
-          ti.value_per_unit_usd  AS value_per_unit,
-          i.category     AS category
+        SELECT t.id AS tx_id, t.timestamp AS ts, t.is_emergency,
+               ti.inventory_item_id AS inv_id, ti.name AS item_name,
+               ti.quantity, ti.value_per_unit_usd AS value_per_unit, i.category
         FROM transactions t
         JOIN transaction_items ti ON ti.transaction_id = t.id
         LEFT JOIN inventory_items i ON i.id = ti.inventory_item_id
-        WHERE t.type = 'OUT'
+        WHERE ${filters.join(" AND ")}
         ORDER BY t.timestamp ASC
-      `)).rows;
-
-      type ItemAgg = { quantity: number; costPerUnit: number; total: number };
-      type CategoryAgg = { items: Map<string, ItemAgg>; total: number };
-      type MonthAgg = { categories: Map<string, CategoryAgg>; total: number; emergencyCount: number };
-      const yearMap = new Map<number, Map<number, MonthAgg>>();
-
-      for (const r of rows) {
-        if (includeEmergencyOnly && !r.is_emergency) continue;
-
-        const ts = new Date(r.ts);
-        if (Number.isNaN(ts.getTime())) continue;
-        const { year, month } = easternYearMonth(ts);
-        if (yearFilter && String(year) !== yearFilter) continue;
-
-        const qty = Number(r.quantity) || 0;
-        const cost = parseFloat(r.value_per_unit) || 0;
-        const lineTotal = qty * cost;
-        const category = r.category || "Uncategorized";
-        const itemName = r.item_name || "Unknown item";
-
-        if (!yearMap.has(year)) yearMap.set(year, new Map());
-        const monthsForYear = yearMap.get(year)!;
-        if (!monthsForYear.has(month)) {
-          monthsForYear.set(month, { categories: new Map(), total: 0, emergencyCount: 0 });
-        }
-        const monthAgg = monthsForYear.get(month)!;
-        if (r.is_emergency) monthAgg.emergencyCount += 1;
-        monthAgg.total += lineTotal;
-
-        if (!monthAgg.categories.has(category)) {
-          monthAgg.categories.set(category, { items: new Map(), total: 0 });
-        }
-        const catAgg = monthAgg.categories.get(category)!;
-        catAgg.total += lineTotal;
-
-        if (!catAgg.items.has(itemName)) {
-          catAgg.items.set(itemName, { quantity: 0, costPerUnit: cost, total: 0 });
-        }
-        const itemAgg = catAgg.items.get(itemName)!;
-        itemAgg.quantity += qty;
-        if (cost > 0) itemAgg.costPerUnit = cost;
-        itemAgg.total += lineTotal;
-      }
-
-      const MONTH_NAMES = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December",
-      ];
-      const lines: string[] = [];
-      lines.push(`Morgan State FRC Monthly Summary${includeEmergencyOnly ? " (Emergency Shop Appointments only)" : ""}`);
-      lines.push(monthlyGeneratedLine(new Date()));
-      lines.push("");
-
-      const sortedYears = Array.from(yearMap.keys()).sort();
-      for (const year of sortedYears) {
-        const months = yearMap.get(year)!;
-        lines.push(`Year,${year}`);
-        let yearTotal = 0;
-        let yearEmergencies = 0;
-        const sortedMonths = Array.from(months.keys()).sort((a, b) => a - b);
-        for (const month of sortedMonths) {
-          const monthAgg = months.get(month)!;
-          yearTotal += monthAgg.total;
-          yearEmergencies += monthAgg.emergencyCount;
-          lines.push("");
-          lines.push(`Month,${MONTH_NAMES[month - 1]} ${year}`);
-          if (monthAgg.emergencyCount > 0) {
-            lines.push(`Emergency Shop Appointments,${monthAgg.emergencyCount}`);
-          }
-          lines.push("Category,Item,Quantity,Cost per Unit,Line Total");
-          const sortedCategories = Array.from(monthAgg.categories.keys()).sort();
-          for (const category of sortedCategories) {
-            const catAgg = monthAgg.categories.get(category)!;
-            const sortedItems = Array.from(catAgg.items.entries()).sort((a, b) =>
-              a[0].localeCompare(b[0]),
-            );
-            for (const [itemName, itemAgg] of sortedItems) {
-              lines.push(monthlyItemLine(category, itemName, itemAgg.quantity, itemAgg.costPerUnit, itemAgg.total));
-            }
-            lines.push(monthlySubtotalLine(category, catAgg.total));
-          }
-          lines.push(`${MONTH_NAMES[month - 1]} ${year} total,,,,${monthAgg.total.toFixed(2)}`);
-        }
-        lines.push("");
-        lines.push(`${year} GRAND TOTAL,,,,${yearTotal.toFixed(2)}`);
-        if (yearEmergencies > 0) {
-          lines.push(`${year} Emergency Shop Appointments,,,,${yearEmergencies}`);
-        }
-        lines.push("");
-      }
-
-      if (sortedYears.length === 0) {
-        lines.push("No distribution records found for the selected filter.");
-      }
-
-      const csv = lines.join("\n");
+      `, values)).rows;
       const filename = `frc-monthly-summary${yearFilter ? `-${yearFilter}` : ""}${includeEmergencyOnly ? "-emergencies" : ""}.csv`;
-      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.send(csv);
+      res.setHeader("Cache-Control", "no-store");
+      res.send(buildMonthlyCsv(rows, { year: yearFilter, emergencyOnly: includeEmergencyOnly }));
     } catch (err: any) {
       console.error("[reports/monthly-csv] error:", err);
       res.status(500).json({ message: "Failed to generate monthly summary" });

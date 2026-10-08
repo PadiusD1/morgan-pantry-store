@@ -1,9 +1,11 @@
-import React, { useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRepository } from "@/lib/repository";
+import { useRepository, type InventoryItem } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { createScanQueue, useScanner } from "@/lib/scanner";
+import { refocusScanField } from "@/lib/scan-focus";
+import { cartAllergyWarning } from "@/lib/cart-allergies";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest, isEarlierSaveRecorded, withIdempotencyKey } from "@/lib/queryClient";
 import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
@@ -120,7 +122,10 @@ export default function CheckOutPage() {
     itemAllergens: string[];
     clientAllergies: string[];
     onConfirm: () => void;
+    onCancel: () => void;
   } | null>(null);
+  const checkoutActive = useRef(true);
+  const cancelAllergyDecision = useRef<(() => void) | null>(null);
 
   const sortedClients = useMemo(
     () => [...clients].sort((a, b) => a.name.localeCompare(b.name)),
@@ -155,35 +160,44 @@ export default function CheckOutPage() {
     }
   }
 
-  function addToCart(itemId: string, quantity: number = 1) {
-    if (!itemId) return;
+  async function addToCart(itemId: string, quantity: number = 1, resolvedItem?: InventoryItem): Promise<boolean> {
+    if (!itemId || !checkoutActive.current) return false;
 
     // Check allergies before adding
     if (clientId && clientId !== "new") {
-        const item = inventory.find(i => i.id === itemId);
-        if (item && item.allergens && item.allergens.length > 0 && clientAllergies.length > 0) {
-            const matches = item.allergens.filter(a =>
-                clientAllergies.some(ca => ca.toLowerCase().includes(a.toLowerCase()) || a.toLowerCase().includes(ca.toLowerCase()))
-            );
-
-            if (matches.length > 0) {
-                setAllergyWarning({
-                    isOpen: true,
-                    itemName: item.name,
-                    itemAllergens: matches,
-                    clientAllergies: clientAllergies,
-                    onConfirm: () => {
-                        performAddToCart(itemId, quantity);
-                        setAllergyWarning(null);
-                        setTimeout(() => barcodeInputRef.current?.focus(), 100);
-                    }
-                });
-                return;
+      const currentInventory = queryClient.getQueryData<ApiInventoryItem[]>(["/api/inventory"])?.map(toInventoryItem) ?? inventory;
+      const warning = cartAllergyWarning(itemId, currentInventory, clientAllergies, resolvedItem);
+      if (warning) {
+        // A scan is complete only after this decision. Otherwise a second
+        // queued scan replaces the warning and silently loses the first item.
+        return new Promise<boolean>((resolve) => {
+          let settled = false;
+          const finish = (confirmed: boolean) => {
+            if (settled) return;
+            settled = true;
+            cancelAllergyDecision.current = null;
+            const added = confirmed && checkoutActive.current;
+            if (added) performAddToCart(itemId, quantity);
+            if (checkoutActive.current) {
+              setAllergyWarning(null);
+              setTimeout(() => refocusScanField(barcodeInputRef.current, document), 100);
             }
-        }
+            resolve(added);
+          };
+          cancelAllergyDecision.current = () => finish(false);
+          setAllergyWarning({
+            isOpen: true,
+            ...warning,
+            clientAllergies,
+            onConfirm: () => finish(true),
+            onCancel: () => finish(false),
+          });
+        });
+      }
     }
 
     performAddToCart(itemId, quantity);
+    return true;
   }
 
   function addBundleToCart(group: ItemGroup) {
@@ -223,6 +237,13 @@ export default function CheckOutPage() {
 
     try {
       const result = await lookupBarcode(trimmed);
+      if (!checkoutActive.current) return;
+      if (result.status === "exists" || result.status === "created") {
+        queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) => [
+          ...(old ?? []).filter((row) => row.id !== result.item.id),
+          result.item,
+        ]);
+      }
 
       if (result.status === "debounced") {
         setScanLoading(false);
@@ -232,10 +253,12 @@ export default function CheckOutPage() {
       if (result.status === "exists") {
         const item = toInventoryItem(result.item as ApiInventoryItem);
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        addToCart(item.id, 1);
-        toast({ title: "Item added", description: `${item.name} added to cart.` });
+        if (await addToCart(item.id, 1, item)) {
+          toast({ title: "Item added", description: `${item.name} added to cart.` });
+        }
+        if (!checkoutActive.current) return;
         setScanLoading(false);
-        setTimeout(() => barcodeInputRef.current?.focus(), 100);
+        setTimeout(() => refocusScanField(barcodeInputRef.current, document), 100);
         return;
       }
 
@@ -248,14 +271,17 @@ export default function CheckOutPage() {
           allergens: item.allergens,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        addToCart(item.id, 1);
+        const added = await addToCart(item.id, 1, item);
+        if (!checkoutActive.current) return;
         const srcLabel = result.product?.winningSource || "API";
-        toast({
-          title: "New item added",
-          description: `${item.name} found via ${srcLabel} and added to cart.`,
-        });
+        if (added) {
+          toast({
+            title: "New item added",
+            description: `${item.name} found via ${srcLabel} and added to cart.`,
+          });
+        }
         setScanLoading(false);
-        setTimeout(() => barcodeInputRef.current?.focus(), 100);
+        setTimeout(() => refocusScanField(barcodeInputRef.current, document), 100);
         return;
       }
 
@@ -273,6 +299,7 @@ export default function CheckOutPage() {
         description: "Fill in the item details below to add it to the cart.",
       });
     } catch {
+      if (!checkoutActive.current) return;
       toast({
         title: "Lookup failed",
         description: "Could not reach product databases. Try again or add item manually.",
@@ -282,12 +309,20 @@ export default function CheckOutPage() {
     }
   }
 
-  // A scan always reaches the lookup, whatever field has focus, and a code
-  // that arrives during a lookup waits its turn.
+  // Barcode fields and page-level scans feed one queue. Ordinary form editing
+  // keeps its characters, Enter and Tab; a queued scan is never dropped.
   const lookupRef = useRef(handleBarcodeScanned);
   lookupRef.current = handleBarcodeScanned;
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
   const tabEndsScan = useScanner(scanQueue.push);
+  useEffect(() => {
+    checkoutActive.current = true;
+    return () => {
+      checkoutActive.current = false;
+      scanQueue.clearPending();
+      cancelAllergyDecision.current?.();
+    };
+  }, [scanQueue]);
 
   // The Enter key and the Add button share one lock, and one key kept across
   // retries of the same item until it is saved.
@@ -891,8 +926,9 @@ export default function CheckOutPage() {
                         }
                       }}
                       className="w-full sm:w-40 min-w-0"
-                      disabled={scanLoading}
+                      aria-busy={scanLoading}
                       autoFocus
+                      data-barcode-input="true"
                       data-testid="input-barcode"
                     />
                     {scanLoading && (
@@ -1012,7 +1048,7 @@ export default function CheckOutPage() {
           </div>
         </form>
 
-        <Dialog open={!!allergyWarning} onOpenChange={(open) => { if (!open) setAllergyWarning(null); }}>
+        <Dialog open={!!allergyWarning} onOpenChange={(open) => { if (!open) allergyWarning?.onCancel(); }}>
           <DialogContent className="border-red-500 border-2">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-red-600">
@@ -1036,7 +1072,7 @@ export default function CheckOutPage() {
                </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setAllergyWarning(null)}>Cancel</Button>
+              <Button variant="outline" onClick={() => allergyWarning?.onCancel()}>Cancel</Button>
               <Button variant="destructive" onClick={() => allergyWarning?.onConfirm()}>
                 Confirm & Add Anyway
               </Button>

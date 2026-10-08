@@ -1,7 +1,7 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { donorKeys, type DonorRecord as Donor } from "@/lib/donor-cache";
 import { useAuth } from "@/lib/auth";
 import { canUseServerExports, downloadServerCsv } from "@/lib/download";
 import { useToast } from "@/hooks/use-toast";
@@ -10,19 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeftIcon, DownloadIcon, HeartHandshakeIcon, PackageIcon, WeightIcon, DollarSignIcon, CalendarIcon, Loader2 } from "lucide-react";
-
-interface Donor {
-  id: string;
-  name: string;
-  organization?: string;
-  contactName?: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  notes?: string;
-  status: string;
-  createdAt: string;
-}
 
 interface DonationHistoryItem {
   id: string;
@@ -57,12 +44,12 @@ export default function DonorDetailPage() {
   }
 
   const { data: donor, isLoading: loadingDonor, isError: donorError, refetch: refetchDonor } = useQuery<Donor>({
-    queryKey: ["/api/donors", donorId],
+    queryKey: donorKeys.detail(donorId ?? ""),
     enabled: !!donorId,
   });
 
   const { data: history = [], isLoading: loadingHistory, isError: historyError, refetch: refetchHistory } = useQuery<DonationHistoryItem[]>({
-    queryKey: [`/api/donors/${donorId}/history`],
+    queryKey: donorKeys.history(donorId ?? ""),
     enabled: !!donorId,
   });
 
@@ -77,8 +64,18 @@ export default function DonorDetailPage() {
       totalWeight += entry.totalWeight ?? entry.items.reduce((s, i) => s + (i.weight ?? 0), 0);
       estimatedValue += entry.totalValue ?? entry.items.reduce((s, i) => s + (i.value ?? 0), 0);
     }
-    return { totalDonations, totalItems, totalWeight, estimatedValue };
-  }, [history]);
+    // The detail endpoint totals all stored snapshots before rounding. Adding
+    // displayed donation totals can accumulate rounding error across donations.
+    return {
+      totalDonations: donor?.totalDonations ?? totalDonations,
+      totalItems: donor?.totalItemsDonated ?? totalItems,
+      totalWeight: donor?.totalWeightDonated ?? totalWeight,
+      estimatedValue: donor?.totalValueDonated ?? estimatedValue,
+    };
+  }, [donor, history]);
+  const hasAuthoritativeStats = donor?.totalDonations != null && donor.totalItemsDonated != null && donor.totalWeightDonated != null && donor.totalValueDonated != null;
+  const statsReady = hasAuthoritativeStats || (!loadingHistory && !historyError);
+  const statsUnavailable = loadingHistory ? "Loading..." : "Unavailable";
 
   if (loadingDonor) {
     return (
@@ -140,7 +137,7 @@ export default function DonorDetailPage() {
           <CardContent className="flex items-center gap-3 py-4">
             <HeartHandshakeIcon className="h-5 w-5 text-muted-foreground" />
             <div>
-              <div className="text-2xl font-bold">{stats.totalDonations}</div>
+              <div className={statsReady ? "text-2xl font-bold" : "text-sm text-muted-foreground"}>{statsReady ? stats.totalDonations : statsUnavailable}</div>
               <div className="text-xs text-muted-foreground">Total Donations</div>
             </div>
           </CardContent>
@@ -149,7 +146,7 @@ export default function DonorDetailPage() {
           <CardContent className="flex items-center gap-3 py-4">
             <PackageIcon className="h-5 w-5 text-muted-foreground" />
             <div>
-              <div className="text-2xl font-bold">{stats.totalItems}</div>
+              <div className={statsReady ? "text-2xl font-bold" : "text-sm text-muted-foreground"}>{statsReady ? stats.totalItems : statsUnavailable}</div>
               <div className="text-xs text-muted-foreground">Total Items Donated</div>
             </div>
           </CardContent>
@@ -158,7 +155,7 @@ export default function DonorDetailPage() {
           <CardContent className="flex items-center gap-3 py-4">
             <WeightIcon className="h-5 w-5 text-muted-foreground" />
             <div>
-              <div className="text-2xl font-bold">{stats.totalWeight.toFixed(1)}</div>
+              <div className={statsReady ? "text-2xl font-bold" : "text-sm text-muted-foreground"}>{statsReady ? stats.totalWeight.toFixed(1) : statsUnavailable}</div>
               <div className="text-xs text-muted-foreground">Total Weight (lbs)</div>
             </div>
           </CardContent>
@@ -167,7 +164,7 @@ export default function DonorDetailPage() {
           <CardContent className="flex items-center gap-3 py-4">
             <DollarSignIcon className="h-5 w-5 text-muted-foreground" />
             <div>
-              <div className="text-2xl font-bold">${stats.estimatedValue.toFixed(2)}</div>
+              <div className={statsReady ? "text-2xl font-bold" : "text-sm text-muted-foreground"}>{statsReady ? `$${stats.estimatedValue.toFixed(2)}` : statsUnavailable}</div>
               <div className="text-xs text-muted-foreground">Estimated Value</div>
             </div>
           </CardContent>

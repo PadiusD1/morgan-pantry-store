@@ -65,6 +65,10 @@ describe("attributeDonor", () => {
     expect(attributeDonor({ donorId: "gone", donor: "Test Farm" }, donors)).toBeNull();
   });
 
+  it("does not attribute a same-name partner donation to a donor", () => {
+    expect(attributeDonor({ clientId: "partner-1", donor: "Test Farm" }, donors)).toBeNull();
+  });
+
   it("falls back to a case blind name match for an old row, the active donor first", () => {
     expect(attributeDonor({ donorId: null, donor: "  TEST FARM " }, donors)).toBe("d2");
     expect(attributeDonor({ donor: "other donor" }, donors)).toBe("d3");

@@ -32,13 +32,21 @@ function createPool(): Pool {
         ...(process.env.PGSSL_CA ? { ca: process.env.PGSSL_CA } : {}),
       };
 
-  return new Pool({
+  const pool = new Pool({
     connectionString: url,
     max: 4,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
     ssl,
   });
+  // pg-pool discards failed idle clients. Handle its error event so a dropped
+  // database connection does not terminate the server between requests.
+  pool.on("error", (error) => {
+    console.error("[database] Idle connection failed; the pool will reconnect.", {
+      code: (error as Error & { code?: string }).code ?? "unknown",
+    });
+  });
+  return pool;
 }
 
 export const pool = createPool();

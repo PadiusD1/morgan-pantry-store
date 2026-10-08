@@ -1,0 +1,80 @@
+name: FRC production health check
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: read
+
+concurrency:
+  group: frc-production-health
+  cancel-in-progress: true
+
+jobs:
+  read-only-health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Wait for this commit's Vercel deployment and read public health
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs/promises';
+          import { setTimeout as delay } from 'node:timers/promises';
+          const sha = process.env.RELEASE_SHA;
+          if (process.env.RELEASE_REPO !== 'PadiusD1/morgan-pantry-store' || !/^[a-f0-9]{40}$/.test(sha)) throw new Error('Unexpected release target');
+          const receipt = { sha, checkedAt: null, vercel: null, homepageStatus: null, healthStatus: null, health: null };
+          await fs.mkdir('test-results', { recursive: true });
+          try {
+            let deployed = false;
+            for (let attempt = 0; attempt < 30; attempt++) {
+              const response = await fetch(`https://api.github.com/repos/PadiusD1/morgan-pantry-store/commits/${sha}/status`, {
+                headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json' },
+                signal: AbortSignal.timeout(15_000)
+              });
+              if (!response.ok) throw new Error(`Cannot read commit deployment status (${response.status})`);
+              const statuses = (await response.json()).statuses;
+              const vercel = statuses.find((entry) => entry.context === 'Vercel');
+              if (vercel?.state === 'success') {
+                receipt.vercel = { state: vercel.state, url: vercel.target_url };
+                deployed = true;
+                break;
+              }
+              if (['error', 'failure'].includes(vercel?.state)) throw new Error('Vercel reported a failed deployment');
+              await delay(10_000);
+            }
+            if (!deployed) throw new Error('Vercel did not report success for this commit within five minutes');
+            // Only GET requests to the established production origin. No login,
+            // synthetic writes, cookies, database credentials, or schema changes.
+            const origin = 'https://morgan-frc.vercel.app';
+            const headers = { 'Cache-Control': 'no-cache' };
+            const homepage = await fetch(`${origin}/?release_check=${sha}`, { headers, signal: AbortSignal.timeout(30_000) });
+            receipt.homepageStatus = homepage.status;
+            const html = await homepage.text();
+            if (homepage.status !== 200 || !html.includes('id="root"') || !html.includes('/assets/')) throw new Error(`Production application shell was unavailable (${homepage.status})`);
+            const health = await fetch(`${origin}/api/health?release_check=${sha}`, { headers, signal: AbortSignal.timeout(30_000) });
+            receipt.healthStatus = health.status;
+            receipt.health = await health.json();
+            if (health.status !== 200 || receipt.health?.status !== 'ok') throw new Error(`Production database health did not pass (${health.status})`);
+            console.log('PRODUCTION_HEALTH_VERIFIED', JSON.stringify(receipt));
+          } finally {
+            receipt.checkedAt = new Date().toISOString();
+            await fs.writeFile('test-results/production-health.json', JSON.stringify(receipt, null, 2));
+          }
+          JS
+      - name: Save the read-only health receipt
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: frc-production-health
+          path: test-results/production-health.json
+          retention-days: 14
+          if-no-files-found: ignore

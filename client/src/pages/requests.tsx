@@ -15,7 +15,7 @@ import {
   Loader2, ClockIcon, PackageIcon, UserXIcon, BanIcon, SearchIcon,
 } from "lucide-react";
 
-const STATUS_FILTERS = ["all", "pending", "under_review", "approved", "partially_approved", "ready_for_pickup", "denied", "completed", "expired", "no_show", "cancelled"] as const;
+const STATUS_FILTERS = ["all", "pending", "pickup", "under_review", "approved", "partially_approved", "ready_for_pickup", "denied", "completed", "expired", "no_show", "cancelled"] as const;
 
 export default function RequestsPage() {
   const queryClient = useQueryClient();
@@ -147,7 +147,7 @@ export default function RequestsPage() {
       <div className="flex flex-wrap gap-2 items-center">
         {STATUS_FILTERS.map((s) => (
           <Button key={s} size="sm" variant={statusFilter === s ? "default" : "outline"} onClick={() => setStatusFilter(s)} className="capitalize text-xs">
-            {s === "all" ? "All" : s.replace(/_/g, " ")}
+            {s === "all" ? "All" : s === "pickup" ? "Awaiting pickup" : s.replace(/_/g, " ")}
           </Button>
         ))}
         <div className="ml-auto relative">
