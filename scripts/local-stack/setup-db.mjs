@@ -1,10 +1,11 @@
-// Local stack only. Creates the frc_stack database on the local cluster,
-// applies the schema, and seeds synthetic data. Refuses any non localhost URL.
+// Local stack only. Creates an approved synthetic database on the local cluster,
+// applies the schema, and seeds test data. Refuses remote URLs and overrides.
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
 import pg from "pg";
 import { seed } from "./seed.mjs";
+import { localStackDatabaseUrl } from "./safety.mjs";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const { DATABASE_URL, STACK_MIGRATION_0001, STACK_INDEXES, ADMIN_EMAIL, ADMIN_PASSWORD, VOLUNTEER_EMAIL, VOLUNTEER_PASSWORD } = process.env;
@@ -14,10 +15,9 @@ function refuse(msg) {
   process.exit(2);
 }
 if (Object.keys(process.env).some((k) => k.startsWith("UPSTASH") || k.startsWith("KV_REST_API"))) refuse("an UPSTASH or KV_REST_API variable is set");
-const url = new URL(DATABASE_URL ?? "");
-if (url.hostname !== "localhost") refuse("DATABASE_URL is not localhost");
+let url;
+try { url = localStackDatabaseUrl(DATABASE_URL); } catch (error) { refuse(error.message); }
 const dbName = url.pathname.slice(1);
-if (!/^[a-z_]+$/.test(dbName)) refuse("the database name is unexpected");
 
 const adminUrl = new URL(url);
 adminUrl.pathname = "/postgres";

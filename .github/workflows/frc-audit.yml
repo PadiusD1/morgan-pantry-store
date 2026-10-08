@@ -46,6 +46,8 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Collect dependency advisory evidence
+        run: node script/audit-dependencies.mjs
       - name: Typecheck
         run: npm run check
       - name: Unit regression tests
@@ -58,7 +60,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Test the production bundle and CSP with synthetic data
         run: npm run test:e2e:production
-      - name: Save browser evidence
+      - name: Save browser and dependency evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v5
         with:
