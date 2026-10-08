@@ -82,15 +82,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               })}
             </SidebarMenu>
           </SidebarGroup>
-          <div className="mt-auto p-3 pt-1 space-y-2">
-            <div className="flex gap-2">
-              <Button asChild variant="default" size="sm" className="flex-1 text-xs">
+          <div className="mt-auto p-3 pt-1 space-y-2 group-data-[collapsible=icon]:hidden">
+            <div className="grid grid-cols-1 gap-2">
+              <Button asChild variant="default" size="sm" className="w-full min-w-0 text-xs">
                 <a href="/portal" target="_blank" rel="noopener">
                   <ExternalLinkIcon className="h-3 w-3 mr-1" />
                   Student Portal
                 </a>
               </Button>
-              <Button asChild variant="outline" size="sm" className="flex-1 text-xs">
+              <Button asChild variant="outline" size="sm" className="w-full min-w-0 text-xs">
                 <a href="/kiosk" target="_blank" rel="noopener">
                   <MonitorIcon className="h-3 w-3 mr-1" />
                   Kiosk Mode
@@ -100,10 +100,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Card className="glass-panel border-dashed border-sidebar-border/70 px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-0.5 min-w-0">
-                  <p className="text-xs font-medium text-sidebar-foreground/90 truncate" data-testid="text-session-user-name">
+                  <p className="text-xs font-medium text-foreground truncate" data-testid="text-session-user-name">
                     {user?.name ?? "Signed in"}
                   </p>
-                  <p className="text-[11px] text-sidebar-foreground/65 capitalize" data-testid="text-session-user-role">
+                  <p className="text-[11px] text-muted-foreground capitalize" data-testid="text-session-user-role">
                     <span className={user?.role === "admin" ? "badge-orange" : "badge-blue"}>
                       {user?.role ?? ""}
                     </span>
