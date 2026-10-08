@@ -1,0 +1,84 @@
+# Temporary audit helper. Produces an unreferenced lockfile blob for review.
+# It never updates a branch, opens/merges a PR, or deploys an application.
+name: FRC dependency update candidate
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths: [.github/workflows/frc-dependency-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    if: >-
+      github.event.pull_request.number == 3 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/frc-e2e-audit-20261008'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Resolve compatible advisory fixes without running package scripts
+        shell: bash
+        run: |
+          mkdir -p candidate
+          cp package-lock.json candidate/before-lock.json
+          cp package.json candidate/before-package.json
+          set +e
+          npm audit fix --package-lock-only --ignore-scripts --json > candidate/fix-result.json
+          code=$?
+          set -e
+          if [ "$code" -gt 1 ]; then cat candidate/fix-result.json; exit "$code"; fi
+          cmp package.json candidate/before-package.json
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const before = JSON.parse(fs.readFileSync('candidate/before-lock.json', 'utf8'));
+          const after = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          if (JSON.stringify(before.packages['']) !== JSON.stringify(after.packages[''])) throw new Error('Root dependency declarations changed');
+          const changes = [];
+          for (const key of new Set([...Object.keys(before.packages), ...Object.keys(after.packages)])) {
+            const a = before.packages[key], b = after.packages[key];
+            if (a?.version !== b?.version || a?.integrity !== b?.integrity) changes.push({path:key, before:a?.version ?? null, after:b?.version ?? null, dev:b?.dev ?? false});
+          }
+          fs.writeFileSync('candidate/version-changes.json', JSON.stringify(changes, null, 2));
+          fs.copyFileSync('package-lock.json', 'candidate/package-lock.json');
+          console.log('CANDIDATE_VERSION_CHANGES', JSON.stringify(changes));
+          JS
+          npm audit --package-lock-only --omit=dev --json > candidate/runtime-audit.json || test "$?" -eq 1
+          npm audit --package-lock-only --json > candidate/all-audit.json || test "$?" -eq 1
+      - name: Save review-only Git blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const bytes = fs.readFileSync('candidate/package-lock.json');
+          const response = await fetch(`https://api.github.com/repos/${process.env.REPO}/git/blobs`, {
+            method: 'POST', headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ encoding:'base64', content:bytes.toString('base64') })
+          });
+          if (!response.ok) throw new Error(`Blob publication failed (${response.status})`);
+          const {sha} = await response.json();
+          if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid blob response');
+          const runtime = JSON.parse(fs.readFileSync('candidate/runtime-audit.json', 'utf8'));
+          const all = JSON.parse(fs.readFileSync('candidate/all-audit.json', 'utf8'));
+          if (!runtime.metadata?.vulnerabilities || !all.metadata?.vulnerabilities) throw new Error('Missing advisory evidence');
+          const summary = { blob:sha, sha256:crypto.createHash('sha256').update(bytes).digest('hex'), runtime:runtime.metadata.vulnerabilities, all:all.metadata.vulnerabilities };
+          fs.writeFileSync('candidate/summary.json', JSON.stringify(summary, null, 2));
+          console.log('CANDIDATE_LOCK_REVIEW', JSON.stringify(summary));
+          JS
+      - uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() }}
+        with:
+          name: frc-dependency-candidate
+          path: candidate/
+          retention-days: 7

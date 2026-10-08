@@ -97,7 +97,9 @@ test(`two ${scanGapMs}ms physical scans of one barcode during a pending lookup b
   const item = await createItem(page, { quantity: 12 });
   const started = heldResponse();
   const responseHeld = heldResponse();
-  await page.route(`**/api/barcode-lookup/${item.barcode}`, async (route) => {
+  // Context routing also catches the active service worker's NetworkOnly fetch.
+  // page.route misses worker-owned requests and leaves the test waiting forever.
+  await page.context().route(`**/api/barcode-lookup/${item.barcode}`, async (route) => {
     const response = await route.fetch();
     started.release();
     await responseHeld.promise;
@@ -131,7 +133,7 @@ test("a delayed Inventory barcode lookup cannot replace a later name selection",
   const responseHeld = heldResponse();
   const lookups: string[] = [];
   page.on("request", (request) => { if (request.url().includes("barcode") || request.url().includes("openfoodfacts")) lookups.push(request.url()); });
-  await page.route(`**/api/barcode-lookup/${delayed.barcode}`, async (route) => {
+  await page.context().route(`**/api/barcode-lookup/${delayed.barcode}`, async (route) => {
     const response = await route.fetch();
     started.release();
     await responseHeld.promise;
@@ -224,7 +226,7 @@ test("queued allergenic scans wait for each confirmation or cancellation", async
   const responseHeld = heldResponse();
   let lookupRequests = 0;
   page.on("request", (request) => { if (request.url().includes("/api/barcode-lookup/")) lookupRequests += 1; });
-  await page.route(`**/api/barcode-lookup/${first.barcode}`, async (route) => {
+  await page.context().route(`**/api/barcode-lookup/${first.barcode}`, async (route) => {
     const response = await route.fetch();
     started.release();
     await responseHeld.promise;

@@ -1,155 +1,93 @@
 # Morgan State Food Resource Center
 
-> A single-binary, offline-first pantry database that turns every donation and pickup into research-grade primary data.
+The FRC application records pantry receiving, distribution, inventory, donors, partners, client visits, requests, and reporting. The current application is a shared PostgreSQL-backed service, not the earlier single-laptop SQLite implementation.
 
-The Morgan State Food Resource Center (FRC) handles thousands of pounds of food per semester. This system runs the pantry's day-to-day operations (intake, distribution, requests, reports) and captures every event as GPS-stamped, weighed, valued, itemized data. Designed for a single laptop, zero recurring cost, and seven volunteer-friendly surfaces over one SQLite database.
+## Current architecture
 
-**Status:** Spring 2026 build, 18 tables, 10 enums, 7 frontend surfaces, demo-seeded with 41 transactions, 27 SKUs, 10 students, 6 donors, 791.8 lbs.
+React 19, Vite, Tailwind CSS, Radix UI, and TanStack Query provide the browser interface. Express 5, TypeScript, Zod, Drizzle ORM, and node-postgres provide the API. Authentication uses signed, HttpOnly session cookies and role-based API authorization.
 
-**License:** MIT (see [LICENSE](LICENSE)).
+Vercel builds the frontend into `dist/public` and bundles the API into `api/index.js`. `vercel.json` routes API requests to that function and application routes to the frontend. The deployed database connection uses `DATABASE_URL`; the connection layer is in `server/pg.ts` and is configured for Supabase PostgreSQL.
 
-**Companion case study (presentation, screenshots, narrative):** https://github.com/PadiusD1/morgan-frc-research-paper
+The browser's cached application shell is not an offline database. A network connection and a working database are required to save shared records. Do not assume a failed request saved successfully or repeat an uncertain write with a new identity. The save/retry workflows preserve idempotency keys where implemented.
 
-**Engineering white paper (this repo):** [RESEARCH_PAPER.md](RESEARCH_PAPER.md)
+## Board reporting and daily workflows
 
----
+In **Reports**, choose the reporting dates, then use **Board summary CSV** or **Print / save PDF**. The board summary includes distribution visits, distinct linked clients, units, weight, estimated value, emergency visits, received stock, current stock alerts, and definitions. It excludes client names, identifiers, contact details, locations, and donor names.
 
-## Tech Stack
+Dates follow the Baltimore calendar (`America/New_York`), including the end date. Current inventory is a snapshot taken when the report is generated, not historical end-of-period stock. Received stock includes purchases and transfers, not donations alone. Missing recorded weights or values are flagged rather than silently assumed to be complete.
 
-**Frontend**
-- React 19
-- Wouter (routing)
-- TanStack Query (server state)
-- Radix UI primitives
-- Tailwind CSS v4
-- Recharts, Lucide, date-fns
+Detailed operational exports contain sensitive records and are separate from the board summary. Share them only with authorized recipients. The JSON snapshot export is not a complete PostgreSQL backup and cannot be safely restored by replaying inventory movements.
 
-**Backend**
-- Node.js + TypeScript via `tsx`
-- Express 5 (async error handling)
-- Drizzle ORM (Postgres dialect schema, SQLite runtime)
-- Zod for validation
-- Passport for auth scaffolding
+Saved item-name, brand, and barcode suggestions help reuse existing items during receiving and inventory entry. Choosing a saved item carries its stored details and identity forward. Donor saves update the canonical donor record and related views; existing donation history remains linked by donor ID. Mark a historical donor inactive instead of deleting its history.
 
-**Storage**
-- SQLite via better-sqlite3 (WAL mode, single-writer)
-- One file: `data/app.db`
-- Drizzle schema is Postgres-portable for future federation
+## Local development on synthetic data
 
-**Build**
-- Vite for the client
-- esbuild for the server (single CommonJS bundle in `dist/`)
+Use Node.js 22, npm, and PostgreSQL 17. Clone this repository and install its locked dependencies:
 
----
-
-## Quick Start
-
-```bash
-git clone https://github.com/PadiusD1/ClaudeMSUfoodResourceCenter.git
-cd ClaudeMSUfoodResourceCenter
-npm install
-npm run dev
+```sh
+git clone https://github.com/PadiusD1/morgan-pantry-store.git
+cd morgan-pantry-store
+npm ci
 ```
 
-Open `http://localhost:5000`.
+For the isolated development stack, follow [scripts/local-stack/README.md](scripts/local-stack/README.md). Its start script creates a loopback-only PostgreSQL cluster, applies the checked-in migrations and index fixture, seeds synthetic records, and generates temporary local credentials. It does not use production credentials or modify production records. PostgreSQL cluster initialization must run as a non-root user.
 
-The first run auto-creates `data/app.db` and runs migrations. No database server required. No cloud account required.
+For an independently provisioned development database, configure `DATABASE_URL` and a random `SESSION_SECRET` of at least 32 characters in a local, uncommitted `.env`. The database must already have the required schema. Set `COOKIE_SECURE=false` only for local HTTP, then run `npm run dev`. The server does not automatically migrate production databases. `.env.example` describes the relevant settings.
 
-### Production build
+## Quality and regression checks
 
-```bash
-npm run build
-npm start
+```sh
+npm run check
+npm test
+npm run test:integration
+npm run build:vercel
+npm run test:e2e:production
 ```
 
-Bundles to `dist/index.cjs`. Single binary, single port.
+The integration and production-browser suites require an isolated local PostgreSQL 17 service. [Production browser verification](scripts/e2e/README.md) gives the exact setup commands, safety restrictions, and evidence locations.
 
-### Optional environment variables
+The browser runner tests the generated Vercel API and compiled frontend with the deployment's Content Security Policy. It creates and removes only its own synthetic database. The suite checks donor/partner updates, item entry, inventory integrity, request lifecycle, permissions, exports, and desktop/mobile layout. A passing suite covers the tested scenarios, not every possible production condition.
 
-Copy `.env.example` to `.env` and fill in only what you want. All keys are optional; missing keys are silently skipped.
+`.github/workflows/frc-audit.yml` runs these checks on pull requests and main-branch pushes and retains test evidence for 14 days. Dependency advisories are collected separately for runtime packages and all packages so tooling findings are not confused with deployed runtime exposure.
 
-| Variable | Purpose |
-|---|---|
-| `PORT` | Server port (default 5000) |
-| `ALLOWED_ORIGINS` | Comma-separated CORS allow-list for production |
-| `UPCITEMDB_API_KEY` | Higher rate limits on UPC Item DB |
-| `NUTRITIONIX_APP_ID`, `NUTRITIONIX_APP_KEY` | Nutritionix barcode lookup |
-| `USDA_API_KEY` | USDA FoodData Central (defaults to `DEMO_KEY`) |
+## Deployment and operational care
 
----
+`npm run build:vercel` executes the build command in `vercel.json`, creating both the frontend and API outputs. `npm run build` by itself builds only the frontend. For a separately managed Node/VM deployment, `npm run build:vm` generates the server bundle used by `npm start`.
 
-## Surfaces
+Keep production secrets in the hosting environment, never in Git or exported test artifacts. At minimum the application needs its PostgreSQL connection and session-signing secret. Keep secure cookies enabled for HTTPS. Configure and test the existing distributed rate limiter for serverless deployments; the in-memory fallback is per instance, not a global rate limit.
 
-Seven operational pages and two public pages, all over one database:
+Review preview deployments and passing quality checks before merging to the configured production branch. A successful build is not proof that live credentials, database connectivity, physical scanners, or printers work. Use read-only health checks first, then an authorized acceptance workflow that does not contaminate operational data.
 
-| Route | Audience |
-|---|---|
-| `/` Dashboard | Staff |
-| `/inventory` | Staff, Volunteer |
-| `/clients`, `/clients/:id` | Staff |
-| `/donors`, `/donors/:id` | Staff |
-| `/check-in` | Volunteer |
-| `/check-out` | Volunteer |
-| `/requests` | Staff |
-| `/reports` | Staff |
-| `/activity` (audit log) | Staff |
-| `/settings` | Admin |
-| `/portal` | Student (public) |
-| `/kiosk` | Walk-up student |
+This audit adds no paid runtime service, but hosting, database, external lookup, and CI usage depend on the actual plans and workload. Monitor those dashboards rather than assuming zero recurring cost. Keep provider-managed PostgreSQL backups and verify restoration into a separate environment. The older SQLite backup scripts and historical research papers do not establish a backup strategy for the current PostgreSQL service.
 
-See [RESEARCH_PAPER.md](RESEARCH_PAPER.md) section 8 for what each surface does and section 5 for the schema groups behind them.
+The deployment can be rolled back to a previously verified Git commit or Vercel deployment. Application rollback does not undo database writes. The October 8 workflow fixes do not introduce a production schema migration or rewrite historical records.
 
----
+## Repository map
 
-## Why This Exists
-
-Walk into any campus food pantry and you will see the same thing: real demand, real supply, real volunteer effort, and primary research data evaporating into clipboards and sticky notes. The hypothesis behind this system is that the same database that runs the pantry on Tuesday afternoon should answer real research questions on Friday morning. Demand by category. Donor gap analysis. Per-item value moved. Whether students who request a partial fulfillment ever come back.
-
-The full thesis, design goals, schema rationale, request state machine, and trade-offs live in [RESEARCH_PAPER.md](RESEARCH_PAPER.md).
-
----
-
-## Repository Structure
-
-```
-client/         React 19 SPA (Vite)
-  src/pages/    14 route components (dashboard, inventory, ...)
-  src/components/  Radix-based UI library
-  src/lib/      Repository abstraction, query client
-server/         Express 5 API + Vite middleware
-  index.ts      Entry point, CORS, error handler, graceful shutdown
-  routes.ts     ~50 REST endpoints
-  db.ts         SQLite open + migrations (18 CREATE TABLE statements)
-  sqlite-storage.ts  IStorage adapter (Drizzle types to SQLite rows)
-  storage.ts    IStorage interface
-  barcode-lookup.ts  Parallel barcode resolver (USDA, Open Food Facts, UPC Item DB, optional Nutritionix)
-shared/
-  schema.ts     Drizzle schema + Zod insert schemas + inferred TS types
-data/           SQLite database file (gitignored)
-docs/           Deployment and server-setup notes
-scripts/        Backup, seed, and ops scripts
+```text
+client/src/pages/       Operational screens and student-facing pages
+client/src/lib/         Query state, save/retry behavior, exports, scanners
+server/app.ts          Shared Express application and API middleware
+server/auth.ts         Session handling and role-based API access
+server/routes.ts       Operational API routes
+server/pg.ts           PostgreSQL connection pool
+server/pg-storage.ts   PostgreSQL storage adapter
+server/request-service.ts  Atomic request and fulfillment workflows
+shared/schema.ts       Database schema and request validation
+shared/reporting.ts    Shared report dates, aggregates, and CSV output
+migrations/            Checked-in PostgreSQL migrations
+scripts/local-stack/   Isolated synthetic development stack
+scripts/e2e/           Compiled production-browser test host and runner
+tests/                 Unit, PostgreSQL integration, and browser regressions
+docs/                  Audit findings and historical deployment notes
 ```
 
----
+## Audit scope and known limitations
 
-## Contributing
+Read [FRC-AUDIT-2026-10-08.md](docs/FRC-AUDIT-2026-10-08.md) for findings, changes, verification scope, and remaining operational checks. Full-history API pagination, legacy donor-ID reconciliation, actual production usage measurements, and backup restoration need separate verification. Older deployment documents and research papers describe prior versions; use current source and these instructions for the running application.
 
-This system is MIT-licensed and open to contribution. Particularly welcome:
-
-- HBCU pantry pilots (drop in, run it, file issues)
-- Postgres federation (the schema is portable; the sync layer is not built)
-- Demand forecasting models on `transaction_items`
-- Donor gap analysis reports
-- Accessibility audits on the kiosk and student portal
-
-Open an issue before sending a PR for anything substantive.
-
----
-
-## License
+## License and research
 
 [MIT](LICENSE). Copyright 2026 Patrick Valery.
 
----
-
-*A pantry is not a charity program. A pantry is an observatory.*
+[Engineering white paper](RESEARCH_PAPER.md) and [companion case study](https://github.com/PadiusD1/morgan-frc-research-paper) preserve the project's research history; historical architecture and seeded example totals are not current production metrics.

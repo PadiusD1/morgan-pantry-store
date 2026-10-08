@@ -17,7 +17,9 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 10_000 },
   reporter: [["list"], ["json", { outputFile: path.join(resultDirectory, "e2e-results.json") }]],
-  outputDir: resultDirectory,
+  // Playwright clears only this child directory. Keep the running server log
+  // and report metadata in the parent so test startup cannot unlink them.
+  outputDir: path.join(resultDirectory, "artifacts"),
   use: {
     baseURL,
     browserName: "chromium",
