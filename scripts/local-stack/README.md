@@ -31,5 +31,5 @@ Stop kills only the process group the start script created and stops the local c
 
 ## Before driving it with a browser
 
-* The Inventory New item dialog looks a barcode up in the browser itself, straight at Open Food Facts, when the barcode field loses focus. The server stub cannot catch that call. Block that host in the browser, or leave the barcode field empty in that dialog.
+* Inventory, Check-In and Check-Out send barcode lookups to the same-origin `/api/barcode-lookup/:code` route. The server stub covers all three, including the Inventory barcode field's blur lookup.
 * Keep the browser in Eastern time and the server in UTC, so month and day boundaries show what production does.

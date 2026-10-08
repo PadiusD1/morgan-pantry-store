@@ -36,9 +36,9 @@ export function localUrl(db: string): string {
 
 /** Refuse to run anywhere near a real service, and force UTC. */
 export function assertSafeEnv(): void {
-  const upstash = Object.keys(process.env).filter((k) => k.startsWith("UPSTASH"));
+  const upstash = Object.keys(process.env).filter((k) => k.startsWith("UPSTASH") || k.startsWith("KV_REST_API"));
   if (upstash.length > 0) {
-    throw new Error("pg harness refused because an UPSTASH variable is set");
+    throw new Error("pg harness refused because an external Redis variable is set");
   }
   const url = process.env.DATABASE_URL;
   if (url !== undefined && url !== "") {
@@ -78,6 +78,9 @@ export function serverRunning(): boolean {
 
 /** Starts the server when it is down. Returns true when this call started it. */
 export function startServer(): boolean {
+  // CI supplies an isolated PostgreSQL service on the same loopback port.
+  // It owns that process; this harness only creates and drops its test DBs.
+  if (process.env.FRC_TEST_PG_EXTERNAL === "1") return false;
   if (serverRunning()) return false;
   pgCtl([
     "-D", PG_DATA,
@@ -91,6 +94,7 @@ export function startServer(): boolean {
 }
 
 export function stopServer(): void {
+  if (process.env.FRC_TEST_PG_EXTERNAL === "1") return;
   if (serverRunning()) pgCtl(["-D", PG_DATA, "-w", "-m", "fast", "stop"]);
 }
 

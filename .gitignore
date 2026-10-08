@@ -39,3 +39,6 @@ attached_assets/
 .vercel/
 
 .playwright-mcp/
+
+test-results/
+playwright-report/

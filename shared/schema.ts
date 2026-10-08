@@ -253,7 +253,8 @@ export const donors = pgTable("donors", {
 });
 
 export const insertDonorSchema = createInsertSchema(donors)
-  .omit({ id: true, createdAt: true, updatedAt: true });
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({ name: z.string().trim().min(1, "Donor name is required").max(200) });
 
 export type InsertDonor = z.infer<typeof insertDonorSchema>;
 export type Donor = typeof donors.$inferSelect;
@@ -315,8 +316,18 @@ export const transactionItems = pgTable("transaction_items", {
   }).notNull(),
 });
 
+const transactionDecimal = (maximum: number) => z.string().trim()
+  .regex(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/, "Enter a nonnegative number")
+  .refine((value) => Number.isFinite(Number(value)) && Number(value) <= maximum, "Number is outside the supported range");
+
 export const insertTransactionItemSchema = createInsertSchema(transactionItems)
-  .omit({ id: true });
+  .omit({ id: true })
+  .extend({
+    name: z.string().trim().min(1).max(200),
+    quantity: z.number().int().positive(),
+    weightPerUnitLbs: transactionDecimal(999999.9999),
+    valuePerUnitUsd: transactionDecimal(99999999.99),
+  });
 
 export type InsertTransactionItem = z.infer<typeof insertTransactionItemSchema>;
 export type TransactionItem = typeof transactionItems.$inferSelect;

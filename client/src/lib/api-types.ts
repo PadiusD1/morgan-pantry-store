@@ -9,6 +9,7 @@ export type ApiInventoryItem = {
   category: string;
   barcode: string | null;
   quantity: number;
+  reservedQuantity?: number;
 
   // Package
   packageType: string | null;
@@ -80,6 +81,7 @@ export type ApiTransaction = {
   timestamp: string;
   source: string | null;
   donor: string | null;
+  donorId?: string | null;
   clientId: string | null;
   clientName: string | null;
   isEmergency?: boolean;
@@ -173,6 +175,7 @@ export function toTransaction(api: ApiTransaction): Transaction {
     items: (api.items ?? []).map(toTransactionItem),
     source: api.source ?? undefined,
     donor: api.donor ?? undefined,
+    donorId: api.donorId ?? undefined,
     clientId: api.clientId ?? undefined,
     clientName: api.clientName ?? undefined,
     isEmergency: Boolean(api.isEmergency),

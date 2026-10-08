@@ -1,7 +1,11 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { Link, useLocation } from "wouter";
+import { apiRequest, isEarlierSaveRecorded } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
+import { useSaveGuard } from "@/lib/save-guard";
+import { cacheSavedDonor, donorKeys, removeCachedDonor, type DonorRecord as Donor } from "@/lib/donor-cache";
+import { confirmedDonor, donorErrorMessage, saveDonorRecord, type DonorForm } from "@/lib/donor-save";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,34 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { HeartHandshakeIcon, PlusIcon, PencilIcon, Trash2Icon, SearchIcon, Loader2 } from "lucide-react";
-
-interface Donor {
-  id: string;
-  name: string;
-  organization?: string;
-  contactName?: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  notes?: string;
-  status: string;
-  totalDonations?: number;
-  totalItems?: number;
-  lastDonation?: string;
-  createdAt: string;
-}
-
-interface DonorForm {
-  id?: string;
-  name: string;
-  organization: string;
-  contactName: string;
-  phone: string;
-  email: string;
-  address: string;
-  notes: string;
-  status: string;
-}
 
 const emptyForm: DonorForm = {
   id: undefined,
@@ -56,14 +32,20 @@ export default function DonorsPage() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const saveGuard = useSaveGuard();
+  const deleteGuard = useSaveGuard();
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<DonorForm | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [existingDonor, setExistingDonor] = useState<Donor | null>(null);
 
-  const { data: donors = [], isLoading, isError, refetch } = useQuery<Donor[]>({
-    queryKey: ["/api/donors"],
+  const { data: donorData, isLoading, isError, refetch } = useQuery<Donor[]>({
+    queryKey: donorKeys.all,
   });
+  const donors = donorData ?? [];
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -76,53 +58,88 @@ export default function DonorsPage() {
     );
   }, [donors, query]);
 
-  async function handleSave() {
+  function handleSave() {
+    void saveGuard.run(saveDonor);
+  }
+
+  async function saveDonor(key: string): Promise<boolean | void> {
     if (!editing) return;
     if (!editing.name.trim()) {
-      toast({ title: "Donor name is required", description: "Enter a name before saving this donor." });
+      toast({ title: "Donor name is required", description: "Enter a name before saving this donor.", variant: "destructive" });
       return;
     }
     setSaving(true);
     try {
-      const payload = {
-        name: editing.name.trim(),
-        organization: editing.organization.trim() || undefined,
-        contactName: editing.contactName.trim() || undefined,
-        phone: editing.phone.trim() || undefined,
-        email: editing.email.trim() || undefined,
-        address: editing.address.trim() || undefined,
-        notes: editing.notes.trim() || undefined,
-        status: editing.status,
-      };
-      if (editing.id) {
-        await apiRequest("PATCH", `/api/donors/${editing.id}`, payload);
-        toast({ title: "Donor updated", description: payload.name });
-      } else {
-        await apiRequest("POST", "/api/donors", payload);
-        toast({ title: "Donor created", description: payload.name });
+      const result = await saveDonorRecord(editing, key);
+      await cacheSavedDonor(queryClient, result.donor);
+      if (result.outcome === "existing") {
+        setExistingDonor(result.donor);
+        // This request completed, but did not save the entered details. Keep
+        // the form and use a new key if its name changes on the next attempt.
+        return true;
       }
-      queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
+      toast({ title: result.outcome === "created" ? "Donor created" : "Donor updated", description: result.donor.name });
+      setQuery("");
       setEditing(null);
-    } catch {
-      toast({ title: "Save failed", description: "Could not save donor. Try again.", variant: "destructive" });
+      setExistingDonor(null);
+      return true;
+    } catch (err) {
+      if (isEarlierSaveRecorded(err)) {
+        try {
+          const recorded = confirmedDonor(err.recorded);
+          await cacheSavedDonor(queryClient, recorded);
+          if (err.recordedStatus !== 201) {
+            // A recovered POST 200 found somebody already on file; it did
+            // not create the donor described by this form. Preserve the
+            // explicit review step before allowing edits to that person.
+            setExistingDonor(recorded);
+            return true;
+          }
+          // A lost answer followed by an edited retry saved the earlier
+          // donor. Let the next attempt update it, not create another row.
+          setExistingDonor(null);
+          setEditing((current) => current ? { ...current, id: recorded.id } : current);
+          saveGuard.renew();
+          toast({
+            title: "Earlier donor saved",
+            description: `${recorded.name} was saved from your earlier attempt. Your latest entries are kept here. Review them and save again to update that donor.`,
+            variant: "destructive",
+          });
+          return;
+        } catch {
+          // Fall through to a recoverable failure when the response is invalid.
+        }
+      }
+      toast({ title: "Save failed", description: donorErrorMessage(err, "Could not save donor. Your entries are kept. Try again."), variant: "destructive" });
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete() {
+  function handleDelete() {
+    void deleteGuard.run(deleteDonor);
+  }
+
+  async function deleteDonor(): Promise<boolean | void> {
     if (!deleteConfirm) return;
+    setDeleting(true);
     try {
       await apiRequest("DELETE", `/api/donors/${deleteConfirm.id}`);
-      queryClient.invalidateQueries({ queryKey: ["/api/donors"] });
+      await removeCachedDonor(queryClient, deleteConfirm.id);
       toast({ title: "Donor deleted", description: `${deleteConfirm.name} has been removed.` });
-    } catch {
-      toast({ title: "Delete failed", description: "Could not delete donor. Try again.", variant: "destructive" });
+      setDeleteConfirm(null);
+      return true;
+    } catch (err) {
+      toast({ title: "Delete failed", description: donorErrorMessage(err, "Could not delete donor. Try again."), variant: "destructive" });
+    } finally {
+      setDeleting(false);
     }
-    setDeleteConfirm(null);
   }
 
   function openEdit(donor: Donor) {
+    if (saveGuard.isLocked()) return;
+    saveGuard.renew();
+    setExistingDonor(null);
     setEditing({
       id: donor.id,
       name: donor.name,
@@ -144,7 +161,7 @@ export default function DonorsPage() {
     );
   }
 
-  if (isError) {
+  if (isError && !donorData) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
         <p className="text-sm text-destructive">Could not load donors.</p>
@@ -155,12 +172,19 @@ export default function DonorsPage() {
 
   return (
     <div className="space-y-4">
+      {isError && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/40 p-3 text-sm">
+          <span>Donors could not be refreshed. Showing the last confirmed records.</span>
+          <Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>
+        </div>
+      )}
       <Card className="glass-panel" data-testid="card-donors-filters">
         <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
           <div className="relative w-full max-w-md">
             <SearchIcon className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               type="search"
+              aria-label="Search donors"
               placeholder="Search donors by name, organization, or notes"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -170,7 +194,11 @@ export default function DonorsPage() {
           </div>
           <Button
             size="sm"
-            onClick={() => setEditing({ ...emptyForm })}
+            onClick={() => {
+              saveGuard.renew();
+              setExistingDonor(null);
+              setEditing({ ...emptyForm });
+            }}
             data-testid="button-add-donor"
           >
             <PlusIcon className="h-4 w-4" />
@@ -213,7 +241,7 @@ export default function DonorsPage() {
                     className="py-6 text-center text-sm text-muted-foreground"
                     data-testid="text-no-donors"
                   >
-                    No donors yet. Add a donor to start tracking donations.
+                    {query.trim() ? "No donors match your search. Clear the search to see all donors." : "No donors yet. Add a donor to start tracking donations."}
                   </TableCell>
                 </TableRow>
               )}
@@ -225,7 +253,9 @@ export default function DonorsPage() {
                   data-testid={`row-donor-${d.id}`}
                 >
                   <TableCell className="text-sm font-medium" data-testid={`text-donor-name-${d.id}`}>
-                    {d.name}
+                    <Link href={`/donors/${d.id}`} className="hover:underline" onClick={(event) => event.stopPropagation()}>
+                      {d.name}
+                    </Link>
                   </TableCell>
                   <TableCell className="hidden md:table-cell text-xs text-muted-foreground" data-testid={`text-donor-org-${d.id}`}>
                     {d.organization || "\u2014"}
@@ -260,20 +290,22 @@ export default function DonorsPage() {
                         size="sm"
                         className="h-7 px-2 text-xs max-md:min-h-[40px] max-md:px-3"
                         onClick={() => openEdit(d)}
+                        aria-label={`Edit ${d.name}`}
                         data-testid={`button-edit-donor-${d.id}`}
                       >
                         <PencilIcon className="h-3.5 w-3.5" />
                       </Button>
-                      <Button
+                      {user?.role === "admin" && <Button
                         type="button"
                         variant="ghost"
                         size="sm"
                         className="h-7 px-2 text-xs text-destructive hover:text-destructive max-md:min-h-[40px] max-md:px-3"
                         onClick={() => setDeleteConfirm({ id: d.id, name: d.name })}
+                        aria-label={`Delete ${d.name}`}
                         data-testid={`button-delete-donor-${d.id}`}
                       >
                         <Trash2Icon className="h-3.5 w-3.5" />
-                      </Button>
+                      </Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -283,7 +315,7 @@ export default function DonorsPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
+      <Dialog open={!!editing} onOpenChange={(open) => { if (!open && !saveGuard.isLocked()) setEditing(null); }}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle data-testid="text-edit-donor-heading">
@@ -295,13 +327,24 @@ export default function DonorsPage() {
                 : "Fill in the details to register a new donor."}
             </DialogDescription>
           </DialogHeader>
+          {existingDonor && (
+            <div role="alert" className="space-y-2 rounded-md border border-amber-500/50 p-3 text-sm" data-testid="alert-donor-exists">
+              <p><strong>{existingDonor.name}</strong> is already on file. Your new details have not been saved.</p>
+              <p>Use a different name, or review the existing donor before editing their information.</p>
+              <Button type="button" size="sm" variant="outline" onClick={() => openEdit(existingDonor)}>
+                Edit existing donor
+              </Button>
+            </div>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSave();
             }}
             className="space-y-3"
+            aria-busy={saving}
           >
+            <fieldset disabled={saving} className="space-y-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="donor-name-edit">
                 Name *
@@ -407,21 +450,22 @@ export default function DonorsPage() {
                 Save donor
               </Button>
             </DialogFooter>
+            </fieldset>
           </form>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
+      <Dialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open && !deleteGuard.isLocked()) setDeleteConfirm(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete donor</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete <strong>{deleteConfirm?.name}</strong>? This action cannot be undone. Their donation history will be preserved but unlinked.
+              Delete <strong>{deleteConfirm?.name}</strong>? Only donors without linked donation history can be deleted. Set a donor with donation history to inactive instead.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+            <Button variant="outline" disabled={deleting} onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={deleting} onClick={handleDelete}>{deleting ? "Deleting..." : "Delete"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

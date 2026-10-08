@@ -57,14 +57,21 @@ export function normaliseDonorName(name: string | null | undefined): string {
  * old row with no donor_id falls back to its donor name, compared case blind.
  */
 export function attributeDonor(
-  tx: { donorId?: string | null; donor?: string | null },
-  donors: { id: string; name: string; status?: string | null }[],
+  tx: { donorId?: string | null; donor?: string | null; clientId?: string | null },
+  donors: { id: string; name: string; status?: string | null; createdAt?: string | Date }[],
 ): string | null {
   if (tx.donorId) return donors.some((d) => d.id === tx.donorId) ? tx.donorId : null;
+  // A partner donation is identified by client_id. Its display name must
+  // never make the same transaction count as a separate donor's donation.
+  if (tx.clientId) return null;
   const name = normaliseDonorName(tx.donor);
   if (!name) return null;
   const matches = donors.filter((d) => normaliseDonorName(d.name) === name);
   if (matches.length === 0) return null;
-  const active = matches.find((d) => (d.status ?? "active") === "active");
-  return (active ?? matches[0]).id;
+  matches.sort((a, b) =>
+    Number((b.status ?? "active") === "active") - Number((a.status ?? "active") === "active") ||
+    new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime() ||
+    a.id.localeCompare(b.id),
+  );
+  return matches[0].id;
 }

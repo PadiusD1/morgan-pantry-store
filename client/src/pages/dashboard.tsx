@@ -11,6 +11,7 @@ import { ArrowDownRightIcon, ArrowUpRightIcon, ClockIcon, InboxIcon, PackageIcon
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 import { DONUT_OTHER, donutSlices } from "@/lib/donut";
 import { sourceNameOf } from "@shared/donation-source";
+import { REPORT_TIME_ZONE, reportDateKey } from "@shared/reporting";
 
 export default function DashboardPage() {
   const { inventory, transactions, clients } = useRepository();
@@ -19,42 +20,37 @@ export default function DashboardPage() {
   const lowStockItems = inventory.filter(isLowStock).slice(0, 5);
   const recentTx = transactions.slice(0, 8);
 
-  // Use local date (not UTC) so "today" matches the user's actual day
+  // Use the same Baltimore calendar as the board and annual reports.
   const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const todaysVisits = transactions.filter((t) => {
-    if (t.type !== "OUT") return false;
-    const txDate = new Date(t.timestamp);
-    const txLocal = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, "0")}-${String(txDate.getDate()).padStart(2, "0")}`;
-    return txLocal === today;
-  });
+  const today = reportDateKey(now)!;
+  const todaysVisits = transactions.filter((t) => t.type === "OUT" && reportDateKey(t.timestamp) === today);
 
   // Category breakdown for pie chart
   const categoryData = useMemo(() => donutSlices(inventory), [inventory]);
 
   // Weekly activity for bar chart (last 7 days)
   const weeklyActivity = useMemo(() => {
+    const totals = new Map<string, { inbound: number; outbound: number }>();
+    for (const tx of transactions) {
+      const date = reportDateKey(tx.timestamp);
+      if (!date) continue;
+      const total = totals.get(date) ?? { inbound: 0, outbound: 0 };
+      const units = tx.items.reduce((sum, item) => sum + item.quantity, 0);
+      if (tx.type === "IN") total.inbound += units;
+      else total.outbound += units;
+      totals.set(date, total);
+    }
     const days: { day: string; inbound: number; outbound: number }[] = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const label = d.toLocaleDateString(undefined, { weekday: "short" });
-      let inbound = 0;
-      let outbound = 0;
-      for (const tx of transactions) {
-        const txDate = new Date(tx.timestamp);
-        const txLocal = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, "0")}-${String(txDate.getDate()).padStart(2, "0")}`;
-        if (txLocal === dateStr) {
-          const units = tx.items.reduce((s, it) => s + it.quantity, 0);
-          if (tx.type === "IN") inbound += units;
-          else outbound += units;
-        }
-      }
+      const d = new Date(`${today}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - i);
+      const dateStr = reportDateKey(d);
+      const label = d.toLocaleDateString(undefined, { weekday: "short", timeZone: REPORT_TIME_ZONE });
+      const { inbound, outbound } = totals.get(dateStr!) ?? { inbound: 0, outbound: 0 };
       days.push({ day: label, inbound, outbound });
     }
     return days;
-  }, [transactions]);
+  }, [transactions, today]);
 
   const PIE_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
 
@@ -366,7 +362,7 @@ function RequestMetrics() {
         </CardContent>
       </Card>
       </Link>
-      <Link href="/requests?status=ready_for_pickup" className="block">
+      <Link href="/requests?status=pickup" className="block">
       <Card className="glass-panel h-full transition-colors hover:bg-muted/40">
         <CardContent className="py-3 px-4 flex items-center gap-3">
           <CheckCircleIcon className="h-5 w-5 text-green-600" />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine } from "../server/monthly-csv";
+import { buildMonthlyCsv, monthlyGeneratedLine, monthlyItemLine, monthlySubtotalLine, type MonthlyCsvRow } from "../server/monthly-csv";
 
 describe("monthly summary CSV lines", () => {
   it("writes plain names and fixed decimals unchanged", () => {
@@ -66,5 +66,39 @@ describe("monthly summary CSV month", () => {
     const { easternYearMonth } = await import("../server/monthly-csv");
     expect(easternYearMonth(new Date("2027-01-01T03:00:00Z"))).toEqual({ year: 2026, month: 12 });
     expect(easternYearMonth(new Date("2027-01-01T05:30:00Z"))).toEqual({ year: 2027, month: 1 });
+  });
+});
+
+describe("monthly summary aggregation", () => {
+  const line = (overrides: Partial<MonthlyCsvRow> = {}): MonthlyCsvRow => ({
+    tx_id: "checkout-1", ts: "2026-09-30T18:00:00Z", is_emergency: true,
+    inv_id: "rice", item_name: "Rice", quantity: 2, value_per_unit: "1.00", category: "Grains", ...overrides,
+  });
+
+  it("counts an emergency checkout with multiple item lines once", () => {
+    const csv = buildMonthlyCsv([line(), line({ inv_id: "beans", item_name: "Beans" }), line({ tx_id: "checkout-2" })]);
+    expect(csv).toContain("Emergency Shop Appointments,2\r\n");
+    expect(csv).toContain("2026 Emergency Shop Appointments,,,,2");
+  });
+
+  it("reports weighted estimated unit values when the saved value changed", () => {
+    const csv = buildMonthlyCsv([line(), line({ tx_id: "checkout-2", quantity: 4, value_per_unit: "2.50" })]);
+    expect(csv).toContain("Weighted average estimated value per unit (USD)");
+    expect(csv).toContain("Grains,Rice,6,2.00,12.00");
+    expect(csv).toContain("2026 GRAND TOTAL,,,,12.00");
+  });
+
+  it("keeps different inventory records separate even when their display names match", () => {
+    const csv = buildMonthlyCsv([line(), line({ inv_id: "other-rice", value_per_unit: "4.00" })]);
+    expect(csv).toContain("Grains,Rice,2,1.00,2.00");
+    expect(csv).toContain("Grains,Rice,2,4.00,8.00");
+    expect(csv).not.toContain("Grains,Rice,4");
+  });
+
+  it("writes an Excel-friendly BOM/CRLF and identifies an empty requested year", () => {
+    const csv = buildMonthlyCsv([line()], { year: "2025" });
+    expect(csv.charCodeAt(0)).toBe(0xfeff);
+    expect(csv).toContain("Reporting year,2025\r\n");
+    expect(csv).toContain("No distribution records found");
   });
 });

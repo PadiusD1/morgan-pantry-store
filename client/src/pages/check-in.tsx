@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
 import { currentLocation } from "@/lib/location";
@@ -14,6 +14,8 @@ import { earlierComponentText, heldItemId, itemActionFailureText, runCheckInActi
 import { settleEarlierCheckIn, type EarlierCheckIn } from "@/lib/checkin-earlier";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { itemOptions, nextSelectedId, resolveSelectedId, selectedAfterCheckIn } from "@/lib/check-in-selection";
+import { createItemLookupGuard } from "@/lib/item-entry";
+import { ItemNameInput } from "@/components/item-name-input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,10 @@ type ScanState =
   | { phase: "not-found" }
   | { phase: "error"; message: string };
 
+function emptyNewItem(barcode = "") {
+  return { name: "", category: "Uncategorized", barcode, brand: "", weightPerUnitLbs: 0, valuePerUnitUsd: 0, allergens: [] as string[] };
+}
+
 export default function CheckInPage() {
   const { inventory, addOrUpdateItem, itemSaved, recordInbound, upsertBarcodeCache, sources, addSource, categories, addCategory } = useRepository();
   const queryClient = useQueryClient();
@@ -40,6 +46,7 @@ export default function CheckInPage() {
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedId, setSelectedId] = useState<string | "">("");
+  const [itemQuery, setItemQuery] = useState("");
   // A newly registered item, kept selectable until the list holds its saved row.
   const [pinnedItem, setPinnedItem] = useState<ReturnType<typeof toInventoryItem> | null>(null);
   const [quantity, setQuantity] = useState<number>(0);
@@ -51,16 +58,11 @@ export default function CheckInPage() {
   const [isNewCategory, setIsNewCategory] = useState(false);
   const [customCategory, setCustomCategory] = useState("");
   const [scanState, setScanState] = useState<ScanState>({ phase: "idle" });
+  const [lookupGuard] = useState(createItemLookupGuard);
+  const lastScannedItemId = useRef("");
+  useEffect(() => () => lookupGuard.invalidate(), [lookupGuard]);
 
-  const [newItem, setNewItem] = useState({
-    name: "",
-    category: "Uncategorized",
-    barcode: "",
-    brand: "",
-    weightPerUnitLbs: 0,
-    valuePerUnitUsd: 0,
-    allergens: [] as string[],
-  });
+  const [newItem, setNewItem] = useState(() => emptyNewItem());
   const quantityInputRef = useRef<HTMLInputElement>(null);
 
   const sortedInventory = useMemo(
@@ -89,15 +91,58 @@ export default function CheckInPage() {
     () => (shownSelectedId ? itemChoices.find((i) => i.id === shownSelectedId) : undefined),
     [shownSelectedId, itemChoices],
   );
+  lastScannedItemId.current = shownSelectedId;
+
+  function cancelLookup() {
+    lookupGuard.invalidate();
+    scanQueue.clearPending();
+    setScanState({ phase: "idle" });
+  }
+
+  function selectExistingItem(item: ReturnType<typeof toInventoryItem>) {
+    cancelLookup();
+    setMode("existing");
+    setPinnedItem(item);
+    setSelectedId(item.id);
+    lastScannedItemId.current = item.id;
+    setItemQuery(item.name);
+    setNewItem(emptyNewItem());
+    setIsNewCategory(false);
+    setCustomCategory("");
+  }
+
+  function selectScannedItem(item: ReturnType<typeof toInventoryItem>) {
+    const sameItem = lastScannedItemId.current === item.id;
+    lastScannedItemId.current = item.id;
+    setMode("existing");
+    setPinnedItem(item);
+    setSelectedId(item.id);
+    setItemQuery(item.name);
+    setNewItem(emptyNewItem());
+    setIsNewCategory(false);
+    setCustomCategory("");
+    setQuantity((previous) => sameItem ? previous + 1 : 1);
+  }
 
   async function handleBarcodeLookup(code: string) {
     const trimmed = code.trim();
     if (!trimmed) return;
 
+    const isCurrent = lookupGuard.start();
     setScanState({ phase: "scanning" });
 
     try {
       const result = await lookupBarcode(trimmed);
+      if (!isCurrent()) {
+        queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
+        return;
+      }
+      if (result.status === "exists" || result.status === "created") {
+        queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], (old) => [
+          ...(old ?? []).filter((row) => row.id !== result.item.id),
+          result.item,
+        ]);
+      }
 
       if (result.status === "debounced") {
         setScanState({ phase: "idle" });
@@ -106,13 +151,7 @@ export default function CheckInPage() {
 
       if (result.status === "exists") {
         const item = toInventoryItem(result.item as ApiInventoryItem);
-        setMode("existing");
-        setSelectedId((prevId) => {
-          // Each scan of the same item bumps the to-receive quantity by 1 — staff can scan a
-          // case multiple times without re-typing numbers. Switching items resets to 1.
-          setQuantity((prevQty) => (prevId === item.id ? prevQty + 1 : 1));
-          return item.id;
-        });
+        selectScannedItem(item);
         setScanState({ phase: "found-existing", itemName: item.name });
         toast({
           title: "Item already on file — merged",
@@ -131,11 +170,7 @@ export default function CheckInPage() {
           allergens: item.allergens,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-        setMode("existing");
-        setPinnedItem(item);
-        setSelectedId(item.id);
-        // First-time scan of a new barcode: pre-fill quantity to 1.
-        setQuantity(1);
+        selectScannedItem(item);
         setScanState({
           phase: "found-created",
           itemName: item.name,
@@ -151,30 +186,31 @@ export default function CheckInPage() {
 
       // Not found in any API
       setMode("new");
-      setNewItem(prev => ({ ...prev, barcode: trimmed }));
+      setNewItem(emptyNewItem(trimmed));
+      setIsNewCategory(false);
+      setCustomCategory("");
       setScanState({ phase: "not-found" });
       toast({
         title: "Barcode not recognized",
         description: "No match found in any product database. Please enter details manually.",
       });
     } catch (err) {
+      if (!isCurrent()) return;
       setScanState({ phase: "error", message: String(err) });
-      setMode("new");
-      setNewItem(prev => ({ ...prev, barcode: trimmed }));
       toast({
         title: "Lookup failed",
-        description: "Could not reach product databases. Please enter details manually.",
+        description: "Could not look up this barcode. Try again or select the item by name.",
         variant: "destructive",
       });
     }
   }
 
-  // A scan always reaches the lookup, whatever field has focus, and a code
-  // that arrives during a lookup waits its turn.
+  // Barcode fields and page-level scans feed one queue. Ordinary form editing
+  // keeps its characters, Enter and Tab; a queued scan is never dropped.
   const lookupRef = useRef(handleBarcodeLookup);
   lookupRef.current = handleBarcodeLookup;
-  // The field is disabled during a lookup, which drops the caret to the page,
-  // so it goes back to the field once the field is enabled again.
+  // Keep the scan field usable while a lookup runs so slower scanner bursts
+  // also reach the queue through the field's Enter/Tab handler.
   const scanInputRef = useRef<HTMLInputElement>(null);
   const [scanQueue] = useState(() =>
     createScanQueue((code) =>
@@ -196,6 +232,7 @@ export default function CheckInPage() {
   }
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (scanState.phase === "scanning") return;
     await saveGuard.run(submitCheckIn);
   }
 
@@ -257,7 +294,10 @@ export default function CheckInPage() {
       }
     }
 
-    if (!itemId) return;
+    if (!itemId) {
+      toast({ title: "Select an item", description: "Choose an item from the name suggestions or inventory list before recording stock." });
+      return;
+    }
 
     if (isNewSource && source.trim()) {
         addSource(source.trim());
@@ -382,15 +422,8 @@ export default function CheckInPage() {
     if (mode === "new") {
       setMode("existing");
       setSelectedId(selectedAfterCheckIn(result));
-      setNewItem({
-        name: "",
-        category: "Uncategorized",
-        barcode: "",
-        brand: "",
-        weightPerUnitLbs: 0,
-        valuePerUnitUsd: 0,
-        allergens: [],
-      });
+      setItemQuery(newItem.name.trim());
+      setNewItem(emptyNewItem());
       setIsNewCategory(false);
       setCustomCategory("");
     }
@@ -423,8 +456,9 @@ export default function CheckInPage() {
                   e.currentTarget.value = "";
                 }
               }}
-              disabled={scanState.phase === "scanning"}
+              aria-busy={scanState.phase === "scanning"}
               autoFocus
+              data-barcode-input="true"
               ref={scanInputRef}
               data-testid="input-checkin-barcode-scan"
             />
@@ -462,7 +496,7 @@ export default function CheckInPage() {
           {scanState.phase === "error" && (
             <p className="text-[11px] text-red-600 mt-1 ml-1 flex items-center gap-1">
               <AlertCircle className="h-3 w-3" />
-              Lookup failed. Fill in details manually.
+              Lookup failed. Try again or select the item by name.
             </p>
           )}
           {scanState.phase === "idle" && (
@@ -474,24 +508,20 @@ export default function CheckInPage() {
 
         {/* Enrichment details for selected existing item */}
         {mode === "existing" && selectedItem && (
-          selectedItem.winningSource || selectedItem.brand ||
-          (selectedItem.weightPerUnitLbs && selectedItem.weightPerUnitLbs > 0) ||
-          (selectedItem.netWeightG && selectedItem.netWeightG > 0) ||
-          (selectedItem.allergens && selectedItem.allergens.length > 0) ||
-          (selectedItem.costCents && selectedItem.costCents > 0)
-        ) && (
-          <div className="mb-4 p-3 bg-muted/50 rounded-lg border border-dashed">
+          <div className="mb-4 p-3 bg-muted/50 rounded-lg border border-dashed" data-testid="text-selected-item-details">
+            <p className="mb-1 text-sm font-medium">{selectedItem.name}</p>
+            <p className="mb-2 text-xs text-muted-foreground">{selectedItem.category} · {selectedItem.barcode || "No barcode"} · {selectedItem.quantity} on hand</p>
             <ItemEnrichmentDetails item={selectedItem} />
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4 border-t pt-4 border-dashed">
+        <form onSubmit={handleSubmit} onInputCapture={() => { if (scanState.phase === "scanning") cancelLookup(); }} className="space-y-4 border-t pt-4 border-dashed">
           <div className="flex gap-2">
             <Button
               type="button"
               variant={mode === "existing" ? "default" : "outline"}
               size="sm"
-              onClick={() => setMode("existing")}
+              onClick={() => { cancelLookup(); setMode("existing"); }}
               data-testid="button-mode-existing-item"
             >
               Existing item
@@ -500,7 +530,7 @@ export default function CheckInPage() {
               type="button"
               variant={mode === "new" ? "default" : "outline"}
               size="sm"
-              onClick={() => setMode("new")}
+              onClick={() => { cancelLookup(); setMode("new"); }}
               data-testid="button-mode-new-item"
             >
               New item on the fly
@@ -509,12 +539,31 @@ export default function CheckInPage() {
 
           {mode === "existing" ? (
             <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="existing-item-name">Find an item by name</label>
+              <ItemNameInput
+                id="existing-item-name"
+                value={itemQuery}
+                items={itemChoices}
+                onChange={(value) => {
+                  cancelLookup();
+                  setItemQuery(value);
+                  setSelectedId("");
+                  lastScannedItemId.current = "";
+                }}
+                onSelect={selectExistingItem}
+                placeholder="Type a name, brand or barcode"
+                data-testid="input-existing-item-name"
+              />
               <label className="text-sm font-medium" htmlFor="select-item" data-testid="label-existing-item">
-                Item
+                Or choose from inventory
               </label>
               <Select
                 value={shownSelectedId}
-                onValueChange={(val) => setSelectedId((cur) => nextSelectedId(cur, val))}
+                onValueChange={(val) => {
+                  const id = nextSelectedId(shownSelectedId, val);
+                  const picked = itemChoices.find((row) => row.id === id);
+                  if (picked) selectExistingItem(picked);
+                }}
               >
                 <SelectTrigger id="select-item" data-testid="select-existing-item">
                   <SelectValue placeholder="Select an item" />
@@ -535,10 +584,13 @@ export default function CheckInPage() {
                   <label className="text-sm font-medium" htmlFor="new-name" data-testid="label-new-item-name">
                     Item name
                   </label>
-                  <Input
+                  <ItemNameInput
                     id="new-name"
                     value={newItem.name}
-                    onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))}
+                    items={itemChoices}
+                    onChange={(name) => { cancelLookup(); setNewItem((p) => ({ ...p, name })); }}
+                    onSelect={selectExistingItem}
+                    placeholder="Type a name to find saved details"
                     data-testid="input-new-item-name"
                     required
                   />
@@ -790,7 +842,7 @@ export default function CheckInPage() {
             <p className="text-[11px] text-muted-foreground" data-testid="text-check-in-help">
               This will increase on-hand quantity and log an IN transaction in Activity.
             </p>
-            <Button type="submit" data-testid="button-save-check-in">
+            <Button type="submit" disabled={scanState.phase === "scanning"} data-testid="button-save-check-in">
               Record check-in
             </Button>
           </div>

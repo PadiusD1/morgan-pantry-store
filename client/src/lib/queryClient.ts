@@ -78,10 +78,14 @@ export function isSaveStillRunning(err: unknown): boolean {
  */
 export class EarlierSaveRecordedError extends Error {
   readonly recorded: unknown;
-  constructor(recorded: unknown) {
+  readonly recordedStatus: number | undefined;
+  constructor(recorded: unknown, recordedStatus?: number) {
     super("An earlier save was already recorded and the change was not saved");
     this.name = "EarlierSaveRecordedError";
     this.recorded = recorded;
+    // Some create endpoints return an existing record with 200. Keep that
+    // distinction so a recovered response cannot silently become an edit.
+    this.recordedStatus = recordedStatus;
   }
 }
 
@@ -195,7 +199,7 @@ export async function apiRequest(
       if (!replay.ok) continue;
       const recorded: unknown = await replay.json().catch(() => null);
       sentBodies.delete(key);
-      throw new EarlierSaveRecordedError(recorded);
+      throw new EarlierSaveRecordedError(recorded, replay.status);
     }
   }
   if (key && held && res.status === 409) {

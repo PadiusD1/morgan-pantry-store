@@ -87,6 +87,18 @@ function expectOneWinner(a: number, b: number) {
 }
 
 describe("request status changes are conditional updates", () => {
+  it("a pickup with zero distributed items leaves its reservation and request intact", async () => {
+    const { item, request } = await approvedRequest();
+    const { rows: [line] } = await t.pool.query("SELECT id FROM request_items WHERE request_id = $1", [request]);
+    const response = await post(`/api/requests/${request}/fulfill`, { items: [{ id: line.id, fulfilledQuantity: 0 }] });
+    expect(response.status).toBe(400);
+    expect(await stock(item)).toEqual([10, 2]);
+    const { rows: [saved] } = await t.pool.query("SELECT status, transaction_id FROM requests WHERE id = $1", [request]);
+    expect(saved).toEqual({ status: "approved", transaction_id: null });
+    const { rows: [history] } = await t.pool.query("SELECT count(*)::int AS n FROM transaction_items WHERE inventory_item_id = $1", [item]);
+    expect(history.n).toBe(0);
+  });
+
   it("two concurrent fulfils of one request, exactly one wins", async () => {
     const { item, request } = await approvedRequest();
     const [a, b] = await Promise.all([

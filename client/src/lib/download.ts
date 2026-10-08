@@ -35,7 +35,17 @@ export function downloadCsvText(text: string, filename: string): void {
 // Fetches a server CSV and saves it. res.text() drops any byte order mark,
 // and downloadCsvText writes exactly one.
 export async function downloadServerCsv(url: string, filename: string): Promise<void> {
-  const res = await fetch(url, { credentials: "include" });
-  if (!res.ok) throw new Error(`Server returned ${res.status}`);
+  const res = await fetch(url, { credentials: "include", cache: "no-store" });
+  if (!res.ok) {
+    let message = res.status === 401 ? "Your session expired. Sign in again, then retry the export." : `Export failed (server ${res.status}). Please retry.`;
+    try {
+      const body = await res.json();
+      if (res.status !== 401 && typeof body.message === "string") message = body.message;
+    } catch { /* Keep the useful status message when an error body is not JSON. */ }
+    throw new Error(message);
+  }
+  if (!res.headers.get("Content-Type")?.toLowerCase().includes("text/csv")) {
+    throw new Error("The server did not return a CSV file. Refresh the page and retry the export.");
+  }
   downloadCsvText(await res.text(), filename);
 }

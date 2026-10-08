@@ -7,6 +7,11 @@
 import { z } from "zod";
 import { pool } from "./pg";
 import { storage } from "./storage";
+import type { PoolClient } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { eq } from "drizzle-orm";
+import { normaliseName } from "@shared/identity";
+import { requests, requestItems, requestAuditLog, notifications, settings } from "@shared/schema";
 
 const requestItemSchema = z.object({
   inventoryItemId: z.string().uuid(),
@@ -35,6 +40,36 @@ export class RequestRateLimitError extends Error {
   }
 }
 
+export class RequestItemUnavailableError extends Error {
+  readonly status = 409;
+
+  constructor() {
+    super("One or more requested items are no longer in the inventory. Refresh the item list and choose available items before submitting again.");
+  }
+}
+
+/** The local calendar day has 23 or 25 hours at daylight-saving changes. */
+export async function countRequestsForBaltimoreDay(
+  client: Pick<PoolClient, "query">,
+  identifier: string,
+  at: Date,
+): Promise<number> {
+  const { rows } = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM requests
+     WHERE lower(btrim(regexp_replace(client_identifier, '\\s+', ' ', 'g'))) = $1
+       AND created_at >= (
+         date_trunc('day', $2::timestamptz AT TIME ZONE 'America/New_York')
+         AT TIME ZONE 'America/New_York'
+       )
+       AND created_at < (
+         (date_trunc('day', $2::timestamptz AT TIME ZONE 'America/New_York') + interval '1 day')
+         AT TIME ZONE 'America/New_York'
+       )`,
+    [normaliseName(identifier), at],
+  );
+  return rows[0].count;
+}
+
 /** Full request payload with items, matching the legacy response shape. */
 export async function getRequestPayload(
   requestId: string,
@@ -61,66 +96,90 @@ export async function createFoodRequest(
   input: CreateRequestInput,
   actor: string | null,
 ): Promise<any> {
-  // Per-identifier daily rate limit (configurable via settings)
-  let maxRequestsPerDay = 5;
+  const client = await pool.connect();
   try {
-    const setting = await storage.getSetting("maxRequestsPerDay");
-    if (setting) maxRequestsPerDay = parseInt(setting) || 5;
-  } catch {
-    // default stands
-  }
+    // READ COMMITTED gives a waiter a fresh count after the preceding request
+    // commits. A transaction-scoped lock also works through a transaction pooler.
+    await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('frc:request:create'), hashtext($1))", [normaliseName(input.clientIdentifier)]);
 
-  const todayMidnight = new Date();
-  todayMidnight.setHours(0, 0, 0, 0);
-  const todayCount = await storage.getRequestCountSince(
-    input.clientIdentifier,
-    todayMidnight.toISOString(),
-  );
-  if (todayCount >= maxRequestsPerDay) {
-    throw new RequestRateLimitError(maxRequestsPerDay);
-  }
+    const db = drizzle(client);
+    const [setting] = await db.select({ value: settings.value }).from(settings).where(eq(settings.key, "maxRequestsPerDay"));
+    const configuredLimit = Number(setting?.value);
+    const maxRequestsPerDay = Number.isSafeInteger(configuredLimit) && configuredLimit > 0 ? configuredLimit : 5;
 
-  const request = await storage.createRequest({
-    clientName: input.clientName,
-    clientIdentifier: input.clientIdentifier,
-    clientEmail: input.clientEmail ?? null,
-    clientPhone: input.clientPhone ?? null,
-    clientId: input.clientId ?? null,
-    userId: input.userId ?? null,
-    reason: input.reason,
-    studentNote: input.studentNote ?? null,
-    status: "pending",
-  });
+    const itemIds = [...new Set(input.items.map((item) => item.inventoryItemId.toLowerCase()))];
+    // Keep the referenced rows from being deleted until the request commits.
+    // Stable ordering also keeps concurrent inventory lock acquisition uniform.
+    const { rows: inventory } = await client.query<{ id: string; name: string; category: string | null }>(
+      "SELECT id, name, category FROM inventory_items WHERE id = ANY($1::uuid[]) ORDER BY id FOR KEY SHARE",
+      [itemIds],
+    );
+    if (inventory.length !== itemIds.length) throw new RequestItemUnavailableError();
+    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
 
-  for (const item of input.items) {
-    await storage.createRequestItem({
+    // Read the clock after acquiring the lock. A request waiting across local
+    // midnight must be counted and timestamped in the day when it is created.
+    const { rows: [clock] } = await client.query<{ requestTime: Date }>('SELECT clock_timestamp() AS "requestTime"');
+    if (await countRequestsForBaltimoreDay(client, input.clientIdentifier, clock.requestTime) >= maxRequestsPerDay) {
+      throw new RequestRateLimitError(maxRequestsPerDay);
+    }
+
+    const [request] = await db.insert(requests).values({
+      clientName: input.clientName,
+      clientIdentifier: input.clientIdentifier,
+      clientEmail: input.clientEmail ?? null,
+      clientPhone: input.clientPhone ?? null,
+      clientId: input.clientId ?? null,
+      userId: input.userId ?? null,
+      reason: input.reason,
+      studentNote: input.studentNote ?? null,
+      status: "pending",
+      createdAt: clock.requestTime,
+      updatedAt: clock.requestTime,
+    }).returning();
+
+    const items = await db.insert(requestItems).values(input.items.map((item) => {
+      const canonicalItem = inventoryById.get(item.inventoryItemId.toLowerCase())!;
+      return {
+        requestId: request.id,
+        inventoryItemId: canonicalItem.id,
+        itemName: canonicalItem.name,
+        itemCategory: canonicalItem.category,
+        requestedQuantity: item.requestedQuantity,
+      };
+    })).returning();
+
+    await db.insert(requestAuditLog).values({
       requestId: request.id,
-      inventoryItemId: item.inventoryItemId,
-      itemName: item.itemName,
-      itemCategory: item.itemCategory ?? null,
-      requestedQuantity: item.requestedQuantity,
+      action: "created",
+      actor,
+      details: "Request submitted",
+      previousStatus: null,
+      newStatus: "pending",
+      createdAt: clock.requestTime,
     });
+
+    await db.insert(notifications).values({
+      requestId: request.id,
+      recipientType: "client",
+      recipientId: input.clientIdentifier,
+      type: "request_submitted",
+      title: "Request Submitted",
+      message: "Your request has been submitted and is pending review.",
+      createdAt: clock.requestTime,
+    });
+
+    await client.query("COMMIT");
+    // Return the rows from this transaction; a separate read after commit
+    // could fail despite a complete save and invite an accidental retry.
+    return { ...request, items };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
   }
-
-  await storage.createAuditLogEntry({
-    requestId: request.id,
-    action: "created",
-    actor,
-    details: "Request submitted",
-    previousStatus: null,
-    newStatus: "pending",
-  });
-
-  await storage.createNotification({
-    requestId: request.id,
-    recipientType: "client",
-    recipientId: input.clientIdentifier,
-    type: "request_submitted",
-    title: "Request Submitted",
-    message: "Your request has been submitted and is pending review.",
-  });
-
-  return getRequestPayload(request.id);
 }
 
 /**
@@ -133,7 +192,8 @@ export async function releaseRequestReservations(
 ): Promise<void> {
   const { rows } = await db.query(
     `SELECT inventory_item_id, approved_quantity
-     FROM request_items WHERE request_id = $1 AND reserved = true`,
+     FROM request_items WHERE request_id = $1 AND reserved = true
+     ORDER BY inventory_item_id, id`,
     [requestId],
   );
   for (const row of rows) {
