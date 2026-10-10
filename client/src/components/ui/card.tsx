@@ -9,7 +9,9 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-xl border bg-card text-card-foreground shadow",
+      // A grid card must be allowed to shrink so its table scroll container,
+      // rather than the entire page, owns wide operational tables on phones.
+      "min-w-0 rounded-xl border bg-card text-card-foreground shadow",
       className
     )}
     {...props}
