@@ -14,6 +14,7 @@ test("firm identity, accessible navigation and mobile controls survive the visua
   expect(await page.getByTestId("text-page-title").evaluate(el => getComputedStyle(el).fontFamily)).toContain("Source Serif 4");
   await page.screenshot({ path: info.outputPath("sbd-reports-desktop.png"), fullPage: true });
   await page.getByTestId("button-toggle-sidebar").click();
+  await expect(page.getByTestId("sbd-brand-signature")).toBeHidden();
   await expect(page.getByRole("link", { name: "Reports", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.getByTestId("button-toggle-sidebar").click();

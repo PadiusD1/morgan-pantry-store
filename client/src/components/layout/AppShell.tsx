@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarRail, SidebarSeparator, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
@@ -36,14 +36,22 @@ function WorkspaceNavigation() {
   const [location] = useLocation();
   const { user } = useAuth();
   const { setOpenMobile } = useSidebar();
-  useEffect(() => { setOpenMobile(false); }, [location, setOpenMobile]);
+  const previousLocation = useRef(location);
+  useEffect(() => {
+    // The mobile sheet mounts this navigation when it opens. Do not close on
+    // that initial mount; close only for an actual route change.
+    if (previousLocation.current !== location) {
+      previousLocation.current = location;
+      setOpenMobile(false);
+    }
+  }, [location, setOpenMobile]);
   return <nav aria-label="Workspace navigation">{["Operate", "Relationships", "Review"].map(group => <SidebarGroup key={group}>
     <SidebarGroupLabel className="text-[10px] uppercase tracking-widest">{group}</SidebarGroupLabel>
     <SidebarMenu>{navItems.filter(item => item.group === group && (item.href !== "/settings" || user?.role === "admin")).map(item => {
       const Icon = item.icon;
       const active = item.href === "/" ? location === "/" : location === item.href || location.startsWith(`${item.href}/`);
       return <SidebarMenuItem key={item.href}><SidebarMenuButton asChild isActive={active} tooltip={item.label} data-testid={item.testId}>
-        <Link href={item.href} onClick={() => setOpenMobile(false)} aria-current={active ? "page" : undefined} data-testid={`link-${item.label.toLowerCase().replace(/\s+/g, "-")}`}><Icon className="shrink-0" /><span>{item.label}</span></Link>
+        <Link href={item.href} onClick={() => setOpenMobile(false)} aria-label={item.label} aria-current={active ? "page" : undefined} data-testid={`link-${item.label.toLowerCase().replace(/\s+/g, "-")}`}><Icon className="shrink-0" /><span>{item.label}</span></Link>
       </SidebarMenuButton></SidebarMenuItem>;
     })}</SidebarMenu>
   </SidebarGroup>)}</nav>;
