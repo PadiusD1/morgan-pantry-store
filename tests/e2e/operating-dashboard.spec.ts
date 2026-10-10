@@ -16,9 +16,11 @@ test("dashboard charts expose saved stock and keyboard-readable quantities witho
   await expect(page.locator(".recharts-wrapper, canvas")).toHaveCount(0);
   expect(assets.some(path => /\/charts-/.test(path))).toBe(false);
   await numbers.click();
+  await page.evaluate(() => { (document.activeElement as HTMLElement)?.blur(); window.scrollTo(0, 0); });
   await page.screenshot({ path: info.outputPath("sbd-operating-dashboard-desktop.png"), fullPage: true });
   await page.setViewportSize({ width: 320, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await expect(page.getByTestId("button-mobile-menu")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: info.outputPath("sbd-operating-dashboard-mobile.png"), fullPage: true });
   await info.attach("dashboard-assets", { body: JSON.stringify({ note: "Compiled synthetic local run; not a production latency or billing measurement.", javascriptRequests: [...new Set(assets)] }, null, 2), contentType: "application/json" });
 });

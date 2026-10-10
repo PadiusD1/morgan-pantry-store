@@ -37,6 +37,7 @@ test("firm identity, accessible navigation and mobile controls survive the visua
   }
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/reports");
+  await expect(summary).toBeVisible();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to workspace" })).toBeFocused();
   await page.keyboard.press("Enter");
