@@ -91,7 +91,7 @@ tr { break-inside: avoid; }
  .metrics { margin-bottom: 16px; }
  .chart svg { height: 72px; }
  .page-footer { margin-top: 14px; padding-top: 8px; }
- .items th,.items td { padding-block: 6px; }
+ .items th,.items td { padding-block: 4px; }
  h2,h3,caption { break-after: avoid; }
  .page-footer,.quality,.chart { break-inside: avoid; }
  .table-wrap { overflow: visible; }
