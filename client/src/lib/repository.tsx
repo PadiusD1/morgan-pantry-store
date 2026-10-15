@@ -159,6 +159,7 @@ export type RepositoryContextValue = RepositoryState & {
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
+    eventId?: string | null;
   }) => Promise<{ client: ClientRecord; saved?: unknown }>;
   upsertClient: (partial: Partial<ClientRecord> & { name: string; identifier: string }) => ClientRecord;
   updateSettings: (partial: Partial<Settings>) => void;
@@ -711,6 +712,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
+    eventId?: string | null;
   }): Promise<{ client: ClientRecord; saved?: unknown }> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const isEmergency = Boolean(options.isEmergency);
@@ -818,6 +820,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           clientName: client.name,
           clientClassification: options.client.classification ?? null,
           isEmergency,
+          eventId: options.eventId ?? null,
           latitude: options.location?.latitude ?? null,
           longitude: options.location?.longitude ?? null,
           accuracy: options.location?.accuracy ?? null,
