@@ -1,3 +1,5 @@
+import { notifyRequestUpdate } from "./email-delivery";
+import { captureOperationalEvent } from "./integration-config";
 /**
  * Student portal — session-scoped endpoints under /api/portal/*.
  * The apiGuard restricts students to exactly these paths; identity always
@@ -119,6 +121,7 @@ export function registerPortalRoutes(app: Express): void {
         },
         user.name,
       );
+      await Promise.all([notifyRequestUpdate(payload.id), captureOperationalEvent("food_request_submitted")]);
       res.status(201).json(payload);
     } catch (err) {
       if (err instanceof RequestRateLimitError) {
@@ -166,6 +169,7 @@ export function registerPortalRoutes(app: Express): void {
   app.post("/api/portal/notifications/:id/read", async (req, res) => {
     // Scope check: the notification must belong to this student
     const user = req.user!;
+    if (!user.studentId) return res.status(404).json({ message: "Notification not found" });
     if (user.studentId) {
       const own = await storage.getNotifications(user.studentId);
       if (!own.some((n: any) => n.id === req.params.id)) {

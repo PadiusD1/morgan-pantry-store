@@ -1,3 +1,4 @@
+import { packageMassGrams } from "@shared/item-measurements";
 import { log } from "./app";
 import { lookupStubProduct } from "./barcode-stub";
 
@@ -520,20 +521,7 @@ const CATEGORY_WEIGHT_ESTIMATES: Record<string, number> = {
   "baby food": 113,
 };
 
-function parseWeightFromText(text: string): number | null {
-  const match = text.match(
-    /(\d+(?:\.\d+)?)\s*-?\s*(oz|lb|lbs|g|kg|ml|fl\s*oz)/i,
-  );
-  if (!match) return null;
-  const val = parseFloat(match[1]);
-  const unit = match[2].toLowerCase().replace(/\s/g, "");
-  if (unit === "g") return val;
-  if (unit === "kg") return val * 1000;
-  if (unit === "oz") return val * 28.3495;
-  if (unit === "lb" || unit === "lbs") return val * 453.592;
-  if (unit === "ml" || unit === "floz") return val * 29.5735; // approximate
-  return null;
-}
+const parseWeightFromText = packageMassGrams;
 
 function estimateWeight(
   providerResult: ProviderResult,
@@ -775,7 +763,7 @@ async function _lookupBarcodeInternal(barcode: string): Promise<LookupResult> {
     })),
     winningSource: best.provider,
     matchConfidence: best.confidence,
-    rawPayload: merged.raw,
+    rawPayload: { ...merged.raw, ...(merged.imageUrl ? { frcProductImage: merged.imageUrl } : {}) },
   };
 
   log(
