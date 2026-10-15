@@ -1,3 +1,4 @@
+import { DirectoryExportButton } from "@/components/directory-export-button";
 import React, { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
@@ -212,6 +213,7 @@ export default function PartnersPage() {
               data-testid="input-partners-search"
             />
           </div>
+          <DirectoryExportButton kind="partner" />
           <Button
             size="sm"
             onClick={() => { saveGuard.renew(); setEditing({ ...emptyForm }); }}

@@ -1,3 +1,4 @@
+import { CatalogQualityPanel } from "@/components/catalog-quality-panel";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
@@ -122,6 +123,7 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
+      <CatalogQualityPanel />
       <Card className="glass-panel" data-testid="card-inventory-filters">
         <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-1 items-center gap-2">

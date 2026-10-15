@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import { safeCatalogImage } from "@shared/catalog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,8 @@ export function ItemCard({
   onQuantityChange,
 }: ItemCardProps) {
   const isKiosk = variant === "kiosk";
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const imageUrl = safeCatalogImage(item.imageUrl);
   const available = item.quantity ?? 0;
   const isLowStock =
     item.reorderThreshold != null && available <= item.reorderThreshold && available > 0;
@@ -42,10 +45,14 @@ export function ItemCard({
     >
       <CardContent className={isKiosk ? "p-4" : "p-3"}>
         <div className="space-y-2">
+          <div className="flex h-36 items-center justify-center overflow-hidden rounded border bg-muted/20">
+            {imageUrl && failedImage !== imageUrl ? <img src={imageUrl} alt={item.imageAlt || item.name} loading="lazy" decoding="async" referrerPolicy="no-referrer" className="h-full w-full object-contain" width={320} height={144} onError={() => setFailedImage(imageUrl)} data-testid={`photo-item-${item.id}`} /> : <p className="p-3 text-center text-xs text-muted-foreground">Photo not available. Check the item name and package label at pickup.</p>}
+          </div>
+          {imageUrl && failedImage !== imageUrl && item.imageSource === "Open Food Facts" && <p className="text-xs text-muted-foreground">Photo: <a className="underline" href={imageUrl} target="_blank" rel="noopener noreferrer">Open Food Facts contributors</a> · <a className="underline" href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 3.0</a>. Packaging may vary.</p>}
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <p
-                className={`font-medium truncate ${isKiosk ? "text-lg" : "text-sm"}`}
+                className={`font-medium break-words ${isKiosk ? "text-lg" : "text-sm"}`}
                 data-testid={`text-item-name-${item.id}`}
               >
                 {item.name}
@@ -95,6 +102,7 @@ export function ItemCard({
               variant="outline"
               size="icon"
               className={isKiosk ? "h-12 w-12" : "h-8 w-8"}
+              aria-label={`Remove one ${item.name}`}
               onClick={handleDecrement}
               disabled={cartQuantity <= 0}
               data-testid={`button-item-minus-${item.id}`}
@@ -112,6 +120,7 @@ export function ItemCard({
               variant="outline"
               size="icon"
               className={isKiosk ? "h-12 w-12" : "h-8 w-8"}
+              aria-label={`Add one ${item.name}`}
               onClick={handleIncrement}
               disabled={cartQuantity >= available}
               data-testid={`button-item-plus-${item.id}`}

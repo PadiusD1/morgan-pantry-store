@@ -1,3 +1,4 @@
+import { DirectoryExportButton } from "@/components/directory-export-button";
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -230,6 +231,7 @@ export default function DonorsPage() {
             </select>
             <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()} data-testid="button-refresh-donors">{isFetching ? "Refreshing…" : "Refresh"}</Button>
           </div>
+          <DirectoryExportButton kind="donor" />
           <Button
             size="sm"
             onClick={() => {

@@ -1,3 +1,5 @@
+import { registerCatalogRoutes } from "./catalog-routes";
+import { catalogImage } from "@shared/catalog";
 import type { Express } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -196,6 +198,7 @@ function parseItemGroupItems(rawItems: unknown, groupId: string) {
 }
 
 export async function registerRoutes(app: Express): Promise<void> {
+  registerCatalogRoutes(app);
   // ─── Barcode Lookup ──────────────────────────────────────────────────
 
   app.get("/api/barcode-lookup/:code", async (req, res) => {
@@ -872,6 +875,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       allergens: item.allergens,
       reorderThreshold: item.reorderThreshold,
       weightPerUnitLbs: item.weightPerUnitLbs,
+      ...catalogImage(item.rawPayload),
     }));
     res.json(available);
   });
