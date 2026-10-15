@@ -29,11 +29,13 @@ export function relationshipReport(kind: "donor" | "partner", records: Relations
   }
   return rows;
 }
-export function relationshipCsv(kind: "donor" | "partner", records: RelationshipRecord[], transactions: (ReportTransaction & { donorId?: string })[], range: ReportRange, directory: RelationshipRecord[] = records): string {
+export function relationshipCsv(kind: "donor" | "partner", records: RelationshipRecord[], transactions: (ReportTransaction & { donorId?: string })[], range: ReportRange, directory: RelationshipRecord[] = records, now: Date = new Date()): string {
   const rows = relationshipReport(kind, records, transactions, range, directory);
+  if (!Number.isFinite(now.getTime())) throw new Error("A valid report generation time is required.");
+  const generatedAt = new Intl.DateTimeFormat("en-US", { timeZone: REPORT_TIME_ZONE, year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short" }).format(now).replace(/\s+/g, " ");
   const columns = ["Name", "Organization", "Status", "Added at", "IN entries", "IN units", "IN lbs", "IN estimated USD", "IN units missing weight", "IN units missing value"];
   if (kind === "partner") columns.push("OUT entries", "OUT units", "OUT lbs", "OUT estimated USD", "OUT units missing weight", "OUT units missing value");
   else columns.push("Legacy name-matched IN entries (review)");
   const movement = (value: RelationshipMovement) => [value.entries, value.units, value.weightLbs.toFixed(4), (value.valueCents / 100).toFixed(2), value.unweighedUnits, value.unvaluedUnits];
-  return [[`FRC ${kind === "donor" ? "Donor" : "Partner"} Directory Report`], ["Period", reportPeriodLabel(range)], ["Calendar", REPORT_TIME_ZONE], ["Scope", "Filtered directory; no client contacts or student identities. Snapshot values, not cash savings."], [], columns, ...rows.map(r => [r.name, r.organization ?? "", r.status ?? "active", r.createdAt ?? "", ...movement(r.received), ...(kind === "partner" ? movement(r.distributed) : [r.legacyNameEntries])])].map(csvRow).join("\r\n");
+  return [[`FRC ${kind === "donor" ? "Donor" : "Partner"} Directory Report`], ["Period", reportPeriodLabel(range)], ["Calendar", REPORT_TIME_ZONE], ["Generated at (Baltimore)", generatedAt], ["Generated at (UTC)", now.toISOString()], ["Scope", "Filtered directory; no client contacts or student identities. Snapshot values, not cash savings."], [], columns, ...rows.map(r => [r.name, r.organization ?? "", r.status ?? "active", r.createdAt ?? "", ...movement(r.received), ...(kind === "partner" ? movement(r.distributed) : [r.legacyNameEntries])])].map(csvRow).join("\r\n");
 }

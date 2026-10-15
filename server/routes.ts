@@ -1385,6 +1385,10 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
     client.release();
 
+    // Optional delivery starts only after the pickup and notification commit.
+    // Provider failures are held in the ledger and never undo saved stock.
+    await notifyRequestUpdate(req.params.id);
+
     const updated = await getRequestPayload(req.params.id) as Record<string, unknown>;
     const transaction = (await pool.query("SELECT * FROM transactions WHERE id = $1", [txId])).rows[0];
     // Include immutable checkout line snapshots, not today's inventory values.
