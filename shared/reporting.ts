@@ -1,3 +1,4 @@
+import { isFullBoardSelection, selectedBoardCsv, type BoardSelection } from "./board-selection";
 import { csvRow } from "./csv";
 
 /** All pantry reporting follows the calendar in Baltimore, including exports. */
@@ -193,7 +194,8 @@ export const REPORT_DEFINITIONS = [
 ] as const;
 
 /** Deliberately excludes client names, IDs, contact details, locations, and donor names. */
-export function boardSummaryCsv(report: BoardReport): string {
+export function boardSummaryCsv(report: BoardReport, selection?: BoardSelection): string {
+  if (!isFullBoardSelection(selection)) return selectedBoardCsv(report, selection!);
   const d = report.distribution;
   const rows: (string | number)[][] = [
     ["Morgan State Food Resource Center — Board Summary"],

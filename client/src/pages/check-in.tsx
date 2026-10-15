@@ -1,3 +1,6 @@
+import { cacheSavedPartner } from "@/lib/partner-save";
+import { cacheSavedDonor } from "@/lib/donor-cache";
+import { confirmedDonor } from "@/lib/donor-save";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
@@ -53,6 +56,7 @@ export default function CheckInPage() {
   const [source, setSource] = useState("");
   const [donor, setDonor] = useState("");
   const [donorKey, setDonorKey] = useState("");
+  const [newSourceKind, setNewSourceKind] = useState<"donor" | "partner">("donor");
   const [isNewSource, setIsNewSource] = useState(false);
   const [isNewDonor, setIsNewDonor] = useState(false);
   const [isNewCategory, setIsNewCategory] = useState(false);
@@ -78,6 +82,12 @@ export default function CheckInPage() {
     }
     return next;
   }, [partnerCount, sources]);
+
+  function keepSavedSource(kind: "donor" | "partner", saved: { id: string; name: string }) {
+    setDonorKey(`${kind}:${saved.id}`);
+    setDonor(saved.name);
+    setIsNewDonor(false);
+  }
 
   const isDonationSource = source === "Donation" || source === "Partner Donation";
 
@@ -314,9 +324,39 @@ export default function CheckInPage() {
       pickDonor: isDonationSource
         ? async () => {
             const picked = await pickFields(
-              isNewDonor ? { newName: donor } : { option: donorOptions.find((o) => o.key === donorKey) },
+              isNewDonor ? { newName: donor, newKind: newSourceKind } : { option: donorOptions.find((o) => o.key === donorKey) },
               key,
-              postDonor,
+              async (name, stageKey) => {
+                try {
+                  const saved = confirmedDonor(await postDonor(name, stageKey));
+                  await cacheSavedDonor(queryClient, saved);
+                  keepSavedSource("donor", saved);
+                  return saved;
+                } catch (error) {
+                  if (isEarlierSaveRecorded(error)) {
+                    const saved = confirmedDonor(error.recorded);
+                    await cacheSavedDonor(queryClient, saved);
+                    keepSavedSource("donor", saved);
+                  }
+                  throw error;
+                }
+              },
+              async (name, stageKey) => {
+                try {
+                  const response = await apiRequest("POST", "/api/clients", {
+                    name, identifier: `PARTNER-${stageKey}`, clientType: "partner", status: "active", partnershipType: "Community Organization",
+                  }, { idempotencyKey: stageKey });
+                  const saved = await cacheSavedPartner(queryClient, await response.json());
+                  keepSavedSource("partner", saved);
+                  return saved;
+                } catch (error) {
+                  if (isEarlierSaveRecorded(error)) {
+                    const saved = await cacheSavedPartner(queryClient, error.recorded);
+                    keepSavedSource("partner", saved);
+                  }
+                  throw error;
+                }
+              },
             );
             if (isNewDonor && picked.donorId) {
               queryClient.invalidateQueries({ queryKey: ["/api/donation-sources"] });
@@ -400,11 +440,11 @@ export default function CheckInPage() {
       // form and the key are kept either way.
       const refusal = {
         item: "The new item was not saved. Please try again.",
-        donor: "The new donor could not be saved. Please try again.",
+        donor: `The new ${newSourceKind} could not be saved. Please try again.`,
         stock: "The stock could not be recorded. Please try again.",
       }[result.stage];
       toast({
-        title: result.stage === "donor" ? "Donor not saved" : "Check-in failed",
+        title: result.stage === "donor" ? `${newSourceKind === "partner" ? "Partner" : "Donor"} not saved` : "Check-in failed",
         description: saveErrorMessage(err, itemActionFailureText(err, refusal)),
         variant: "destructive",
       });
@@ -766,7 +806,7 @@ export default function CheckInPage() {
                     </SelectContent>
                   </Select>
                 ) : (
-                    <div className="flex gap-1 w-full">
+                    <div className="flex flex-wrap gap-1 w-full">
                         <Input
                             value={source}
                             onChange={(e) => setSource(e.target.value)}
@@ -815,20 +855,26 @@ export default function CheckInPage() {
                                     </SelectItem>
                                   );
                                 })}
-                                <SelectItem value="new_donor_custom">+ Add New Donor</SelectItem>
+                                <SelectItem value="new_donor_custom">+ Register Donor / Partner</SelectItem>
                             </SelectContent>
                         </Select>
                     ) : (
-                        <div className="flex gap-1 w-full">
+                        <div className="flex flex-wrap gap-1 w-full">
+                            <label className="sr-only" htmlFor="inline-source-kind">Register as</label>
+                            <select id="inline-source-kind" data-testid="select-inline-source-kind" className="h-10 rounded-md border bg-background px-2 text-sm" value={newSourceKind} onChange={e => setNewSourceKind(e.target.value as "donor" | "partner")}>
+                              <option value="donor">Donor</option><option value="partner">Partner</option>
+                            </select>
                             <Input
                                 value={donor}
                                 onChange={(e) => {
                                   setDonor(e.target.value);
                                 }}
-                                placeholder="Enter new donor"
+                                className="min-w-0 flex-1"
+                                aria-label={newSourceKind === "partner" ? "New partner name" : "New donor name"}
+                                placeholder={newSourceKind === "partner" ? "Enter new partner" : "Enter new donor"}
                                 autoFocus
                             />
-                            <Button type="button" variant="ghost" size="icon" aria-label="Cancel new donor" onClick={() => setIsNewDonor(false)}>
+                            <Button type="button" variant="ghost" size="icon" aria-label="Cancel new registration" onClick={() => setIsNewDonor(false)}>
                                 <span className="sr-only">Cancel</span>
                                 <XIcon className="h-4 w-4" />
                             </Button>

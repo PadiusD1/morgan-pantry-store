@@ -176,3 +176,34 @@ test("paged client previews stay small while CSV includes every selected row", a
   const { bytes } = await download(page, testInfo, "button-export-csv", "all-paged-transactions.csv");
   expect(Papa.parse(bytes.toString("utf8"), { header: true }).data).toHaveLength(55);
 });
+
+test("selected board data controls preview, CSV and PDF with no excluded values", async ({ page }, testInfo) => {
+  await page.context().addInitScript(() => { window.print = () => {}; });
+  await selectReportDay(page);
+  await page.getByRole("button", { name: "Clear board selection", exact: true }).click();
+  await expect(page.getByTestId("button-export-board-csv")).toBeDisabled();
+  await expect(page.getByTestId("button-print-board")).toBeDisabled();
+  await page.getByTestId("board-select-weight").check();
+  await page.getByTestId("board-select-monthly").check();
+  await expect(page.getByTestId("text-board-weight")).toHaveText("4.0 lbs");
+  await expect(page.getByTestId("text-board-value")).not.toBeVisible();
+  await expect(page.getByTestId("text-board-visits")).not.toBeVisible();
+  await page.getByTestId("board-selected-preview").locator("summary").click();
+  await expect(page.getByTestId("board-selected-preview")).toContainText("Weight (lbs)");
+  await expect(page.getByTestId("board-selected-preview")).not.toContainText("Estimated value");
+  const { bytes } = await download(page, testInfo, "button-export-board-csv", "selected-weight.csv");
+  const csv = bytes.toString("utf8");
+  expect(csv).toContain("Weight distributed,4.00,lbs");
+  for (const excluded of ["8.50", "Estimated value", clientName, clientIdentifier, donorName, "E2E Report Rice"]) expect(csv).not.toContain(excluded);
+  const opened = page.waitForEvent("popup");
+  await page.getByTestId("button-print-board").click();
+  const printed = await opened;
+  await expect(printed.locator("body")).toContainText("4.00");
+  for (const excluded of ["8.50", "Estimated value", clientName, clientIdentifier, donorName, "E2E Report Rice"]) await expect(printed.locator("body")).not.toContainText(excluded);
+  await printed.pdf({ path: testInfo.outputPath("board-selected-weight.pdf"), format: "Letter", printBackground: true, tagged: true });
+  await printed.screenshot({ path: testInfo.outputPath("board-selected-weight.png"), fullPage: true });
+  await printed.close();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("selected-board-mobile.png"), fullPage: true });
+});

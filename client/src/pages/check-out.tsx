@@ -1,3 +1,4 @@
+import { PartnerRegistrationDialog } from "@/components/partner-registration-dialog";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository, type InventoryItem } from "@/lib/repository";
@@ -9,7 +10,7 @@ import { cartAllergyWarning } from "@/lib/cart-allergies";
 import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { apiRequest, isEarlierSaveRecorded, withIdempotencyKey } from "@/lib/queryClient";
 import { earlierSaveText, savedCheckOutName } from "@/lib/saved-result";
-import { receiptFromFulfilled, receiptFromSaved } from "@/lib/receipt";
+import { receiptFromFulfilled, receiptFromSaved, receiptTotals, type ReceiptData } from "@/lib/receipt";
 import { clientUpdateFailureText } from "@/lib/client-update";
 import { checkOutFailure, fulfilFailure } from "@/lib/checkout-failure";
 import { settleEarlierSave, type EarlierCheckOut } from "@/lib/checkout-earlier";
@@ -29,6 +30,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { useToast } from "@/hooks/use-toast";
 import { duplicateRefusal } from "@shared/identity";
 import { CLASSIFICATIONS, buildCheckoutClient, inputsFromClient, resolveCheckoutIdentity, validateIdentityInputs } from "@shared/checkout-identity";
+import { printReceiptContent } from "@/lib/receipt-print";
 import { useReceiptCountdown } from "@/hooks/use-receipt-countdown";
 import { ShoppingCartIcon, AlertTriangleIcon, Loader2, PlusCircle, XIcon, LayersIcon, PrinterIcon, PackageIcon, SirenIcon, ChevronsUpDownIcon, CheckIcon, Handshake } from "lucide-react";
 
@@ -50,12 +52,7 @@ type ItemGroup = {
   updatedAt: string;
 };
 
-type ReceiptData = {
-  clientName: string;
-  clientIdentifier: string;
-  items: { name: string; quantity: number }[];
-  timestamp: string;
-};
+
 
 export default function CheckOutPage() {
   const { inventory, clients, transactions, recordOutbound, upsertBarcodeCache, addOrUpdateItem, categories } =
@@ -71,6 +68,9 @@ export default function CheckOutPage() {
   const [clientContact, setClientContact] = useState("");
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
   const [isEmergency, setIsEmergency] = useState(false);
+  const selectedClientRecord = clients.find(client => client.id === clientId);
+  const isPartner = selectedClientRecord?.clientType === "partner";
+  const [partnerRegistrationOpen, setPartnerRegistrationOpen] = useState(false);
   const [clientPickerOpen, setClientPickerOpen] = useState(false);
 
   // Count previous Emergency Shop Appointments for the currently-selected client.
@@ -425,7 +425,7 @@ export default function CheckOutPage() {
       return;
     }
     const identityError = Object.values(validateIdentityInputs({
-      studentId: clientIdentifier,
+      studentId: isPartner ? "" : clientIdentifier,
       email: clientEmail,
       classification: clientClassification,
     }))[0];
@@ -435,7 +435,7 @@ export default function CheckOutPage() {
     }
     // A returning student is found by ID or email, so no second record is made,
     // and a conflicting ID and email is refused with the form and cart kept.
-    const selectedClient = clientId && clientId !== "new" ? clients.find((c) => c.id === clientId) : undefined;
+    const selectedClient = selectedClientRecord;
     const identity = resolveCheckoutIdentity(clients, {
       studentId: clientIdentifier,
       email: clientEmail,
@@ -648,7 +648,10 @@ export default function CheckOutPage() {
                           </div>
                         </CommandEmpty>
                         <CommandGroup heading="Add">
-                          <CommandItem
+                          <CommandItem forceMount value="register new partner organization" data-testid="option-partner-new" onSelect={() => { setClientPickerOpen(false); setPartnerRegistrationOpen(true); }}>
+                            <Handshake className="mr-2 h-4 w-4" />+ Register partner
+                          </CommandItem>
+                          <CommandItem forceMount
                             value="new client add"
                             onSelect={() => {
                               setClientFromId("new");
@@ -730,19 +733,21 @@ export default function CheckOutPage() {
                   onChange={(e) => setClientName(e.target.value)}
                   required
                   data-testid="input-client-name"
+                  readOnly={isPartner}
                 />
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-id" data-testid="label-client-identifier">
-                  Student ID (optional)
+                  {isPartner ? "Partner identifier" : "Student ID (optional)"}
                 </label>
                 <Input
                   id="client-id"
                   value={clientIdentifier}
                   onChange={(e) => setClientIdentifier(e.target.value)}
                   data-testid="input-client-identifier"
+                  readOnly={isPartner}
                 />
-                {validateIdentityInputs({ studentId: clientIdentifier }).studentId && (
+                {!isPartner && validateIdentityInputs({ studentId: clientIdentifier }).studentId && (
                   <p className="text-xs text-destructive" data-testid="error-client-identifier">
                     {validateIdentityInputs({ studentId: clientIdentifier }).studentId}
                   </p>
@@ -1048,6 +1053,18 @@ export default function CheckOutPage() {
           </div>
         </form>
 
+        {partnerRegistrationOpen && <PartnerRegistrationDialog onClose={() => setPartnerRegistrationOpen(false)} onSaved={partner => {
+          setClientId(partner.id);
+          setClientName(partner.name);
+          const identity = inputsFromClient(partner);
+          setClientIdentifier(identity.studentId);
+          setClientEmail(identity.email);
+          setClientClassification(partner.classification ?? "");
+          setClientContact(partner.contact ?? "");
+          setClientAllergies(partner.allergies ?? []);
+          setPartnerRegistrationOpen(false);
+        }} />}
+
         <Dialog open={!!allergyWarning} onOpenChange={(open) => { if (!open) allergyWarning?.onCancel(); }}>
           <DialogContent className="border-red-500 border-2">
             <DialogHeader>
@@ -1109,33 +1126,11 @@ export default function CheckOutPage() {
                 onClick={() => {
                   const printArea = document.getElementById("receipt-print-area");
                   if (!printArea) return;
-                  const printWindow = window.open("", "_blank", "width=400,height=600");
-                  if (!printWindow) return;
-                  printWindow.document.write(`
-                    <!DOCTYPE html>
-                    <html><head><title>Receipt</title>
-                    <style>
-                      body { font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; max-width: 380px; margin: 0 auto; color: #111; }
-                      h2 { text-align: center; margin: 0 0 2px; font-size: 16px; }
-                      .org-info { text-align: center; font-size: 11px; color: #555; margin-bottom: 12px; line-height: 1.5; }
-                      .divider { border-top: 1px dashed #999; margin: 10px 0; }
-                      .field { font-size: 12px; margin: 4px 0; }
-                      .field strong { display: inline-block; width: 60px; }
-                      table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-                      th { text-align: left; font-size: 11px; border-bottom: 1px solid #333; padding: 4px 0; }
-                      th:last-child { text-align: right; }
-                      td { font-size: 12px; padding: 3px 0; }
-                      td:last-child { text-align: right; }
-                      .footer { text-align: center; font-size: 10px; color: #777; margin-top: 16px; }
-                    </style>
-                    </head><body>
-                    ${printArea.innerHTML}
-                    </body></html>
-                  `);
-                  printWindow.document.close();
-                  printWindow.focus();
-                  printWindow.print();
-                  printWindow.close();
+                  try {
+                    printReceiptContent(printArea);
+                  } catch (error) {
+                    toast({ title: "Receipt not printed", description: error instanceof Error ? error.message : "Could not open the print window. Your receipt is still available.", variant: "destructive" });
+                  }
                 }}
                 data-testid="button-print-receipt"
               >
@@ -1289,16 +1284,23 @@ function ReceiptContent({ receipt }: { receipt: ReceiptData }) {
 
   const date = new Date(receipt.timestamp);
   const formattedDate = date.toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
   });
   const formattedTime = date.toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    timeZoneName: "short",
     hour: "2-digit",
     minute: "2-digit",
   });
-  const totalItems = receipt.items.reduce((sum, i) => sum + i.quantity, 0);
+  const totals = receiptTotals(receipt);
+  const totalItems = totals.units;
+  const money = (amount: number) => amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const hasValue = totals.unvaluedUnits < totals.units;
+  const hasWeight = totals.unweighedUnits < totals.units;
 
   return (
     <div id="receipt-print-area" className="space-y-3 py-2">
@@ -1328,6 +1330,8 @@ function ReceiptContent({ receipt }: { receipt: ReceiptData }) {
           <tr className="border-b">
             <th className="text-left py-1 font-medium text-xs">Item</th>
             <th className="text-right py-1 font-medium text-xs">Qty</th>
+            <th className="text-right py-1 font-medium text-xs">Weight (lbs)</th>
+            <th className="text-right py-1 font-medium text-xs">Est. value</th>
           </tr>
         </thead>
         <tbody>
@@ -1335,6 +1339,8 @@ function ReceiptContent({ receipt }: { receipt: ReceiptData }) {
             <tr key={idx} className="border-b border-dashed last:border-0">
               <td className="py-1">{item.name}</td>
               <td className="text-right py-1">{item.quantity}</td>
+              <td className="text-right py-1">{item.weightPerUnitLbs && item.weightPerUnitLbs > 0 ? (item.quantity * item.weightPerUnitLbs).toFixed(2) : "—"}</td>
+              <td className="text-right py-1">{item.valuePerUnitUsd && item.valuePerUnitUsd > 0 ? money(item.quantity * Math.round(item.valuePerUnitUsd * 100) / 100) : "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -1347,9 +1353,18 @@ function ReceiptContent({ receipt }: { receipt: ReceiptData }) {
         <span>{totalItems}</span>
       </div>
 
-      <div className="text-center text-[10px] text-muted-foreground pt-2">
+      <dl className="space-y-1 text-sm" data-testid="receipt-totals">
+        <div className="flex justify-between gap-3"><dt>Total recorded weight</dt><dd data-testid="receipt-weight">{hasWeight ? `${totals.weightLbs.toFixed(2)} lbs` : "Not recorded"}</dd></div>
+        <div className="flex justify-between gap-3"><dt>Estimated food / item value</dt><dd data-testid="receipt-value">{hasValue ? money(totals.valueCents / 100) : "Not recorded"}</dd></div>
+        <div className="flex justify-between gap-3"><dt>Estimated pantry savings</dt><dd data-testid="receipt-savings">{hasValue ? `−${money(totals.valueCents / 100)}` : "Not available"}</dd></div>
+        <div className="flex justify-between gap-3 border-t pt-2 font-bold"><dt>Amount due</dt><dd data-testid="receipt-amount-due">{money(0)}</dd></div>
+      </dl>
+      {(totals.unvaluedUnits > 0 || totals.unweighedUnits > 0) && <p className="text-xs" data-testid="receipt-missing-measurements">
+        Incomplete measurements: {totals.unvaluedUnits} units have no positive recorded value; {totals.unweighedUnits} units have no positive recorded weight. Totals include recorded measurements only. A dash means not recorded.
+      </p>}
+      <div className="text-center text-xs text-muted-foreground pt-2">
         <p>Thank you for visiting {orgName}.</p>
-        <p>This receipt is for record-keeping purposes only. No pricing applies.</p>
+        <p>Items are provided at no charge. Value and savings are estimates based on the unit values saved at checkout, not cash paid or a tax valuation.</p>
       </div>
     </div>
   );

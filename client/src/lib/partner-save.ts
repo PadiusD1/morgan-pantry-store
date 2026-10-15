@@ -1,3 +1,4 @@
+import { cacheSavedSource } from "./source-cache";
 import { clientSaveRequest } from "./client-save";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ApiClient } from "./api-types";
@@ -44,6 +45,7 @@ export async function cacheSavedPartner(queryClient: QueryClient, value: unknown
     ...(old ?? []).filter((client) => client.id !== saved.id),
     saved,
   ]);
+  await cacheSavedSource(queryClient, "partner", saved);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["/api/clients"] }),
     queryClient.invalidateQueries({ queryKey: ["/api/donation-sources"] }),

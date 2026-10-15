@@ -9,11 +9,11 @@ export type { SourceOption, SourceFields };
  * because the Donors and Partners pages invalidate their own keys, not this one.
  */
 export function useDonationSources() {
-  return useQuery<SourceOption[]>({ queryKey: ["/api/donation-sources"], staleTime: 0 });
+  return useQuery<SourceOption[]>({ queryKey: ["/api/donation-sources"], staleTime: 0, refetchOnMount: true, refetchOnWindowFocus: true });
 }
 
 /** A pick from the list, or a new donor name typed inline. */
-export type DonorPick = { option?: SourceOption | null; newName?: string };
+export type DonorPick = { option?: SourceOption | null; newName?: string; newKind?: "donor" | "partner" };
 
 export type PostDonor = (name: string, idempotencyKey: string) => Promise<{ id: string; name: string }>;
 
@@ -25,9 +25,15 @@ export async function pickFields(
   pick: DonorPick | null | undefined,
   saveKey: string,
   postDonor: PostDonor,
+  postPartner?: PostDonor,
 ): Promise<SourceFields> {
   const newName = pick?.newName?.trim();
   if (newName) {
+    if (pick?.newKind === "partner") {
+      if (!postPartner) throw new Error("Partner registration is not available here.");
+      const partner = await postPartner(newName, `${saveKey}:partner`);
+      return { donor: partner.name, donorClientId: partner.id };
+    }
     const donor = await postDonor(newName, `${saveKey}:donor`);
     return { donor: donor.name, donorId: donor.id };
   }

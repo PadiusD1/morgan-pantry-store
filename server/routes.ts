@@ -1382,7 +1382,9 @@ export async function registerRoutes(app: Express): Promise<void> {
 
     const updated = await getRequestPayload(req.params.id) as Record<string, unknown>;
     const transaction = (await pool.query("SELECT * FROM transactions WHERE id = $1", [txId])).rows[0];
-    res.json({ ...updated, transaction });
+    // Include immutable checkout line snapshots, not today's inventory values.
+    const savedLines = await storage.getTransactionItems(txId);
+    res.json({ ...updated, transaction: { ...transaction, items: savedLines } });
   });
 
   // ─── 9. Cancel Request ───────────────────────────────────────────────

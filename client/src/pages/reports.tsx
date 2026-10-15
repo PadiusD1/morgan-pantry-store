@@ -1,3 +1,4 @@
+import { BOARD_DATA_OPTIONS, ALL_BOARD_DATA, selectedBoardSections, type BoardDataKey } from "@shared/board-selection";
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
@@ -58,6 +59,7 @@ export default function ReportsPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const canExportServer = canUseServerExports(user?.role);
+  const [boardSelection, setBoardSelection] = useState<BoardDataKey[]>([...ALL_BOARD_DATA]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [monthlyYear, setMonthlyYear] = useState(() => reportDateKey(new Date())!.slice(0, 4));
@@ -98,13 +100,13 @@ export default function ReportsPage() {
   }
 
   function exportBoard(print = false) {
-    if (!canExportServer || rangeError) return;
+    if (!canExportServer || rangeError || !boardSelection.length) return;
     try {
       const report = buildBoardReport(repo.transactions, repo.inventory, { from, to });
-      if (print) printBoardSummary(report);
+      if (print) printBoardSummary(report, boardSelection);
       else {
-        downloadCsvText(boardSummaryCsv(report), `frc-board-summary-${reportFilenameRange({ from, to })}.csv`);
-        toast({ title: "Board summary exported", description: "Service totals, monthly activity, and current stock downloaded without client details." });
+        downloadCsvText(boardSummaryCsv(report, boardSelection), `frc-board-summary-${reportFilenameRange({ from, to })}.csv`);
+        toast({ title: "Board summary exported", description: "Your selected board data downloaded without client details." });
       }
     } catch (error) { showExportError(error); }
   }
@@ -183,12 +185,27 @@ export default function ReportsPage() {
               <p className="mt-1 text-sm text-muted-foreground" data-testid="text-board-period">{board.periodLabel}</p>
             </div>
             {canExportServer && <div className="flex flex-wrap gap-2">
-              <Button onClick={() => exportBoard()} data-testid="button-export-board-csv"><DownloadIcon className="mr-2 h-4 w-4" />Download board CSV</Button>
-              <Button variant="outline" onClick={() => exportBoard(true)} data-testid="button-print-board"><PrinterIcon className="mr-2 h-4 w-4" />Print / save PDF</Button>
+              <Button disabled={!boardSelection.length} onClick={() => exportBoard()} data-testid="button-export-board-csv"><DownloadIcon className="mr-2 h-4 w-4" />Download board CSV</Button>
+              <Button disabled={!boardSelection.length} variant="outline" onClick={() => exportBoard(true)} data-testid="button-print-board"><PrinterIcon className="mr-2 h-4 w-4" />Print / save PDF</Button>
             </div>}
           </div>
         </CardHeader>
         <CardContent className="space-y-4 px-4 py-4">
+          <fieldset className="space-y-3 rounded-md border p-3" data-testid="board-data-selection">
+            <legend className="px-1 text-sm font-semibold">Choose data for the board</legend>
+            <p className="text-xs text-muted-foreground">Choose your metrics, then the breakdowns to include. CSV and PDF contain only these selections. Dates and explanatory notes are always included.</p>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setBoardSelection([...ALL_BOARD_DATA])}>Select all board data</Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => setBoardSelection([])}>Clear board selection</Button>
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {BOARD_DATA_OPTIONS.map(option => <label key={option.key} className="flex min-h-10 cursor-pointer items-center gap-2 text-sm">
+                <input type="checkbox" data-testid={`board-select-${option.key}`} checked={boardSelection.includes(option.key)} onChange={e => setBoardSelection(previous => e.target.checked ? [...previous, option.key] : previous.filter(key => key !== option.key))} />
+                {option.label}
+              </label>)}
+            </div>
+          </fieldset>
+          {!boardSelection.length && <p role="status" className="text-sm">Select at least one data option to populate and export your board report.</p>}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {[
               ["Distribution visits", count(board.distribution.entries), "visits"],
@@ -197,18 +214,31 @@ export default function ReportsPage() {
               ["Weight distributed", `${board.distribution.weightLbs.toFixed(1)} lbs`, "weight"],
               ["Estimated value distributed", money(board.distribution.valueUsd), "value"],
               ["Emergency visits", count(board.distribution.emergencyVisits), "emergencies"],
-            ].map(([label, value, id]) => (
+            ].filter(([, , id]) => boardSelection.includes(id as BoardDataKey)).map(([label, value, id]) => (
               <div key={id} className="min-w-0 rounded-lg border border-border/80 bg-background/60 p-3">
                 <p className="break-words text-xl font-semibold sm:text-2xl" data-testid={`text-board-${id}`}>{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{label}</p>
               </div>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground">Board files include service totals, monthly activity, distributed items, and stock levels. Client names, student IDs, contacts, and locations are excluded.</p>
-          {board.distribution.unlinkedVisits > 0 && <p className="text-xs text-muted-foreground">{count(board.distribution.unlinkedVisits)} visits have no linked client record and are excluded from the identified-client count.</p>}
-          {(board.distribution.unvaluedUnits > 0 || board.distribution.unweighedUnits > 0) && (
-            <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950" data-testid="text-report-missing-values">Data quality: {count(board.distribution.unvaluedUnits)} distributed units have no positive recorded unit value; {count(board.distribution.unweighedUnits)} have no positive recorded unit weight. Totals may be understated.</p>
+          <p className="text-xs text-muted-foreground">Only selected metrics and breakdowns populate the board report. Client names, student IDs, contacts, and locations are excluded.</p>
+          {boardSelection.includes("clients") && board.distribution.unlinkedVisits > 0 && <p className="text-xs text-muted-foreground">{count(board.distribution.unlinkedVisits)} visits have no linked client record and are excluded from the identified-client count.</p>}
+          {((boardSelection.includes("value") && board.distribution.unvaluedUnits > 0) || (boardSelection.includes("weight") && board.distribution.unweighedUnits > 0)) && (
+            <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950" data-testid="text-report-missing-values">Data quality: {boardSelection.includes("value") && `${count(board.distribution.unvaluedUnits)} distributed units have no positive recorded unit value. `}{boardSelection.includes("weight") && `${count(board.distribution.unweighedUnits)} distributed units have no positive recorded unit weight. `}Totals may be understated.</p>
           )}
+          {boardSelection.length > 0 && <details data-testid="board-selected-preview">
+            <summary className="cursor-pointer text-sm font-semibold">Preview selected board data</summary>
+            <div className="mt-3 space-y-4">
+              {selectedBoardSections(board, boardSelection).map(section => <section key={section.key}>
+                <h3 className="text-sm font-semibold">{section.title}</h3>
+                <Table><TableHeader><TableRow>{section.columns.map(column => <TableHead key={column}>{column}</TableHead>)}</TableRow></TableHeader>
+                  <TableBody>{section.rows.slice(0, 12).map((row, index) => <TableRow key={index}>{row.map((cell, column) => <TableCell key={column}>{cell}</TableCell>)}</TableRow>)}</TableBody>
+                </Table>
+                {!section.rows.length && <p className="text-xs">No recorded activity in this section.</p>}
+                {section.rows.length > 12 && <p className="text-xs text-muted-foreground">Preview shows 12 of {section.rows.length} rows. Export includes every selected row.</p>}
+              </section>)}
+            </div>
+          </details>}
         </CardContent>
       </Card>}
 

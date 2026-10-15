@@ -1,3 +1,4 @@
+import { cacheSavedSource } from "./source-cache";
 import type { QueryClient } from "@tanstack/react-query";
 
 export interface DonorRecord {
@@ -46,6 +47,7 @@ export async function cacheSavedDonor(queryClient: QueryClient, saved: DonorReco
     ].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   });
   queryClient.setQueryData<DonorRecord>(donorKeys.detail(saved.id), (old) => ({ ...old, ...saved }));
+  await cacheSavedSource(queryClient, "donor", saved);
   await invalidateDonorData(queryClient);
 }
 
