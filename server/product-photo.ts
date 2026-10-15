@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "./pg";
 import { requireRole } from "./auth";
 import { productPhotoSource } from "@shared/product-photo";
+import { photoAttributionHtml } from "@shared/photo-attribution";
 
 const MAX_IMAGE_BYTES = 180_000;
 export function imageContentType(bytes: Uint8Array): string | null {
@@ -26,7 +27,7 @@ export function registerProductPhotoRoutes(app: Express) {
     if (!id.success || !body.success) return res.status(400).json({ message: "A valid item and product photo are required." });
     try { parsePhotoUpload(body.data.dataUrl); } catch (error) { return res.status(400).json({ message: (error as Error).message }); }
     const photo = { ...body.data, source: "Staff-supplied product photo", reviewedAt: new Date().toISOString(), reviewedBy: req.user!.id };
-    const { rowCount } = await pool.query(`UPDATE inventory_items SET raw_payload = COALESCE(raw_payload, '{}'::jsonb) || jsonb_build_object('frcPhoto', $2::jsonb), updated_at = now() WHERE id = $1`, [id.data, JSON.stringify(photo)]);
+    const { rowCount } = await pool.query(`UPDATE inventory_items SET raw_payload = COALESCE(raw_payload, '{}'::jsonb) || jsonb_build_object('frcPhoto', $2::jsonb), updated_at = GREATEST(clock_timestamp(),date_trunc('milliseconds',updated_at)+interval '1 millisecond') WHERE id = $1`, [id.data, JSON.stringify(photo)]);
     if (!rowCount) return res.status(404).json({ message: "Item not found." });
     return res.json({ saved: true, imageUrl: `/api/public/inventory/${id.data}/photo?v=${Date.now()}` });
   });
@@ -36,6 +37,15 @@ export function registerProductPhotoRoutes(app: Express) {
     const { rows } = await pool.query("SELECT raw_payload FROM inventory_items WHERE id = $1", [id.data]);
     const photo = productPhotoSource(rows[0]?.raw_payload);
     if (!photo) return res.status(404).end();
+    // Credits are fetched only when requested, not once per card render. The
+    // public page exposes source/license links, never staff IDs or evidence.
+    if (req.query.attribution === "1") {
+      const page = photoAttributionHtml(rows[0]?.raw_payload);
+      if (!page) return res.status(404).end();
+      res.setHeader("Cache-Control", "public, max-age=300");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.type("html").send(page);
+    }
     try {
       let bytes: Uint8Array;
       if (photo.kind === "upload") bytes = parsePhotoUpload(photo.dataUrl).bytes;
