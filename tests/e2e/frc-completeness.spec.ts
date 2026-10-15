@@ -25,6 +25,9 @@ test('reviewed measurements preserve stock and product photos load on the studen
   await expect(page.getByLabel('Reviewed weight per unit',{exact:true})).toHaveValue('1');
   await page.getByLabel('Reviewed estimated value per unit',{exact:true}).fill('2.35');await page.getByLabel('Value source',{exact:true}).fill('Synthetic test price on 2026-10-15');
   await page.getByRole('button',{name:'Save reviewed measurements',exact:true}).click();await expect(panel).toContainText('Saved. Current stock and historical transaction measurements were not changed.');
+  const refreshed=page.waitForResponse(response=>response.url().endsWith('/api/inventory/quality') && response.request().method()==='GET');
+  await panel.getByRole('button',{name:'Refresh completeness check',exact:true}).click();await refreshed;
+  await expect(panel).toContainText('Saved. Current stock and historical transaction measurements were not changed.');
   const current=await(await request.get('/api/inventory')).json();const updated=current.find((i:any)=>i.id===rice.id);expect(updated.quantity).toBe(30);expect(Number(updated.weightPerUnitLbs)).toBe(1);expect(Number(updated.valuePerUnitUsd)).toBe(2.35);
   const photo=await request.put(`/api/inventory/${rice.id}/photo`,{data:{dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lC8AAAAASUVORK5CYII=',description:'Synthetic test pixel, not real product artwork'}});expect(photo.status()).toBe(200);
   const login=await page.context().request.post('/api/auth/login',{data:{email:process.env.FRC_E2E_STUDENT_EMAIL,password:process.env.FRC_E2E_STUDENT_PASSWORD}});expect(login.status()).toBe(200);
@@ -38,4 +41,24 @@ test('integration settings distinguish configuration from verified service opera
   await page.goto('/settings');const panel=page.getByTestId('integration-status');await panel.locator('summary').click();
   await expect(panel).toContainText('not configured');await expect(panel).toContainText('Cloudflare');await expect(panel).toContainText('migration');
   await page.screenshot({path:info.outputPath('integration-status.png'),fullPage:true});
+});
+
+// Query refetches must not overwrite typed values or advance the reviewed version.
+test('a concurrent item refresh preserves the measurement draft and refuses a stale save',async({page,request})=>{
+  const rice=await item(request,unique('Concurrent rice 16oz'),false);await page.goto('/inventory');
+  const panel=page.getByTestId('inventory-quality');await panel.locator('summary').click();await page.getByLabel('Item to complete',{exact:true}).selectOption(rice.id);
+  await page.getByLabel('Reviewed estimated value per unit',{exact:true}).fill('3.50');
+  await page.getByLabel('Value source',{exact:true}).fill('Synthetic draft source kept during refresh');
+  const concurrent=await request.patch(`/api/inventory/${rice.id}/measurements`,{data:{expectedUpdatedAt:rice.updatedAt,valuePerUnitUsd:2.80,valueSource:'Synthetic concurrent verified price',costIsEstimated:true}});expect(concurrent.status()).toBe(200);
+  const refreshed=page.waitForResponse(response=>response.url().endsWith('/api/inventory/quality') && response.request().method()==='GET');
+  await panel.getByRole('button',{name:'Refresh completeness check',exact:true}).click();await refreshed;
+  await expect(page.getByLabel('Reviewed estimated value per unit',{exact:true})).toHaveValue('3.50');
+  await expect(page.getByLabel('Value source',{exact:true})).toHaveValue('Synthetic draft source kept during refresh');
+  await expect(panel).toContainText('This item changed since your review began.');
+  const denied=page.waitForResponse(response=>response.url().endsWith(`/api/inventory/${rice.id}/measurements`) && response.request().method()==='PATCH');
+  await panel.getByRole('button',{name:'Save reviewed measurements',exact:true}).click();expect((await denied).status()).toBe(409);
+  await expect(page.getByLabel('Reviewed estimated value per unit',{exact:true})).toHaveValue('3.50');
+  const current=await(await request.get('/api/inventory')).json();expect(Number(current.find((i:any)=>i.id===rice.id).valuePerUnitUsd)).toBe(2.80);
+  await panel.getByRole('button',{name:'Review latest saved values',exact:true}).click();
+  await expect(page.getByLabel('Reviewed estimated value per unit',{exact:true})).toHaveValue('');
 });
