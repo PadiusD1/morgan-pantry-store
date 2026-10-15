@@ -3,7 +3,7 @@ name: FRC quality checks
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feature/frc-event-attribution-board-20261015]
   workflow_dispatch:
 
 permissions:
