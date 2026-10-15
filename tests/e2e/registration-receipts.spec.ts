@@ -113,7 +113,7 @@ test("partner registration preserves the checkout cart and receipts keep saved v
   await expect(page.getByTestId("receipt-savings")).toHaveText("−$8.50");
   await expect(page.getByTestId("receipt-amount-due")).toHaveText("$0.00");
   expect((await request.patch(`/api/inventory/${rice.id}`, { data: { valuePerUnitUsd: "99.00" } })).status()).toBe(200);
-  await receipt.getByRole("button", { name: "Close", exact: true }).click();
+  await receipt.getByRole("button", { name: "Close", exact: true }).first().click();
   await page.getByTestId("button-reprint-last-receipt").click();
   await receipt.hover();
   await expect(page.getByTestId("receipt-value")).toHaveText("$8.50");
