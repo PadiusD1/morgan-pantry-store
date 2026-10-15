@@ -113,11 +113,8 @@ test("a supervised request is submitted, approved, and picked up with one comple
     page.getByRole("dialog").getByRole("button", { name: "Confirm Fulfillment", exact: true }).click(),
   ]);
   expect(fulfilled.status()).toBe(200);
-  const receiptPayload = await fulfilled.json();
-  expect(receiptPayload.transaction.items).toHaveLength(1);
-  expect(receiptPayload.transaction.items[0]).toMatchObject({ inventoryItemId: item.id, quantity: 2 });
-  expect(Number(receiptPayload.transaction.items[0].weightPerUnitLbs)).toBe(1.5);
-  expect(Number(receiptPayload.transaction.items[0].valuePerUnitUsd)).toBe(2);
+  // Requests does not consume its success body. Verify durable snapshots with
+  // an independent read below; the response contract is tested against Postgres.
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await expect(row).toContainText("Completed");
   const completed = await (await request.get(`/api/requests/${foodRequest.id}`)).json();
@@ -131,4 +128,6 @@ test("a supervised request is submitted, approved, and picked up with one comple
   expect(movements[0]).toMatchObject({ type: "OUT" });
   expect(movements[0].items).toHaveLength(1);
   expect(movements[0].items[0]).toMatchObject({ inventoryItemId: item.id, quantity: 2 });
+  expect(Number(movements[0].items[0].weightPerUnitLbs)).toBe(1.5);
+  expect(Number(movements[0].items[0].valuePerUnitUsd)).toBe(2);
 });
