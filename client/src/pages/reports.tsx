@@ -120,7 +120,7 @@ export default function ReportsPage() {
       [], ["Donor or partner","Units donated","Pounds donated","Estimated USD","Transactions","Unmeasured units","Unvalued units"],
       ...donorRanks.map(d => [d.sourceName,d.units,d.weightLbs,d.valueUsd,d.transactions,d.missingWeightUnits,d.missingValueUnits].map(String)),
     ];
-    downloadCsvText(rows.map(row => row.map(value => '"' + String(value).replace(/"/g,'""') + '"').join(",")).join("\\r\\n"), "frc-event-and-donor-metrics.csv");
+    downloadCsvText(rows.map(row => row.map(value => '"' + String(value).replace(/"/g,'""') + '"').join(",")).join("\r\n"), "frc-event-and-donor-metrics.csv");
   }
 
   function exportBoard(print = false) {
