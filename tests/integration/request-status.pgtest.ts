@@ -13,6 +13,7 @@ let base: string;
 beforeAll(async () => {
   t = await createTestDb();
   process.env.DATABASE_URL = t.url;
+  await t.pool.query("INSERT INTO users(id,email,password,name,role,student_id) VALUES($1,'synthetic-student@example.test','not-a-real-hash','Test Student One','student','T0000001')", [STUDENT]);
   const express = (await import("express")).default;
   const { registerRoutes } = await import("../../server/routes");
   const app = express();
@@ -220,8 +221,9 @@ async function pendingRequest() {
   ).rows[0].id;
   const request = (
     await t.pool.query(
-      `INSERT INTO requests (client_name, client_identifier, reason, status)
-       VALUES ('Test Student One', 'T0000001', 'Test reason', 'pending') RETURNING id`,
+      `INSERT INTO requests (client_name, client_identifier, reason, status, user_id)
+       VALUES ('Test Student One', 'T0000001', 'Test reason', 'pending', $1) RETURNING id`,
+      [STUDENT],
     )
   ).rows[0].id;
   await t.pool.query(
