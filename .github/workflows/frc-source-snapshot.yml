@@ -1,0 +1,21 @@
+name: FRC source snapshot
+on:
+  push:
+    branches: [fix/frc-catalog-sources-readiness-20261015]
+    paths: [.github/workflows/frc-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: git archive --format=tar.gz HEAD > /tmp/frc-source.tar.gz
+      - uses: actions/upload-artifact@v5
+        with:
+          name: frc-current-public-source
+          path: /tmp/frc-source.tar.gz
+          retention-days: 1
