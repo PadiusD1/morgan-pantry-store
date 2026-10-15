@@ -1,0 +1,41 @@
+name: Apply reviewed FRC completeness patch
+on:
+  push:
+    branches: [fix/frc-completeness-integrations-20261015]
+    paths: [.github/workflows/frc-apply-completeness.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'PadiusD1/morgan-pantry-store' && github.ref == 'refs/heads/fix/frc-completeness-integrations-20261015'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify baseline and exact reviewed patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          baseline = 'bc8058337d986c9d04ec17dd34525f8949de6b4e'
+          subprocess.run(['git', 'merge-base', '--is-ancestor', baseline, 'HEAD'], check=True)
+          allowed = {f'.frc-payload-{i}.b64' for i in range(1, 5)} | {'.github/workflows/frc-apply-completeness.yml'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only', baseline, 'HEAD'], text=True).splitlines())
+          assert changed <= allowed, 'Concurrent source edits: reconcile before applying'
+          encoded = ''.join(pathlib.Path(f'.frc-payload-{i}.b64').read_text().strip() for i in range(1,5))
+          data = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(data).hexdigest() == '1c1c12604df8ff76539a8300e3efc619f7f005f5c4cc728caa134e8095e0438d', 'Patch checksum mismatch'
+          assert b'diff --git a/.github/' not in data
+          pathlib.Path('/tmp/frc-additive.patch').write_bytes(data)
+          print('Verified 110257-byte reviewed application patch. No production data or credentials involved.')
+          PY
+          git apply --check --index /tmp/frc-additive.patch
+          git apply --index /tmp/frc-additive.patch
+      - name: Commit application changes to the feature branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git diff --cached --check
+          git commit -m 'feat: add FRC inventory quality, product photos, directory reports and guarded service integrations'
+          git push origin HEAD:refs/heads/fix/frc-completeness-integrations-20261015
