@@ -1,3 +1,4 @@
+import { registerFrcEventRoutes } from "./frc-events";
 import type { Express } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -102,6 +103,7 @@ function mapTransactionRow(row: any) {
     clientName: row.client_name,
     clientClassification: row.client_classification ?? null,
     donorId: row.donor_id,
+    eventId: row.event_id ?? null,
     isEmergency: row.is_emergency,
     latitude: row.latitude,
     longitude: row.longitude,
@@ -196,6 +198,7 @@ function parseItemGroupItems(rawItems: unknown, groupId: string) {
 }
 
 export async function registerRoutes(app: Express): Promise<void> {
+  registerFrcEventRoutes(app);
   // ─── Barcode Lookup ──────────────────────────────────────────────────
 
   app.get("/api/barcode-lookup/:code", async (req, res) => {
