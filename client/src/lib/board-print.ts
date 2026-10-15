@@ -1,14 +1,15 @@
+import type { BoardSelection } from "@shared/board-selection";
 import type { BoardReport } from "@shared/reporting";
 import { boardSummaryHtml } from "@shared/board-document";
 export { boardSummaryHtml } from "@shared/board-document";
 
 /** The print document never includes the operational client tables. */
-export function printBoardSummary(report: BoardReport): void {
+export function printBoardSummary(report: BoardReport, selection?: BoardSelection): void {
   const popup = window.open("", "_blank", "width=1100,height=850");
   if (!popup) throw new Error("Allow pop-ups for this site, then choose Print / save PDF again.");
   popup.opener = null;
   popup.document.open();
-  popup.document.write(boardSummaryHtml(report));
+  popup.document.write(boardSummaryHtml(report, selection));
   popup.document.close();
   let autoPrinted = false;
   const print = () => { if (!popup.closed) { popup.focus(); popup.print(); } };

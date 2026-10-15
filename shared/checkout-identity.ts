@@ -167,6 +167,14 @@ export function resolveCheckoutIdentity<T extends LookupClient>(
       ]
     : [];
   const selected = inputs.selected ?? undefined;
+  if (selected?.clientType === "partner") {
+    // An explicitly selected organization is not a student identity lookup.
+    // Its identifier may contain punctuation, and its contact can also be a student.
+    if (studentId && normaliseName(selected.identifier) !== studentId) {
+      return { ok: false, message: "Keep the selected partner's identifier, or select a different partner." };
+    }
+    return { ok: true, existing: selected, name: (selected.name ?? "").trim() || name };
+  }
   if (selected) {
     if (byId && byId.id !== selected.id) return { ok: false, message: ID_TAKEN_MESSAGE };
     // Finding H, a picked person never takes another person's email.

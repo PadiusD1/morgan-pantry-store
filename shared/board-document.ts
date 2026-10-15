@@ -1,3 +1,5 @@
+import { isFullBoardSelection, type BoardSelection } from "./board-selection";
+import { selectedBoardSummaryHtml } from "./board-selected-document";
 import { BRAND, BRAND_CSS, brandMarkSvg } from "./brand";
 import { BOARD_DOCUMENT_STYLE } from "./board-document-style";
 import { REPORT_DEFINITIONS, type BoardReport } from "./reporting";
@@ -22,7 +24,8 @@ function monthlyTable(months: BoardReport["months"]): string {
  * Print body/definitions use readable point sizes. Visual structure does not
  * prove PDF accessibility: the exporting browser must preserve the tag tree.
  */
-export function boardSummaryHtml(report: BoardReport): string {
+export function boardSummaryHtml(report: BoardReport, selection?: BoardSelection): string {
+  if (!isFullBoardSelection(selection)) return selectedBoardSummaryHtml(report, selection!);
   const d = report.distribution;
   const chartMonths = report.months.slice(-12);
   const maxVisits = Math.max(1, ...chartMonths.map(m => m.entries));

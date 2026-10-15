@@ -5,6 +5,9 @@ import { apiRequest, isEarlierSaveRecorded } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useSaveGuard } from "@/lib/save-guard";
 import { cacheSavedDonor, donorKeys, removeCachedDonor, type DonorRecord as Donor } from "@/lib/donor-cache";
+import { cacheSavedPartner, partnerSaveRequest } from "@/lib/partner-save";
+import { visibleDonors, type DonorSort } from "@/lib/donor-list";
+import { duplicateRefusal } from "@shared/identity";
 import { confirmedDonor, donorErrorMessage, saveDonorRecord, type DonorForm } from "@/lib/donor-save";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,27 +39,27 @@ export default function DonorsPage() {
   const saveGuard = useSaveGuard();
   const deleteGuard = useSaveGuard();
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<DonorSort>("newest");
+  const [registrationStarted, setRegistrationStarted] = useState(false);
+  const [registrationType, setRegistrationType] = useState<"donor" | "partner">("donor");
+  const [partnerIdentifier, setPartnerIdentifier] = useState("");
+  const [lastSaved, setLastSaved] = useState<Donor | null>(null);
   const [editing, setEditing] = useState<DonorForm | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [existingDonor, setExistingDonor] = useState<Donor | null>(null);
 
-  const { data: donorData, isLoading, isError, refetch } = useQuery<Donor[]>({
+  const { data: donorData, isLoading, isError, isFetching, refetch } = useQuery<Donor[]>({
     queryKey: donorKeys.all,
+    // Staff may register a donor from another screen, tab, or device.
+    staleTime: 0,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
   const donors = donorData ?? [];
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return donors;
-    return donors.filter(
-      (d) =>
-        d.name.toLowerCase().includes(q) ||
-        (d.organization && d.organization.toLowerCase().includes(q)) ||
-        (d.notes && d.notes.toLowerCase().includes(q)),
-    );
-  }, [donors, query]);
+  const filtered = useMemo(() => visibleDonors(donors, query, sort), [donors, query, sort]);
 
   function handleSave() {
     void saveGuard.run(saveDonor);
@@ -65,11 +68,23 @@ export default function DonorsPage() {
   async function saveDonor(key: string): Promise<boolean | void> {
     if (!editing) return;
     if (!editing.name.trim()) {
-      toast({ title: "Donor name is required", description: "Enter a name before saving this donor.", variant: "destructive" });
+      toast({ title: "Name is required", description: "Enter a name before saving this registration.", variant: "destructive" });
       return;
     }
     setSaving(true);
+    setRegistrationStarted(true);
     try {
+      if (registrationType === "partner" && !editing.id) {
+        const request = partnerSaveRequest({
+          ...editing, identifier: partnerIdentifier.trim(), partnershipType: "Community Organization", contact: editing.contactName,
+        });
+        const response = await apiRequest(request.method, request.url, request.body, { idempotencyKey: key });
+        const saved = await cacheSavedPartner(queryClient, await response.json());
+        toast({ title: "Partner saved", description: `${saved.name} is now in Partners and the donation-source picker.` });
+        setEditing(null);
+        navigate("/partners");
+        return true;
+      }
       const result = await saveDonorRecord(editing, key);
       await cacheSavedDonor(queryClient, result.donor);
       if (result.outcome === "existing") {
@@ -80,11 +95,22 @@ export default function DonorsPage() {
       }
       toast({ title: result.outcome === "created" ? "Donor created" : "Donor updated", description: result.donor.name });
       setQuery("");
+      setSort("newest");
+      setLastSaved(result.donor);
       setEditing(null);
       setExistingDonor(null);
       return true;
     } catch (err) {
-      if (isEarlierSaveRecorded(err)) {
+      if (registrationType === "partner" && isEarlierSaveRecorded(err)) {
+        try {
+          const saved = await cacheSavedPartner(queryClient, err.recorded);
+          toast({ title: "Earlier partner saved", description: `${saved.name} was saved from the earlier attempt. Review the saved partner before making further changes.`, variant: "destructive" });
+          setEditing(null);
+          navigate(`/partners/${saved.id}`);
+          return true;
+        } catch { /* Keep the input if readback cannot be confirmed. */ }
+      }
+      if (registrationType === "donor" && isEarlierSaveRecorded(err)) {
         try {
           const recorded = confirmedDonor(err.recorded);
           await cacheSavedDonor(queryClient, recorded);
@@ -110,7 +136,7 @@ export default function DonorsPage() {
           // Fall through to a recoverable failure when the response is invalid.
         }
       }
-      toast({ title: "Save failed", description: donorErrorMessage(err, "Could not save donor. Your entries are kept. Try again."), variant: "destructive" });
+      toast({ title: "Save failed", description: duplicateRefusal(err) ?? donorErrorMessage(err, "Could not save this registration. Your entries are kept. Try again."), variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -139,6 +165,8 @@ export default function DonorsPage() {
   function openEdit(donor: Donor) {
     if (saveGuard.isLocked()) return;
     saveGuard.renew();
+    setRegistrationType("donor");
+              setRegistrationStarted(false);
     setExistingDonor(null);
     setEditing({
       id: donor.id,
@@ -178,6 +206,9 @@ export default function DonorsPage() {
           <Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>
         </div>
       )}
+      {lastSaved && <div role="status" className="rounded-md border p-3 text-sm" data-testid="donor-saved-confirmation">
+        <strong>{lastSaved.name}</strong> is saved in Donors. <Link href={`/donors/${lastSaved.id}`} className="underline">View saved record</Link>
+      </div>}
       <Card className="glass-panel" data-testid="card-donors-filters">
         <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
           <div className="relative w-full max-w-md">
@@ -192,11 +223,21 @@ export default function DonorsPage() {
               data-testid="input-donors-search"
             />
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-sm" htmlFor="donor-sort">Sort</label>
+            <select id="donor-sort" aria-label="Sort donors" className="h-9 rounded-md border bg-background px-2 text-sm" value={sort} onChange={e => setSort(e.target.value as DonorSort)}>
+              <option value="newest">Newest additions first</option><option value="name">Name A–Z</option>
+            </select>
+            <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()} data-testid="button-refresh-donors">{isFetching ? "Refreshing…" : "Refresh"}</Button>
+          </div>
           <Button
             size="sm"
             onClick={() => {
               saveGuard.renew();
               setExistingDonor(null);
+              setRegistrationType("donor");
+              setRegistrationStarted(false);
+              setPartnerIdentifier(`PARTNER-${crypto.randomUUID()}`);
               setEditing({ ...emptyForm });
             }}
             data-testid="button-add-donor"
@@ -319,12 +360,12 @@ export default function DonorsPage() {
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle data-testid="text-edit-donor-heading">
-              {editing?.id ? "Edit donor" : "Add new donor"}
+              {editing?.id ? "Edit donor" : registrationType === "partner" ? "Register partner" : "Add new donor"}
             </DialogTitle>
             <DialogDescription>
               {editing?.id
                 ? "Update the donor information below."
-                : "Fill in the details to register a new donor."}
+                : `Fill in the details to register a new ${registrationType}.`}
             </DialogDescription>
           </DialogHeader>
           {existingDonor && (
@@ -345,6 +386,18 @@ export default function DonorsPage() {
             aria-busy={saving}
           >
             <fieldset disabled={saving} className="space-y-3">
+            {!editing?.id && <div className="space-y-1.5">
+              <label htmlFor="relationship-registration-type" className="text-sm font-medium">Register as</label>
+              <select id="relationship-registration-type" data-testid="select-registration-type" disabled={registrationStarted} className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={registrationType} onChange={e => { setRegistrationType(e.target.value as "donor" | "partner"); setExistingDonor(null); }}>
+                <option value="donor">Donor</option><option value="partner">Partner</option>
+              </select>
+              <p className="text-xs text-muted-foreground">Donors appear in Donors. Partners appear in Partners. Both are available when receiving a donation. {registrationStarted && "The registration type is fixed for this save attempt; retry to confirm it before starting a different registration."}</p>
+            </div>}
+            {!editing?.id && registrationType === "partner" && <div className="space-y-1.5">
+              <label htmlFor="registration-partner-id" className="text-sm font-medium">Partner identifier</label>
+              <Input id="registration-partner-id" data-testid="input-registration-partner-id" value={partnerIdentifier} onChange={e => setPartnerIdentifier(e.target.value)} required />
+              <p className="text-xs text-muted-foreground">A unique identifier is provided. You may replace it with your organization's identifier.</p>
+            </div>}
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="donor-name-edit">
                 Name *
@@ -447,7 +500,7 @@ export default function DonorsPage() {
               </Button>
               <Button type="submit" disabled={saving} data-testid="button-save-donor">
                 {saving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-                Save donor
+                {registrationType === "partner" && !editing?.id ? "Save partner" : "Save donor"}
               </Button>
             </DialogFooter>
             </fieldset>

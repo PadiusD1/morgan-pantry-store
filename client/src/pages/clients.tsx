@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { cacheSavedPartner } from "@/lib/partner-save";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
 import { apiRequest, saveErrorMessage, withIdempotencyKey } from "@/lib/queryClient";
@@ -37,6 +38,7 @@ function highlightNote(text: string, query: string): React.ReactNode {
 
 export default function ClientsPage() {
   const { clients: allClients, transactions, settings } = useRepository();
+  const [, navigate] = useLocation();
   // The Clients page is for student clients only — partner orgs live under /partners.
   // Treat NULL/unset client_type as 'student' for backward compatibility with existing rows.
   const clients = useMemo(
@@ -49,6 +51,7 @@ export default function ClientsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [editing, setEditing] = useState<{
     id?: string;
+    clientType?: "student" | "partner";
     name: string;
     identifier: string;
     contact?: string;
@@ -103,6 +106,7 @@ export default function ClientsPage() {
 
   async function saveClient(form: NonNullable<typeof editing>): Promise<boolean> {
     const fields: Partial<ClientRecord> = {
+      ...(form.clientType === "partner" ? { clientType: "partner", partnershipType: "Community Organization" } : {}),
       name: form.name.trim(),
       identifier: form.identifier.trim(),
       contact: form.contact?.trim() || undefined,
@@ -117,7 +121,8 @@ export default function ClientsPage() {
     };
     const request = clientSaveRequest(form.id, fields);
     try {
-      await apiRequest(request.method, request.url, request.body);
+      const response = await apiRequest(request.method, request.url, request.body);
+      if (form.clientType === "partner") await cacheSavedPartner(queryClient, await response.json());
     } catch (err) {
       toast({
         title: "Client not saved",
@@ -129,8 +134,9 @@ export default function ClientsPage() {
       return false;
     }
     queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-    toast({ title: "Client saved", description: fields.name });
+    toast({ title: form.clientType === "partner" ? "Partner saved" : "Client saved", description: fields.name });
     setEditing(null);
+    if (form.clientType === "partner") navigate("/partners");
     return true;
   }
 
@@ -355,6 +361,13 @@ export default function ClientsPage() {
               }}
               className="space-y-3"
             >
+              {!editing.id && <div className="space-y-1.5">
+                <label htmlFor="client-registration-type" className="text-sm font-medium">Register as</label>
+                <select id="client-registration-type" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={editing.clientType ?? "student"} onChange={e => setEditing(p => p ? { ...p, clientType: e.target.value as "student" | "partner" } : p)}>
+                  <option value="student">Student client</option><option value="partner">Partner</option>
+                </select>
+                <p className="text-xs text-muted-foreground">Partners are saved in the Partners directory, not the student client list.</p>
+              </div>}
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-name-edit" data-testid="label-edit-client-name">
                   Name
