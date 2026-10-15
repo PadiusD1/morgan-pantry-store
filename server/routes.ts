@@ -627,6 +627,13 @@ export async function registerRoutes(app: Express): Promise<void> {
         return sendClaim(res, claim);
       }
 
+      if (d.eventId) {
+        const event = await client.query("SELECT id FROM frc_events WHERE id=$1 AND status='active' FOR SHARE", [d.eventId]);
+        if (!event.rowCount) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ message: "Selected event is unavailable" });
+        }
+      }
       const stockAdjustments = await applyTransactionStock(client, d.type, parsedItems, {
         transactionId: txId,
         userId: req.user?.id ?? null,
@@ -635,8 +642,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       const txRow = (
         await client.query(
           `INSERT INTO transactions
-             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy, client_classification)
-           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12, $13)
+             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy, client_classification, event_id)
+           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12, $13, $14)
            RETURNING *`,
           [
             txId,
@@ -652,6 +659,7 @@ export async function registerRoutes(app: Express): Promise<void> {
             (d as any).longitude ?? null,
             (d as any).accuracy ?? null,
             transactionClassification((d as any).clientClassification),
+            d.eventId ?? null,
           ],
         )
       ).rows[0];
