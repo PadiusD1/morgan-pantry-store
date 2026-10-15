@@ -70,6 +70,8 @@ export default function CheckOutPage() {
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
   const [isEmergency, setIsEmergency] = useState(false);
   const [activeEventId, setActiveEventId] = useState<string | null>(() => readActiveEvent(window.sessionStorage));
+  const [newEventName, setNewEventName] = useState("");
+  const [creatingEvent, setCreatingEvent] = useState(false);
   const { data: activeEvents = [] } = useQuery<{id: string; name: string; status: string}[]>({queryKey:["/api/frc-events"]});
   useEffect(() => {
     if (activeEventId && activeEvents.length && !activeEvents.some(e => e.id === activeEventId && e.status === "active")) {
@@ -610,6 +612,24 @@ export default function CheckOutPage() {
               {activeEvents.filter(e => e.status === "active").map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
             </select>
             <p className="text-xs text-muted-foreground">The event stays selected for subsequent checkouts in this tab until changed.</p>
+            <div className="flex flex-wrap gap-2">
+              <Input aria-label="New event name" data-testid="input-new-event-name" placeholder="New event name" value={newEventName} onChange={e => setNewEventName(e.target.value)} maxLength={200} />
+              <Button type="button" variant="outline" disabled={creatingEvent || !newEventName.trim()} data-testid="button-create-event" onClick={async () => {
+                setCreatingEvent(true);
+                try {
+                  const response = await apiRequest("POST", "/api/frc-events", { name: newEventName.trim() });
+                  const event: { id: string } = await response.json();
+                  await queryClient.invalidateQueries({ queryKey: ["/api/frc-events"] });
+                  setActiveEventId(event.id);
+                  setActiveEvent(window.sessionStorage, event.id);
+                  setNewEventName("");
+                  toast({ title: "Event created", description: "Subsequent checkouts will use this event until you change it." });
+                } catch (error) {
+                  toast({ title: "Could not create event", description: error instanceof Error ? error.message : "Try again.", variant: "destructive" });
+                } finally { setCreatingEvent(false); }
+              }}>Create and select event</Button>
+            </div>
+
           </div>
           <section className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
             <div className="space-y-3">
