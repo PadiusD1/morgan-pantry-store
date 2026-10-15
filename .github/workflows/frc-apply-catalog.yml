@@ -1,0 +1,45 @@
+name: Apply verified FRC catalog repair
+on:
+  push:
+    branches: [fix/frc-catalog-sources-readiness-20261015]
+    paths: [.github/workflows/frc-apply-catalog.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify and apply the reviewed catalog patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code 15ca0af057979b231851a1d59f8e11f17c8fad87 HEAD -- client shared server tests docs vercel.json
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, re
+          encoded = ''.join(pathlib.Path(f'.github/frc-catalog-patch/part-{i}.b64').read_text().strip() for i in (1,2,3))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert len(patch) == 51138
+          assert hashlib.sha256(patch).hexdigest() == '26023119a6d7011b3a5468176bb50d55611b120c1a3b14b1beabc7f26e60358c'
+          paths = re.findall(rb'^diff --git a/(\S+) b/(\S+)$', patch, re.M)
+          assert len(paths) == 15
+          for before, after in paths:
+              assert before == after
+              path = pathlib.PurePosixPath(after.decode())
+              assert path.parts[0] in {'client','shared','server','tests','docs','vercel.json'}
+              assert '..' not in path.parts and not path.is_absolute()
+          pathlib.Path('/tmp/frc-catalog.patch').write_bytes(patch)
+          print('Verified 15-file application patch; checksum matches locally reviewed version.')
+          PY
+          git apply --check /tmp/frc-catalog.patch
+          git apply /tmp/frc-catalog.patch
+          git diff --check
+          git add client shared server tests docs vercel.json
+          git rm .github/frc-catalog-patch/part-1.b64 .github/frc-catalog-patch/part-2.b64 .github/frc-catalog-patch/part-3.b64
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: catalog evidence, request photos and separate donor partner exports'
+          git push origin HEAD:fix/frc-catalog-sources-readiness-20261015
