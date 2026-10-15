@@ -25,4 +25,31 @@ export function registerFrcEventRoutes(app: Express) {
     if (!result.rowCount) return res.status(404).json({ message: "Event not found" });
     res.json(result.rows[0]);
   });
+  app.get("/api/frc-events/analytics", async (req, res) => {
+    if (!req.user || !["admin", "staff"].includes(req.user.role)) return res.status(403).json({ message: "Staff access required" });
+    const dateSchema = z.object({ from: z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).optional(), to: z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).optional() });
+    const parsed = dateSchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid date range" });
+    const result = await pool.query(`
+      SELECT t.id AS "transactionId", t.event_id AS "eventId",
+             e.name AS "eventName", t.type AS direction,
+             CASE WHEN t.donor_id IS NOT NULL THEN 'donor:' || t.donor_id::text
+                  WHEN t.type='IN' AND t.client_id IS NOT NULL THEN 'partner:' || t.client_id::text
+                  ELSE NULL END AS "sourceId",
+             COALESCE(d.name, p.name, t.donor) AS "sourceName",
+             t.client_id AS "clientId", ti.quantity,
+             ti.weight_per_unit_lbs::float AS "unitWeightLbs",
+             ti.value_per_unit_usd::float AS "unitValueUsd"
+      FROM transactions t
+      JOIN transaction_items ti ON ti.transaction_id=t.id
+      LEFT JOIN frc_events e ON e.id=t.event_id
+      LEFT JOIN donors d ON d.id=t.donor_id
+      LEFT JOIN clients p ON p.id=t.client_id AND t.type='IN'
+      WHERE ($1::date IS NULL OR (t.timestamp AT TIME ZONE 'America/New_York')::date >= $1::date)
+        AND ($2::date IS NULL OR (t.timestamp AT TIME ZONE 'America/New_York')::date <= $2::date)
+      ORDER BY t.timestamp DESC
+    `, [parsed.data.from ?? null, parsed.data.to ?? null]);
+    res.json(result.rows);
+  });
+
 }
