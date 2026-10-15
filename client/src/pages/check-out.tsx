@@ -1,3 +1,4 @@
+import { readActiveEvent, setActiveEvent } from "@/lib/active-event";
 import { PartnerRegistrationDialog } from "@/components/partner-registration-dialog";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -68,6 +69,14 @@ export default function CheckOutPage() {
   const [clientContact, setClientContact] = useState("");
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
   const [isEmergency, setIsEmergency] = useState(false);
+  const [activeEventId, setActiveEventId] = useState<string | null>(() => readActiveEvent(window.sessionStorage));
+  const { data: activeEvents = [] } = useQuery<{id: string; name: string; status: string}[]>({queryKey:["/api/frc-events"]});
+  useEffect(() => {
+    if (activeEventId && activeEvents.length && !activeEvents.some(e => e.id === activeEventId && e.status === "active")) {
+      setActiveEventId(null);
+      setActiveEvent(window.sessionStorage, null);
+    }
+  }, [activeEventId, activeEvents]);
   const selectedClientRecord = clients.find(client => client.id === clientId);
   const isPartner = selectedClientRecord?.clientType === "partner";
   const [partnerRegistrationOpen, setPartnerRegistrationOpen] = useState(false);
@@ -512,6 +521,7 @@ export default function CheckOutPage() {
         items: cart,
         location,
         isEmergency,
+        eventId: activeEventId,
         timestamp: startedAt,
       }));
     } catch (e) {
@@ -589,6 +599,18 @@ export default function CheckOutPage() {
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="frc-checkout-event" className="text-sm font-medium">Active distribution event</label>
+            <select id="frc-checkout-event" data-testid="select-active-event" className="w-full rounded-md border bg-background p-2" value={activeEventId ?? ""} onChange={e => {
+              const id = e.target.value || null;
+              setActiveEventId(id);
+              setActiveEvent(window.sessionStorage, id);
+            }}>
+              <option value="">General distribution (no event)</option>
+              {activeEvents.filter(e => e.status === "active").map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+            <p className="text-xs text-muted-foreground">The event stays selected for subsequent checkouts in this tab until changed.</p>
+          </div>
           <section className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
             <div className="space-y-3">
               <div className="space-y-1.5">

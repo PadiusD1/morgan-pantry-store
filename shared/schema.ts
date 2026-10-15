@@ -270,6 +270,16 @@ export type Setting = typeof settings.$inferSelect;
 
 // ─── Transactions ────────────────────────────────────────────────────────────
 
+export const frcEvents = pgTable("frc_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  description: text("description"),
+  startsAt: timestamp("starts_at", { withTimezone: true }),
+  endsAt: timestamp("ends_at", { withTimezone: true }),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 export const transactions = pgTable("transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
   type: transactionTypeEnum("type").notNull(),
@@ -279,6 +289,7 @@ export const transactions = pgTable("transactions", {
   clientId: uuid("client_id").references(() => clients.id),
   clientName: text("client_name"),
   donorId: uuid("donor_id").references(() => donors.id),
+  eventId: uuid("event_id").references(() => frcEvents.id),
   // Emergency Shop Appointment flag: tracks emergency check-outs separately in reports
   isEmergency: boolean("is_emergency").notNull().default(false),
   latitude: doublePrecision("latitude"),
