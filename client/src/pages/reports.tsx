@@ -1,3 +1,4 @@
+import { eventRollups, rankDonationSources, type EventLedgerLine } from "@shared/event-analytics";
 import { BOARD_DATA_OPTIONS, ALL_BOARD_DATA, selectedBoardSections, type BoardDataKey } from "@shared/board-selection";
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -70,6 +71,30 @@ export default function ReportsPage() {
     queryKey: ["/api/reports/emergencies"],
     queryFn: async () => (await apiRequest("GET", "/api/reports/emergencies")).json(),
   });
+  const { data: eventLedger = [], isError: eventLedgerError } = useQuery<EventLedgerLine[]>({
+    queryKey: ["/api/frc-events/analytics", from, to],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      return (await apiRequest("GET", "/api/frc-events/analytics?" + params.toString())).json();
+    },
+  });
+  const eventTotals = useMemo(() =>
+      <Card data-testid="event-board-analytics"><CardHeader><CardTitle>Event impact and top food contributors</CardTitle></CardHeader><CardContent className="space-y-4">
+        {eventLedgerError && <p role="alert">Event analytics could not load. Do not use incomplete results for board reporting.</p>}
+        <Button type="button" onClick={exportEventMetrics} disabled={eventLedgerError}>Export event and donor rankings CSV</Button>
+        <h3 className="font-semibold">Food by event</h3>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Received units</TableHead><TableHead>Distributed units</TableHead><TableHead>Distributed lbs</TableHead><TableHead>Estimated distributed value</TableHead><TableHead>Clients served</TableHead></TableRow></TableHeader><TableBody>
+          {eventTotals.map(e => <TableRow key={e.eventId ?? "unassigned"}><TableCell>{e.eventName}</TableCell><TableCell>{e.receivedUnits}</TableCell><TableCell>{e.distributedUnits}</TableCell><TableCell>{e.distributedWeightLbs.toFixed(2)}</TableCell><TableCell>{money(e.distributedValueUsd)}</TableCell><TableCell>{e.clientsServed}</TableCell></TableRow>)}
+        </TableBody></Table></div>
+        <h3 className="font-semibold">Top donors and partners by units received</h3>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Contributor</TableHead><TableHead>Units</TableHead><TableHead>Weight (lbs)</TableHead><TableHead>Estimated value</TableHead></TableRow></TableHeader><TableBody>
+          {donorRanks.map(d => <TableRow key={d.sourceId}><TableCell>{d.sourceName}</TableCell><TableCell>{d.units}</TableCell><TableCell>{d.weightLbs.toFixed(2)}</TableCell><TableCell>{money(d.valueUsd)}</TableCell></TableRow>)}
+        </TableBody></Table></div>
+      </CardContent></Card>
+ eventRollups(eventLedger), [eventLedger]);
+  const donorRanks = useMemo(() => rankDonationSources(eventLedger), [eventLedger]);
   const yearsWithData = useMemo(() => reportYears(repo.transactions), [repo.transactions]);
   const board = useMemo(() => buildBoardReport(repo.transactions, repo.inventory, { from, to }), [repo.transactions, repo.inventory, from, to]);
   const rangeTx = useMemo(() => filterReportTransactions(repo.transactions, { from, to }).filter((tx) => tx.type === "OUT"), [repo.transactions, from, to]);
@@ -97,6 +122,16 @@ export default function ReportsPage() {
 
   function showExportError(error: unknown) {
     toast({ title: "Export failed", description: error instanceof Error ? error.message : "Please retry the export.", variant: "destructive" });
+  }
+
+  function exportEventMetrics() {
+    const rows = [
+      ["Event","Received units","Distributed units","Received lbs","Distributed lbs","Received estimated USD","Distributed estimated USD","Unique clients","Transactions","Unmeasured weight units","Unvalued units"],
+      ...eventTotals.map(e => [e.eventName,e.receivedUnits,e.distributedUnits,e.receivedWeightLbs,e.distributedWeightLbs,e.receivedValueUsd,e.distributedValueUsd,e.clientsServed,e.transactions,e.missingWeightUnits,e.missingValueUnits].map(String)),
+      [], ["Donor or partner","Units donated","Pounds donated","Estimated USD","Transactions","Unmeasured units","Unvalued units"],
+      ...donorRanks.map(d => [d.sourceName,d.units,d.weightLbs,d.valueUsd,d.transactions,d.missingWeightUnits,d.missingValueUnits].map(String)),
+    ];
+    downloadCsvText(rows.map(row => row.map(value => '"' + String(value).replace(/"/g,'""') + '"').join(",")).join("\\r\\n"), "frc-event-and-donor-metrics.csv");
   }
 
   function exportBoard(print = false) {
