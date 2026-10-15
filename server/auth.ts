@@ -1,3 +1,4 @@
+import { integrationConfig, verifyTurnstile } from "./integration-config";
 /**
  * Authentication & authorization.
  *
@@ -217,6 +218,7 @@ const PUBLIC_RULES: PathRule[] = [
   { method: "GET", pattern: /^\/api\/health$/ },
   { pattern: /^\/api\/auth\// },
   { method: "GET", pattern: /^\/api\/public\/inventory$/ },
+  { method: "GET", pattern: /^\/api\/public\/inventory\/[a-f0-9-]+\/photo$/i },
 ];
 
 const ADMIN_RULES: PathRule[] = [
@@ -362,6 +364,10 @@ async function ensureAdminSeed(): Promise<void> {
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 export function registerAuthRoutes(app: Express): void {
+  app.get("/api/auth/security-config", (_req, res) => {
+    const { required, ready, siteKey } = integrationConfig().turnstile;
+    res.json({ required, ready, siteKey });
+  });
   // Sign in (all roles)
   app.post("/api/auth/login", async (req, res) => {
     const parsed = loginSchema.safeParse(req.body);
@@ -380,6 +386,7 @@ export function registerAuthRoutes(app: Express): void {
       return res.status(429).json({ message: "Too many attempts. Try again in a few minutes." });
     }
 
+    if (!(await verifyTurnstile(req.body?.turnstileToken, "login"))) return res.status(403).json({ message: "Complete a new security check and try again." });
     await ensureAdminSeed();
 
     const user = await storage.getUserByEmail(email);
@@ -411,6 +418,8 @@ export function registerAuthRoutes(app: Express): void {
     if (signupBlocked) {
       return res.status(429).json({ message: "Too many attempts. Try again in a few minutes." });
     }
+
+    if (!(await verifyTurnstile(req.body?.turnstileToken, "signup"))) return res.status(403).json({ message: "Complete a new security check and try again." });
 
     const existing = await storage.getUserByEmail(email);
     if (existing) {

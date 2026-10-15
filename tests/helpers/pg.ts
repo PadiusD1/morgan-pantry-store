@@ -36,6 +36,7 @@ export function localUrl(db: string): string {
 
 /** Refuse to run anywhere near a real service, and force UTC. */
 export function assertSafeEnv(): void {
+  if (Object.keys(process.env).some(k => /^(RESEND_|POSTHOG_|TURNSTILE_)/.test(k))) throw new Error("pg harness refuses live email, analytics or security-provider credentials");
   const upstash = Object.keys(process.env).filter((k) => k.startsWith("UPSTASH") || k.startsWith("KV_REST_API"));
   if (upstash.length > 0) {
     throw new Error("pg harness refused because an external Redis variable is set");

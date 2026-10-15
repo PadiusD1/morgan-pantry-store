@@ -1,3 +1,5 @@
+import { DirectoryReport } from "@/components/directory-report";
+import { UnregisteredDonors } from "@/components/unregistered-donors";
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -248,6 +250,8 @@ export default function DonorsPage() {
         </CardContent>
       </Card>
 
+      <DirectoryReport kind="donor" records={filtered} directory={donors} />
+      <UnregisteredDonors donors={donors} />
       <Card className="glass-panel" data-testid="card-donors-table">
         <CardHeader className="py-3 px-4 border-b border-border/80">
           <CardTitle className="section-heading flex items-center justify-between">

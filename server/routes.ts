@@ -1,3 +1,5 @@
+import { productPhotoPath, inventoryPhotoMetadata } from "@shared/product-photo";
+import { notifyRequestUpdate } from "./email-delivery";
 import type { Express } from "express";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -322,13 +324,13 @@ export async function registerRoutes(app: Express): Promise<void> {
 
   app.get("/api/inventory", async (_req, res) => {
     const items = await storage.getInventoryItems();
-    res.json(items);
+    res.json(items.map(inventoryPhotoMetadata));
   });
 
   app.get("/api/inventory/:id", async (req, res) => {
     const item = await storage.getInventoryItem(req.params.id);
     if (!item) return res.status(404).json({ message: "Not found" });
-    res.json(item);
+    res.json(inventoryPhotoMetadata(item));
   });
 
   app.post("/api/inventory", async (req, res) => {
@@ -868,6 +870,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       name: item.name,
       brand: item.brand,
       category: item.category,
+      imageUrl: productPhotoPath(item),
       quantity: item.quantity - (item.reservedQuantity ?? 0),
       allergens: item.allergens,
       reorderThreshold: item.reorderThreshold,
@@ -1213,7 +1216,8 @@ export async function registerRoutes(app: Express): Promise<void> {
       }
       client.release();
 
-      res.json(await getRequestPayload(req.params.id));
+      await notifyRequestUpdate(req.params.id);
+    res.json(await getRequestPayload(req.params.id));
     } catch (err: any) {
       console.error("[approve] error:", err);
       res.status(500).json({ message: "Internal error approving request" });
@@ -1261,6 +1265,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       message: `Your request has been denied. Reason: ${adminNote.trim()}`,
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 
@@ -1421,6 +1426,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       message: "Your request has been cancelled.",
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 
@@ -1458,6 +1464,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       message: "You were marked as a no-show for your request. Reserved items have been released.",
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 
@@ -1486,6 +1493,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       newStatus: request.status,
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 
@@ -1511,6 +1519,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       newStatus: request.status,
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 
@@ -1537,6 +1546,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       newStatus: "under_review",
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 
@@ -1575,6 +1585,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       message: "Your items are ready for pickup!",
     });
 
+    await notifyRequestUpdate(req.params.id);
     res.json(await getRequestPayload(req.params.id));
   });
 

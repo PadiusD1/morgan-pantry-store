@@ -18,6 +18,9 @@ import express, { type Request, Response, NextFunction, type Express } from "exp
 import { registerRoutes } from "./routes";
 import { registerPortalRoutes } from "./portal";
 import { authenticate, apiGuard, registerAuthRoutes } from "./auth";
+import { registerIntegrationRoutes } from "./integrations";
+import { registerInventoryQualityRoutes } from "./inventory-quality";
+import { registerProductPhotoRoutes } from "./product-photo";
 import { pingDatabase } from "./pg";
 
 export function log(message: string, source = "express") {
@@ -100,14 +103,17 @@ export async function createApp(): Promise<Express> {
 
   registerAuthRoutes(app);
   registerPortalRoutes(app);
+  registerProductPhotoRoutes(app);
+  registerInventoryQualityRoutes(app);
+  registerIntegrationRoutes(app);
   await registerRoutes(app);
 
   // Global error handler — catches sync throws AND async rejections in Express 5.
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    log(`ERROR ${req.method} ${req.path} ${status} :: ${err?.message || err}`, "error");
+    log(`ERROR ${req.method} ${req.path} ${status}`, "error");
     if (status >= 500) {
-      console.error("[stack]", err?.stack || err);
+      console.error("[server] Request failed", { code: typeof err?.code === "string" && /^[A-Z0-9_]{1,20}$/.test(err.code) ? err.code : "internal" });
     }
     if (res.headersSent) {
       return next(err);

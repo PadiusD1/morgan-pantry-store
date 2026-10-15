@@ -1,3 +1,4 @@
+import { TurnstileChallenge } from "@/components/turnstile-challenge";
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +22,8 @@ export default function SignupPage() {
   });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [securityToken, setSecurityToken] = useState<string | undefined>(undefined);
+  const [securityReset, setSecurityReset] = useState(0);
 
   useEffect(() => {
     if (!isLoading && user) {
@@ -47,6 +50,7 @@ export default function SignupPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (securityToken === undefined) return;
     if (submitting) return;
     const problem = validate();
     if (problem) {
@@ -62,11 +66,14 @@ export default function SignupPage() {
         studentId: form.studentId.trim(),
         phone: form.phone.trim() || undefined,
         password: form.password,
+        turnstileToken: securityToken,
       });
       navigate(homePathForRole(created.role), { replace: true });
     } catch (err: unknown) {
       setError(apiErrorMessage(err, "Unable to create your account. Please try again."));
       setSubmitting(false);
+      setSecurityToken(undefined);
+      setSecurityReset(value => value + 1);
     }
   }
 
@@ -193,10 +200,11 @@ export default function SignupPage() {
                 />
               </div>
 
+              <TurnstileChallenge action="signup" reset={securityReset} onToken={setSecurityToken} />
               <Button
                 type="submit"
                 className="w-full"
-                disabled={submitting}
+                disabled={submitting || securityToken === undefined}
                 data-testid="button-signup-submit"
               >
                 {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}

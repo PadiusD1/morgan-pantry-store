@@ -1,0 +1,39 @@
+import { attributeDonor } from "./donation-source";
+import { csvRow } from "./csv";
+import { filterReportTransactions, reportPeriodLabel, reportRangeError, REPORT_TIME_ZONE, type ReportTransaction, type ReportRange } from "./reporting";
+export type RelationshipRecord = { id: string; name: string; organization?: string | null; status?: string | null; createdAt?: string };
+export type RelationshipMovement = { entries: number; units: number; weightLbs: number; valueCents: number; unweighedUnits: number; unvaluedUnits: number };
+const empty = (): RelationshipMovement => ({ entries: 0, units: 0, weightLbs: 0, valueCents: 0, unweighedUnits: 0, unvaluedUnits: 0 });
+/** Directory rows with no movements are retained; name-only legacy matches are explicitly counted. */
+export function relationshipReport(kind: "donor" | "partner", records: RelationshipRecord[], transactions: (ReportTransaction & { donorId?: string })[], range: ReportRange, directory: RelationshipRecord[] = records) {
+  if (reportRangeError(range)) throw new Error(reportRangeError(range)!);
+  const rows = records.map(record => ({ ...record, received: empty(), distributed: empty(), legacyNameEntries: 0 }));
+  const byId = new Map(rows.map(row => [row.id, row]));
+  for (const tx of filterReportTransactions(transactions, range)) {
+    const id = kind === "donor" ? (tx.type === "IN" ? attributeDonor(tx, directory.map(r => ({ ...r, status: r.status ?? undefined }))) : null) : tx.clientId;
+    const row = id ? byId.get(id) : undefined;
+    if (!row) continue;
+    // An explicit donor ID takes precedence; a partner must not count that receipt as its own donation.
+    if (kind === "partner" && tx.type === "IN" && tx.donorId) continue;
+    if (kind === "donor" && !tx.donorId) row.legacyNameEntries += 1;
+    const total = tx.type === "IN" ? row.received : row.distributed;
+    total.entries += 1;
+    for (const line of tx.items) {
+      const units = Number.isFinite(line.quantity) && line.quantity > 0 ? line.quantity : 0;
+      total.units += units;
+      if (Number.isFinite(line.weightPerUnitLbs) && line.weightPerUnitLbs > 0) total.weightLbs += units * line.weightPerUnitLbs;
+      else total.unweighedUnits += units;
+      if (Number.isFinite(line.valuePerUnitUsd) && line.valuePerUnitUsd > 0) total.valueCents += units * line.valuePerUnitUsd * 100;
+      else total.unvaluedUnits += units;
+    }
+  }
+  return rows;
+}
+export function relationshipCsv(kind: "donor" | "partner", records: RelationshipRecord[], transactions: (ReportTransaction & { donorId?: string })[], range: ReportRange, directory: RelationshipRecord[] = records): string {
+  const rows = relationshipReport(kind, records, transactions, range, directory);
+  const columns = ["Name", "Organization", "Status", "Added at", "IN entries", "IN units", "IN lbs", "IN estimated USD", "IN units missing weight", "IN units missing value"];
+  if (kind === "partner") columns.push("OUT entries", "OUT units", "OUT lbs", "OUT estimated USD", "OUT units missing weight", "OUT units missing value");
+  else columns.push("Legacy name-matched IN entries (review)");
+  const movement = (value: RelationshipMovement) => [value.entries, value.units, value.weightLbs.toFixed(4), (value.valueCents / 100).toFixed(2), value.unweighedUnits, value.unvaluedUnits];
+  return [[`FRC ${kind === "donor" ? "Donor" : "Partner"} Directory Report`], ["Period", reportPeriodLabel(range)], ["Calendar", REPORT_TIME_ZONE], ["Scope", "Filtered directory; no client contacts or student identities. Snapshot values, not cash savings."], [], columns, ...rows.map(r => [r.name, r.organization ?? "", r.status ?? "active", r.createdAt ?? "", ...movement(r.received), ...(kind === "partner" ? movement(r.distributed) : [r.legacyNameEntries])])].map(csvRow).join("\r\n");
+}
