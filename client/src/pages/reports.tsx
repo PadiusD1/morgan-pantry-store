@@ -81,18 +81,7 @@ export default function ReportsPage() {
     },
   });
   const eventTotals = useMemo(() =>
-      <Card data-testid="event-board-analytics"><CardHeader><CardTitle>Event impact and top food contributors</CardTitle></CardHeader><CardContent className="space-y-4">
-        {eventLedgerError && <p role="alert">Event analytics could not load. Do not use incomplete results for board reporting.</p>}
-        <Button type="button" onClick={exportEventMetrics} disabled={eventLedgerError}>Export event and donor rankings CSV</Button>
-        <h3 className="font-semibold">Food by event</h3>
-        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Received units</TableHead><TableHead>Distributed units</TableHead><TableHead>Distributed lbs</TableHead><TableHead>Estimated distributed value</TableHead><TableHead>Clients served</TableHead></TableRow></TableHeader><TableBody>
-          {eventTotals.map(e => <TableRow key={e.eventId ?? "unassigned"}><TableCell>{e.eventName}</TableCell><TableCell>{e.receivedUnits}</TableCell><TableCell>{e.distributedUnits}</TableCell><TableCell>{e.distributedWeightLbs.toFixed(2)}</TableCell><TableCell>{money(e.distributedValueUsd)}</TableCell><TableCell>{e.clientsServed}</TableCell></TableRow>)}
-        </TableBody></Table></div>
-        <h3 className="font-semibold">Top donors and partners by units received</h3>
-        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Contributor</TableHead><TableHead>Units</TableHead><TableHead>Weight (lbs)</TableHead><TableHead>Estimated value</TableHead></TableRow></TableHeader><TableBody>
-          {donorRanks.map(d => <TableRow key={d.sourceId}><TableCell>{d.sourceName}</TableCell><TableCell>{d.units}</TableCell><TableCell>{d.weightLbs.toFixed(2)}</TableCell><TableCell>{money(d.valueUsd)}</TableCell></TableRow>)}
-        </TableBody></Table></div>
-      </CardContent></Card>
+
  eventRollups(eventLedger), [eventLedger]);
   const donorRanks = useMemo(() => rankDonationSources(eventLedger), [eventLedger]);
   const yearsWithData = useMemo(() => reportYears(repo.transactions), [repo.transactions]);
@@ -189,6 +178,18 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-4">
+      <Card data-testid="event-board-analytics"><CardHeader><CardTitle>Event impact and top food contributors</CardTitle></CardHeader><CardContent className="space-y-4">
+        {eventLedgerError && <p role="alert">Event analytics could not load. Do not use incomplete results for board reporting.</p>}
+        <Button type="button" onClick={exportEventMetrics} disabled={eventLedgerError}>Export event and donor rankings CSV</Button>
+        <h3 className="font-semibold">Food by event</h3>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Received units</TableHead><TableHead>Distributed units</TableHead><TableHead>Distributed lbs</TableHead><TableHead>Estimated distributed value</TableHead><TableHead>Clients served</TableHead></TableRow></TableHeader><TableBody>
+          {eventTotals.map(e => <TableRow key={e.eventId ?? "unassigned"}><TableCell>{e.eventName}</TableCell><TableCell>{e.receivedUnits}</TableCell><TableCell>{e.distributedUnits}</TableCell><TableCell>{e.distributedWeightLbs.toFixed(2)}</TableCell><TableCell>{money(e.distributedValueUsd)}</TableCell><TableCell>{e.clientsServed}</TableCell></TableRow>)}
+        </TableBody></Table></div>
+        <h3 className="font-semibold">Top donors and partners by units received</h3>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Contributor</TableHead><TableHead>Units</TableHead><TableHead>Weight (lbs)</TableHead><TableHead>Estimated value</TableHead></TableRow></TableHeader><TableBody>
+          {donorRanks.map(d => <TableRow key={d.sourceId}><TableCell>{d.sourceName}</TableCell><TableCell>{d.units}</TableCell><TableCell>{d.weightLbs.toFixed(2)}</TableCell><TableCell>{money(d.valueUsd)}</TableCell></TableRow>)}
+        </TableBody></Table></div>
+      </CardContent></Card>
       <Card className="glass-panel" data-testid="card-report-filters">
         <CardContent className="space-y-3 py-4">
           <div className="grid gap-3 sm:grid-cols-2">
