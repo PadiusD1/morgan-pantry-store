@@ -1,3 +1,5 @@
+import { ProductName } from "@/components/product-name";
+import { productLabel } from "@shared/product-identity";
 import { useAutoBarcode } from '@/lib/auto-barcode';
 import { ItemNameInput } from '@/components/item-name-input';
 import { PartnerRegistrationDialog } from "@/components/partner-registration-dialog";
@@ -94,6 +96,7 @@ export default function CheckOutPage() {
   const [newItemForm, setNewItemForm] = useState<{
     barcode: string;
     name: string;
+    brand?: string;
     category: string;
     weightPerUnitLbs: number;
     valuePerUnitUsd: number;
@@ -257,7 +260,7 @@ export default function CheckOutPage() {
         const item = toInventoryItem(result.item as ApiInventoryItem);
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         if (await addToCart(item.id, 1, item)) {
-          toast({ title: "Item added", description: `${item.name} added to cart.` });
+          toast({ title: "Item added", description: `${productLabel(item)} added to cart.` });
         }
         if (!checkoutActive.current) return;
         setScanLoading(false);
@@ -280,7 +283,7 @@ export default function CheckOutPage() {
         if (added) {
           toast({
             title: "New item added",
-            description: `${item.name} found via ${srcLabel} and added to cart.`,
+            description: `${productLabel(item)} found via ${srcLabel} and added to cart.`,
           });
         }
         setScanLoading(false);
@@ -355,6 +358,7 @@ export default function CheckOutPage() {
       saveItem: (idempotencyKey) => {
         const created = addOrUpdateItem({
           name,
+          brand: form.brand?.trim() || undefined,
           category,
           barcode: barcode || undefined,
           quantity: 0,
@@ -925,13 +929,13 @@ export default function CheckOutPage() {
                     <ItemNameInput aria-label="Search inventory to add to cart" placeholder="Type an item name, brand or barcode" value={itemSearch} items={sortedInventory} onChange={setItemSearch} onSelect={item => { void addToCart(item.id); setItemSearch(""); }} data-testid="input-checkout-item-search" />
                   </div>
                   <Select onValueChange={(id) => addToCart(id)}>
-                    <SelectTrigger id="item-select" className="min-w-0 flex-1" data-testid="select-cart-item">
+                    <SelectTrigger id="item-select" className="h-auto min-h-11 min-w-0 flex-1 whitespace-normal text-left [&>span]:line-clamp-none" data-testid="select-cart-item">
                       <SelectValue placeholder="Choose item" />
                     </SelectTrigger>
                     <SelectContent>
                       {sortedInventory.map((i) => (
                         <SelectItem key={i.id} value={i.id} data-testid={`option-cart-item-${i.id}`}>
-                          {i.brand ? `${i.brand} - ` : ""}{i.name} • {i.quantity} on hand
+                          <ProductName item={i} /> <span className="text-xs text-muted-foreground">{i.quantity} on hand</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1006,6 +1010,10 @@ export default function CheckOutPage() {
                         autoFocus
                         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddNewItem(); } }}
                       />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <label className="text-xs font-medium" htmlFor="checkout-new-brand">Brand (optional)</label>
+                      <Input id="checkout-new-brand" value={newItemForm.brand ?? ""} onChange={e => setNewItemForm(p => p ? { ...p, brand: e.target.value } : p)} className="h-8 text-sm" />
                     </div>
                     <div className="space-y-1">
                       <label className="text-xs font-medium">Category</label>
@@ -1244,7 +1252,7 @@ function CartTable({
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium" data-testid={`text-cart-item-name-${line.itemId}`}>
-                        {item.brand ? `${item.brand} - ` : ""}{item.name}
+                        <ProductName item={item} />
                       </span>
                       <span className="text-[11px] text-muted-foreground" data-testid={`text-cart-item-category-${line.itemId}`}>
                         {item.category || "Uncategorized"}

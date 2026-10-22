@@ -1,3 +1,4 @@
+import { ProductName } from "@/components/product-name";
 import { useId, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
 import { Input } from "@/components/ui/input";
 import { suggestInventoryItems } from "@/lib/item-entry";
@@ -86,9 +87,9 @@ export function ItemNameInput({ value, items, onChange, onSelect, ...inputProps 
               onClick={() => choose(item)}
               data-testid={`${inputProps["data-testid"] || "item-name"}-option-${item.id}`}
             >
-              <span className="block font-medium">{item.name}</span>
+              <span className="block font-medium"><ProductName item={item} /></span>
               <span className="block text-xs text-muted-foreground">
-                {[item.brand, item.category, item.barcode, `${item.quantity} on hand`].filter(Boolean).join(" · ")}
+                {[item.category, item.barcode, `${item.quantity} on hand`].filter(Boolean).join(" · ")}
               </span>
             </button>
           ))}

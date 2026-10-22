@@ -1,3 +1,5 @@
+import { ProductName } from "@/components/product-name";
+import { productLabel } from "@shared/product-identity";
 import React from "react";
 import { ProductPhoto } from "@/components/product-photo";
 import { Card, CardContent } from "@/components/ui/card";
@@ -50,7 +52,7 @@ export function ItemCard({
                 className={`font-medium break-words ${isKiosk ? "text-lg" : "text-sm"}`}
                 data-testid={`text-item-name-${item.id}`}
               >
-                {item.name}
+                <ProductName item={item} />
               </p>
               <div className="flex flex-wrap items-center gap-1.5 mt-1">
                 {item.category && (
@@ -97,7 +99,7 @@ export function ItemCard({
               variant="outline"
               size="icon"
               className={isKiosk ? "h-12 w-12" : "h-8 w-8"}
-              aria-label={`Remove one ${item.name}`}
+              aria-label={`Remove one ${productLabel(item)}`}
               onClick={handleDecrement}
               disabled={cartQuantity <= 0}
               data-testid={`button-item-minus-${item.id}`}
@@ -115,7 +117,7 @@ export function ItemCard({
               variant="outline"
               size="icon"
               className={isKiosk ? "h-12 w-12" : "h-8 w-8"}
-              aria-label={`Add one ${item.name}`}
+              aria-label={`Add one ${productLabel(item)}`}
               onClick={handleIncrement}
               disabled={cartQuantity >= available}
               data-testid={`button-item-plus-${item.id}`}

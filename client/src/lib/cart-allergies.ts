@@ -1,4 +1,5 @@
-type AllergyItem = { id: string; name: string; allergens?: string[] };
+import { productLabel } from '@shared/product-identity';
+type AllergyItem = { id: string; name: string; brand?: string; allergens?: string[] };
 
 /** A just-looked-up item is authoritative even before React's inventory render. */
 export function cartAllergyWarning(
@@ -14,5 +15,5 @@ export function cartAllergyWarning(
     const name = allergen.trim().toLocaleLowerCase();
     return name && allergies.some((allergy) => allergy.includes(name) || name.includes(allergy));
   });
-  return matches.length ? { itemName: item.name, itemAllergens: matches } : null;
+  return matches.length ? { itemName: productLabel(item), itemAllergens: matches } : null;
 }

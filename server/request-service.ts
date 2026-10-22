@@ -1,3 +1,4 @@
+import { productLabel } from "@shared/product-identity";
 /**
  * Shared food-request creation flow, used by:
  *  - POST /api/requests        (staff/kiosk — identity typed by a supervisor)
@@ -111,8 +112,8 @@ export async function createFoodRequest(
     const itemIds = [...new Set(input.items.map((item) => item.inventoryItemId.toLowerCase()))];
     // Keep the referenced rows from being deleted until the request commits.
     // Stable ordering also keeps concurrent inventory lock acquisition uniform.
-    const { rows: inventory } = await client.query<{ id: string; name: string; category: string | null }>(
-      "SELECT id, name, category FROM inventory_items WHERE id = ANY($1::uuid[]) ORDER BY id FOR KEY SHARE",
+    const { rows: inventory } = await client.query<{ id: string; name: string; brand: string | null; category: string | null }>(
+      "SELECT id, name, brand, category FROM inventory_items WHERE id = ANY($1::uuid[]) ORDER BY id FOR KEY SHARE",
       [itemIds],
     );
     if (inventory.length !== itemIds.length) throw new RequestItemUnavailableError();
@@ -144,7 +145,7 @@ export async function createFoodRequest(
       return {
         requestId: request.id,
         inventoryItemId: canonicalItem.id,
-        itemName: canonicalItem.name,
+        itemName: productLabel(canonicalItem),
         itemCategory: canonicalItem.category,
         requestedQuantity: item.requestedQuantity,
       };
