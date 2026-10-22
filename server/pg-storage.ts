@@ -57,6 +57,7 @@ import {
   type Donor,
   type InsertDonor,
 } from "@shared/schema";
+import { findItemByBarcodeForms, withInventoryBarcodeQueue } from "./inventory-identity";
 import type { IStorage } from "./storage";
 import { db } from "./pg";
 
@@ -151,14 +152,19 @@ export class PgStorage implements IStorage {
     return row;
   }
 
+  /**
+   * Find a saved item by a scanned code.
+   *
+   * One trade item has several printed renderings. A tin stocked as UPC-A
+   * 012345678905 and scanned as EAN-13 0012345678905 is the same tin, and exact
+   * string equality made it a second inventory row with its own stock count. So
+   * every rendering of a valid GTIN is tried, while a legacy identifier that is
+   * not a GTIN still matches only itself and is never merged into one.
+   */
   async getInventoryItemByBarcode(
     barcode: string,
   ): Promise<InventoryItem | undefined> {
-    const [row] = await db
-      .select()
-      .from(inventoryItems)
-      .where(eq(inventoryItems.barcode, barcode));
-    return row;
+    return withInventoryBarcodeQueue(barcode, (client) => findItemByBarcodeForms(client, barcode));
   }
 
   async createInventoryItem(

@@ -1,3 +1,4 @@
+import { useAutoBarcode } from '@/lib/auto-barcode';
 import { cacheSavedPartner } from "@/lib/partner-save";
 import { cacheSavedDonor } from "@/lib/donor-cache";
 import { confirmedDonor } from "@/lib/donor-save";
@@ -19,6 +20,7 @@ import { toInventoryItem, type ApiInventoryItem } from "@/lib/api-types";
 import { itemOptions, nextSelectedId, resolveSelectedId, selectedAfterCheckIn } from "@/lib/check-in-selection";
 import { createItemLookupGuard } from "@/lib/item-entry";
 import { ItemNameInput } from "@/components/item-name-input";
+import { SourcePicker } from "@/components/source-picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -44,7 +46,8 @@ export default function CheckInPage() {
   const { toast } = useToast();
 
   // Who donated it, donors and partner organisations in one list from the server.
-  const { data: donorOptions = [] } = useDonationSources();
+  const donorSources = useDonationSources();
+  const donorOptions = donorSources.data ?? [];
   const partnerCount = donorOptions.filter((o) => o.kind === "partner").length;
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
@@ -67,6 +70,7 @@ export default function CheckInPage() {
   useEffect(() => () => lookupGuard.invalidate(), [lookupGuard]);
 
   const [newItem, setNewItem] = useState(() => emptyNewItem());
+  const [unmatchedBarcode, setUnmatchedBarcode] = useState("");
   const quantityInputRef = useRef<HTMLInputElement>(null);
 
   const sortedInventory = useMemo(
@@ -110,6 +114,7 @@ export default function CheckInPage() {
   }
 
   function selectExistingItem(item: ReturnType<typeof toInventoryItem>) {
+    if (mode === "new") setUnmatchedBarcode(newItem.barcode.trim());
     cancelLookup();
     setMode("existing");
     setPinnedItem(item);
@@ -122,6 +127,7 @@ export default function CheckInPage() {
   }
 
   function selectScannedItem(item: ReturnType<typeof toInventoryItem>) {
+    setUnmatchedBarcode("");
     const sameItem = lastScannedItemId.current === item.id;
     lastScannedItemId.current = item.id;
     setMode("existing");
@@ -137,6 +143,7 @@ export default function CheckInPage() {
   async function handleBarcodeLookup(code: string) {
     const trimmed = code.trim();
     if (!trimmed) return;
+    setUnmatchedBarcode("");
 
     const isCurrent = lookupGuard.start();
     setScanState({ phase: "scanning" });
@@ -194,15 +201,26 @@ export default function CheckInPage() {
         return;
       }
 
-      // Not found in any API
+      // No match. The reason matters: a store-local code can never be found,
+      // and a provider outage has not established anything at all.
       setMode("new");
       setNewItem(emptyNewItem(trimmed));
+      setUnmatchedBarcode(trimmed);
       setIsNewCategory(false);
       setCustomCategory("");
       setScanState({ phase: "not-found" });
       toast({
-        title: "Barcode not recognized",
-        description: "No match found in any product database. Please enter details manually.",
+        title: result.identityProblem
+          ? "This code cannot identify a product"
+          : result.inconclusive
+            ? "Could not finish looking this up"
+            : "Barcode not recognized",
+        description:
+          result.identityProblem ??
+          (result.inconclusive
+            ? "A product database did not answer, so this is not a confirmed missing product. Try again, or enter the details now and correct them later."
+            : "No match found in any product database. Please enter details manually."),
+        variant: result.inconclusive ? "destructive" : undefined,
       });
     } catch (err) {
       if (!isCurrent()) return;
@@ -230,6 +248,7 @@ export default function CheckInPage() {
     ),
   );
   const tabEndsScan = useScanner(scanQueue.push);
+  const autoBarcode = useAutoBarcode(scanQueue.push);
 
   // One save at a time, and a retry keeps the same Idempotency-Key.
   const saveGuard = useSaveGuard();
@@ -302,6 +321,17 @@ export default function CheckInPage() {
           allergens: newItem.allergens,
         });
       }
+    }
+
+    if (mode === "existing" && itemId && unmatchedBarcode) {
+      const targetId = itemId;
+      saveItem = async () => {
+        const response = await apiRequest("POST", `/api/inventory/${targetId}/barcode`, { barcode: unmatchedBarcode }, { idempotencyKey: `${key}.barcode` });
+        const saved: ApiInventoryItem = await response.json();
+        queryClient.setQueryData<ApiInventoryItem[]>(["/api/inventory"], old => [...(old ?? []).filter(row => row.id !== saved.id), saved]);
+        setPinnedItem(toInventoryItem(saved));
+        return saved.id;
+      };
     }
 
     if (!itemId) {
@@ -451,6 +481,7 @@ export default function CheckInPage() {
       return false;
     }
     const saved = result.saved;
+    setUnmatchedBarcode("");
 
     toast({
       title: "Stock received",
@@ -487,11 +518,15 @@ export default function CheckInPage() {
             )}
             <Input
               type="search"
-              placeholder="Scan barcode to find or add..."
+              placeholder="Scan barcode or QR code to find or add..."
+              aria-label="Scan barcode or QR code"
+              onChange={e => autoBarcode.changed(e.currentTarget, (e.nativeEvent as InputEvent).isComposing)}
+              onCompositionEnd={e => autoBarcode.changed(e.currentTarget)}
               className="pl-8"
               onKeyDown={(e) => {
                 if (e.key === "Enter" || (e.key === "Tab" && tabEndsScan(e.currentTarget.value))) {
                   e.preventDefault();
+                  autoBarcode.cancel();
                   scanQueue.push(e.currentTarget.value);
                   e.currentTarget.value = "";
                 }
@@ -541,7 +576,7 @@ export default function CheckInPage() {
           )}
           {scanState.phase === "idle" && (
             <p className="text-[11px] text-muted-foreground mt-1 ml-1">
-              USB Scanner: Focus this field and scan. Enter key triggers auto-lookup.
+              Focus this field and scan. Lookup starts automatically when the code arrives.
             </p>
           )}
         </div>
@@ -552,6 +587,7 @@ export default function CheckInPage() {
             <p className="mb-1 text-sm font-medium">{selectedItem.name}</p>
             <p className="mb-2 text-xs text-muted-foreground">{selectedItem.category} · {selectedItem.barcode || "No barcode"} · {selectedItem.quantity} on hand</p>
             <ItemEnrichmentDetails item={selectedItem} />
+            {unmatchedBarcode && <div className="mt-2 text-sm" role="status"><p>Saving this check-in will remember scanned code {unmatchedBarcode} for {selectedItem.name}. An existing different code will not be replaced.</p><Button type="button" variant="outline" onClick={() => setUnmatchedBarcode("")}>Do not link this code</Button></div>}
           </div>
         )}
 
@@ -828,36 +864,33 @@ export default function CheckInPage() {
                   <div className="relative">
                     <div className="absolute -left-[21px] top-[14px] w-4 h-px bg-indigo-200"></div>
                     <label className="text-sm font-medium" htmlFor="donor">
-                        Donor / Partner
+                        Source record (donor, partner or student)
                     </label>
                   </div>
                   <div className="flex gap-2">
                     {!isNewDonor ? (
-                        <Select value={donorKey} onValueChange={(val) => {
-                            if (val === "new_donor_custom") {
-                                setIsNewDonor(true);
-                                setDonor("");
-                                setDonorKey("");
-                            } else {
-                                setDonorKey(val);
-                            }
-                        }}>
-                            <SelectTrigger id="donor">
-                                <SelectValue placeholder="Select Donor" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {donorOptions.map((d) => {
-                                  const label = d.organization ? `${d.name} (${d.organization})` : d.name;
-                                  return (
-                                    <SelectItem key={d.key} value={d.key}>
-                                      {label}
-                                      {d.kind === "partner" ? " · Partner org" : ""}
-                                    </SelectItem>
-                                  );
-                                })}
-                                <SelectItem value="new_donor_custom">+ Register Donor / Partner</SelectItem>
-                            </SelectContent>
-                        </Select>
+                        <div className="min-w-0 flex-1">
+                          <SourcePicker
+                            id="donor"
+                            options={donorOptions}
+                            isLoading={donorSources.isLoading}
+                            isError={donorSources.isError}
+                            onRetry={() => void donorSources.refetch()}
+                            value={donorKey}
+                            onSelect={(option) => setDonorKey(option.key)}
+                            onRegisterNew={() => {
+                              setIsNewDonor(true);
+                              setDonor("");
+                              setDonorKey("");
+                            }}
+                            registerLabel="+ Register a donor or partner"
+                            data-testid="picker-donor"
+                          />
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Type a name, student ID, organization, email or phone. Each result shows whether it is a
+                            donor, a partner organization or a student, so two records with the same name stay apart.
+                          </p>
+                        </div>
                     ) : (
                         <div className="flex flex-wrap gap-1 w-full">
                             <label className="sr-only" htmlFor="inline-source-kind">Register as</label>

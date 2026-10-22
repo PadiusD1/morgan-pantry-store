@@ -53,7 +53,7 @@ test("a donor created in a filtered list stays visible through navigation and re
 
 test("a same-name donor response explains that the new details were not saved", async ({ page, request }) => {
   const name = unique("Existing donor");
-  const donor = await seedDonor(request, name, { email: "original-donor@example.test" });
+  const donor = await seedDonor(request, name);
   await page.goto("/donors");
   await page.getByTestId("button-add-donor").click();
   await page.getByTestId("input-edit-donor-name").fill(`  ${name.toLowerCase()}  `);
@@ -68,13 +68,13 @@ test("a same-name donor response explains that the new details were not saved", 
   await expect(page.getByText("Donor created", { exact: true })).not.toBeVisible();
 
   const persisted = await (await request.get(`/api/donors/${donor.id}`)).json();
-  expect(persisted.email).toBe("original-donor@example.test");
+  expect(persisted.email).toBeNull();
   const list = await (await request.get("/api/donors")).json();
   expect(list.filter((row: { name: string }) => row.name.trim().toLowerCase() === name.toLowerCase())).toHaveLength(1);
 
   await page.getByRole("button", { name: "Edit existing donor", exact: true }).click();
   await expect(page.getByTestId("text-edit-donor-heading")).toHaveText("Edit donor");
-  await expect(page.getByTestId("input-edit-donor-email")).toHaveValue("original-donor@example.test");
+  await expect(page.getByTestId("input-edit-donor-email")).toHaveValue("");
 });
 
 test("a lost existing-donor response cannot turn an edited retry into an update to that donor", async ({ page, request }) => {
@@ -95,7 +95,7 @@ test("a lost existing-donor response cannot turn an edited retry into an update 
   await page.goto("/donors");
   await page.getByTestId("button-add-donor").click();
   await page.getByTestId("input-edit-donor-name").fill(originalName);
-  await page.getByTestId("input-edit-donor-email").fill("unsaved-replay@example.test");
+  await page.getByTestId("input-edit-donor-email").fill("original-replay@example.test");
   await page.getByTestId("button-save-donor").click();
   await expect(page.getByText("Save failed", { exact: true })).toBeVisible();
   await page.getByTestId("input-edit-donor-name").fill(newName);
@@ -172,8 +172,9 @@ test("check-in refreshes a previously visited donor list and donation history", 
   await page.getByTestId("input-quantity-received").fill("4");
   await page.getByLabel("Source", { exact: true }).click();
   await page.getByRole("option", { name: "Donation", exact: true }).click();
-  await page.getByLabel("Donor / Partner", { exact: true }).click();
-  await page.getByRole("option", { name: donor.name, exact: true }).click();
+  await page.getByTestId("picker-donor").click();
+  await page.getByTestId("picker-donor-search").fill(donor.name);
+  await page.getByTestId(`picker-donor-option-donor:${donor.id}`).click();
   const [response] = await Promise.all([
     page.waitForResponse(isWrite("/api/transactions", "POST")),
     page.getByTestId("button-save-check-in").click(),

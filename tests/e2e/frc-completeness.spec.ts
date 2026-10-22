@@ -21,7 +21,7 @@ test('independent donor and partner exports retain new zero-activity directory e
 
 test('reviewed measurements preserve stock and product photos load on the student catalogue',async({page,request},info)=>{
   const rice=await item(request,unique('Reviewed rice 16oz'),false);await page.goto('/inventory');
-  const panel=page.getByTestId('inventory-quality');await panel.locator('summary').click();await page.getByLabel('Item to complete',{exact:true}).selectOption(rice.id);
+  const panel=page.getByTestId('inventory-quality');await panel.locator('summary').click();await page.getByLabel('Item to complete',{exact:true}).selectOption(rice.id);await panel.getByLabel('Correction scope',{exact:true}).selectOption('future_only');
   await expect(page.getByLabel('Reviewed weight per unit',{exact:true})).toHaveValue('1');
   await page.getByLabel('Reviewed estimated value per unit',{exact:true}).fill('2.35');await page.getByLabel('Value source',{exact:true}).fill('Synthetic test price on 2026-10-15');
   await page.getByRole('button',{name:'Save reviewed measurements',exact:true}).click();await expect(panel).toContainText('Saved. Current stock and historical transaction measurements were not changed.');
@@ -46,7 +46,7 @@ test('integration settings distinguish configuration from verified service opera
 // Query refetches must not overwrite typed values or advance the reviewed version.
 test('a concurrent item refresh preserves the measurement draft and refuses a stale save',async({page,request})=>{
   const rice=await item(request,unique('Concurrent rice 16oz'),false);await page.goto('/inventory');
-  const panel=page.getByTestId('inventory-quality');await panel.locator('summary').click();await page.getByLabel('Item to complete',{exact:true}).selectOption(rice.id);
+  const panel=page.getByTestId('inventory-quality');await panel.locator('summary').click();await page.getByLabel('Item to complete',{exact:true}).selectOption(rice.id);await panel.getByLabel('Correction scope',{exact:true}).selectOption('future_only');
   await page.getByLabel('Reviewed estimated value per unit',{exact:true}).fill('3.50');
   await page.getByLabel('Value source',{exact:true}).fill('Synthetic draft source kept during refresh');
   const concurrent=await request.patch(`/api/inventory/${rice.id}/measurements`,{data:{expectedUpdatedAt:rice.updatedAt,valuePerUnitUsd:2.80,valueSource:'Synthetic concurrent verified price',costIsEstimated:true}});expect(concurrent.status()).toBe(200);

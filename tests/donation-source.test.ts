@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   attributeDonor,
+  attributeDonorDetailed,
+  attributeInboundRows,
   buildSourceOptions,
+  donorsWithSharedNames,
   sourceFields,
   sourceNameOf,
 } from "@shared/donation-source";
@@ -14,9 +17,39 @@ describe("buildSourceOptions", () => {
       [{ id: "p1", name: "test pantry one", organization: "Test Org" }],
     );
     expect(options).toEqual([
-      { key: "donor:d1", kind: "donor", id: "d1", name: "Test Farm Two", organization: null },
-      { key: "partner:p1", kind: "partner", id: "p1", name: "test pantry one", organization: "Test Org" },
+      {
+        key: "donor:d1", kind: "donor", id: "d1", name: "Test Farm Two", organization: null,
+        identityLabel: "Donor", identifier: null, searchHints: [],
+      },
+      {
+        key: "partner:p1", kind: "partner", id: "p1", name: "test pantry one", organization: "Test Org",
+        identityLabel: "Partner organization", identifier: null, searchHints: [],
+      },
     ]);
+  });
+
+  it("lists student clients as a third kind, with their own identity label", () => {
+    const options = buildSourceOptions(
+      [],
+      [],
+      [{ id: "s1", name: "Test Student One", identifier: "TEST-1001", email: "student.one@example.test" }],
+    );
+    expect(options).toEqual([
+      {
+        key: "student:s1", kind: "student", id: "s1", name: "Test Student One", organization: null,
+        identityLabel: "Student or client", identifier: "TEST-1001",
+        searchHints: ["student.one@example.test"],
+      },
+    ]);
+  });
+
+  it("keeps a donor, a partner and a student with the same name as three options", () => {
+    const options = buildSourceOptions(
+      [{ id: "d1", name: "Same Name" }],
+      [{ id: "p1", name: "Same Name" }],
+      [{ id: "s1", name: "Same Name" }],
+    );
+    expect(options.map((o) => o.key)).toEqual(["donor:d1", "partner:p1", "student:s1"]);
   });
 
   it("keeps a donor and a partner with the same name as two options", () => {
@@ -69,9 +102,45 @@ describe("attributeDonor", () => {
     expect(attributeDonor({ clientId: "partner-1", donor: "Test Farm" }, donors)).toBeNull();
   });
 
-  it("falls back to a case blind name match for an old row, the active donor first", () => {
-    expect(attributeDonor({ donorId: null, donor: "  TEST FARM " }, donors)).toBe("d2");
+  it("falls back to a case blind name match when exactly one donor carries the name", () => {
     expect(attributeDonor({ donor: "other donor" }, donors)).toBe("d3");
+    expect(attributeDonor({ donorId: null, donor: "  OTHER DONOR " }, donors)).toBe("d3");
+  });
+
+  it("attributes nothing when two donor records share the name", () => {
+    // This replaces an earlier expectation that the active record was chosen.
+    // d1 and d2 both normalise to "test farm", so a row carrying only that
+    // name belongs to neither: picking one turned a tie-break into a claim on
+    // an individual's report. The row is reported as ambiguous instead and is
+    // counted by attributeInboundRows so the gap stays visible.
+    expect(attributeDonor({ donorId: null, donor: "  TEST FARM " }, donors)).toBeNull();
+    expect(attributeDonorDetailed({ donorId: null, donor: "Test Farm" }, donors)).toEqual({
+      kind: "ambiguous",
+      candidates: ["d1", "d2"],
+    });
+  });
+
+  it("counts what could not be attributed, so a total is never read as complete", () => {
+    const { byDonor, coverage } = attributeInboundRows(
+      [
+        { donorId: "d3", donor: "Other Donor" },
+        { donor: "Test Farm" },
+        { donor: "Nobody At All" },
+        { clientId: "partner-1", donor: "Test Farm" },
+      ],
+      donors,
+    );
+    expect([...byDonor.keys()]).toEqual(["d3"]);
+    expect(coverage).toEqual({
+      allocatedEntries: 1,
+      ambiguousLegacyEntries: 1,
+      unmatchedNameEntries: 1,
+      clientSourcedEntries: 1,
+    });
+  });
+
+  it("names the donor records whose shared name makes their own rows ambiguous", () => {
+    expect([...donorsWithSharedNames(donors)].sort()).toEqual(["d1", "d2"]);
   });
 
   it("attributes nothing when neither matches", () => {

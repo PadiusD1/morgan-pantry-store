@@ -52,6 +52,10 @@ export type BarcodeLookupResult =
       status: "not_found";
       barcode: string;
       logs: LookupLog[];
+      /** Why this code cannot identify a product, when that is the reason. */
+      identityProblem?: string;
+      /** A provider failed or was rate limited, so no-match is unproven. */
+      inconclusive?: boolean;
     };
 
 // Dev-only logger — stripped from production builds via Vite's import.meta.env.DEV

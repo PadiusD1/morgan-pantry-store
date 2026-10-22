@@ -1,3 +1,5 @@
+import { registerInventoryBarcodeRoutes } from './inventory-barcode';
+import { validSavedBarcode } from '@shared/barcode-input';
 import { productPhotoPath, inventoryPhotoMetadata } from "@shared/product-photo";
 import { notifyRequestUpdate } from "./email-delivery";
 import type { Express } from "express";
@@ -7,18 +9,23 @@ import { storage } from "./storage";
 import { pool } from "./pg";
 import { claimRequestKey, runIdempotent, saveRequestKey, sendClaim } from "./idempotency";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { clients as clientsTable, inventoryItems, stockAdjustments } from "@shared/schema";
+import { clients as clientsTable, donors as donorsTable, inventoryItems, stockAdjustments } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import { classificationProblem, createClientWork, transactionClassification } from "./client-create";
 import { CLASSIFICATIONS } from "@shared/checkout-identity";
 import { lookupBarcode } from "./barcode-lookup";
+import { CLIENT_IDENTITY_SCOPE, DONOR_IDENTITY_SCOPE, lockIdentityScope } from "./identity-lock";
+import { measurementRefusal, withoutUnchangedMeasurements } from "./measurement-guard";
+import { findItemByBarcodeForms, lockInventoryBarcode, withInventoryBarcodeQueue } from "./inventory-identity";
 import { candidateLookupOn, checkClientDuplicate } from "./client-duplicates";
-import { findOrCreateDonor } from "./donor-find-or-create";
+import { findOrCreateDonor, resolveDonor } from "./donor-find-or-create";
 import { donorStoreOn } from "./pg-storage";
-import { loadDonorHistory } from "./donor-history";
+import { hasUnlinkedDonorHistory, loadDonorHistory } from "./donor-history";
 import { applyTransactionStock } from "./transaction-stock";
+import { reviewedTransactionMeasurements } from "./reviewed-transaction-measurements";
 import { loadDashboardStats } from "./dashboard-stats";
-import { attributeDonor, buildSourceOptions, normaliseDonorName } from "@shared/donation-source";
+import { registerEntityReportRoutes } from "./entity-report";
+import { attributeDonor, attributeInboundRows, buildSourceOptions, donorsWithSharedNames, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
 import { LINE_QUANTITY_LIMIT_MESSAGE, isOverLineLimit } from "@shared/line-quantity";
@@ -198,16 +205,22 @@ function parseItemGroupItems(rawItems: unknown, groupId: string) {
 }
 
 export async function registerRoutes(app: Express): Promise<void> {
+  registerEntityReportRoutes(app);
+  registerInventoryBarcodeRoutes(app);
   // ─── Barcode Lookup ──────────────────────────────────────────────────
 
   app.get("/api/barcode-lookup/:code", async (req, res) => {
     const code = req.params.code?.trim();
     if (!code) return res.status(400).json({ message: "Barcode is required" });
-    if (!/^[0-9]{6,14}$/.test(code)) {
+    // Shape only. Whether the digits are a usable trade-item identifier is
+    // decided by the lookup, which can explain exactly what is wrong, and an
+    // item already saved under this code is resolved before that question
+    // matters at all.
+    if (!validSavedBarcode(code)) {
       return res.status(400).json({ message: "Invalid barcode format" });
     }
 
-    const existing = await storage.getInventoryItemByBarcode(code);
+    const existing = await withInventoryBarcodeQueue(code, (client) => findItemByBarcodeForms(client, code));
     if (existing) {
       return res.json({
         status: "exists",
@@ -231,49 +244,51 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (result.found && result.product) {
       const p = result.product;
 
-      // Race-safe: if another request already created this barcode, use existing.
-      let item;
-      try {
-        item = await storage.createInventoryItem({
-          name: p.name,
-          brand: p.brand,
-          category: p.category,
-          barcode: code,
-          quantity: 0,
+      // Two scanners reading the same tin as its UPC-A and its EAN-13 form
+      // both found nothing here and both inserted, because the unique index is
+      // on the exact text. The queue is keyed on the canonical GTIN and the
+      // existence check is re-run inside it, so the second scan finds the row
+      // the first one just made.
+      const created = await withInventoryBarcodeQueue(code, async (client) => {
+        const already = await findItemByBarcodeForms(client, code);
+        if (already) return { item: already, isNew: false };
+        const [row] = await drizzle(client)
+          .insert(inventoryItems)
+          .values({
+            name: p.name,
+            brand: p.brand,
+            category: p.category,
+            barcode: code,
+            quantity: 0,
 
-          packageType: p.packageType,
-          unitCount: p.unitCount,
+            packageType: p.packageType,
+            unitCount: p.unitCount,
 
-          weightPerUnitLbs: String(p.weightPerUnitLbs),
-          netWeightG: p.netWeightG,
-          unitWeightG: p.unitWeightG,
-          weightIsEstimated: p.weightIsEstimated,
+            weightPerUnitLbs: String(p.weightPerUnitLbs),
+            netWeightG: p.netWeightG,
+            unitWeightG: p.unitWeightG,
+            weightIsEstimated: p.weightIsEstimated,
 
-          valuePerUnitUsd: String(p.valuePerUnitUsd),
-          costCents: p.costCents,
-          costIsEstimated: p.costIsEstimated,
-          currency: p.currency,
+            valuePerUnitUsd: String(p.valuePerUnitUsd),
+            costCents: p.costCents,
+            costIsEstimated: p.costIsEstimated,
+            currency: p.currency,
 
-          allergens: p.allergens,
+            allergens: p.allergens,
 
-          dataSourcesTried: p.dataSourcesTried,
-          winningSource: p.winningSource,
-          matchConfidence: p.matchConfidence,
-          rawPayload: p.rawPayload,
-        });
-      } catch (err: any) {
-        if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
-          const existingItem = await storage.getInventoryItemByBarcode(code);
-          if (existingItem) {
-            return res.json({
-              status: "exists",
-              item: existingItem,
-              logs: result.logs,
-            });
-          }
-        }
-        throw err;
+            dataSourcesTried: p.dataSourcesTried,
+            winningSource: p.winningSource,
+            matchConfidence: p.matchConfidence,
+            rawPayload: p.rawPayload,
+          } as any)
+          .returning();
+        return { item: row, isNew: true };
+      });
+
+      if (!created.isNew) {
+        return res.json({ status: "exists", item: created.item, logs: result.logs });
       }
+      const item = created.item;
 
       if (p.packComponents && p.packComponents.length > 0) {
         for (const comp of p.packComponents) {
@@ -292,7 +307,7 @@ export async function registerRoutes(app: Express): Promise<void> {
           inventoryItemId: item.id,
           costCents: p.costCents,
           currency: p.currency,
-          source: p.winningSource,
+          source: p.priceProvenance.source,
         });
       }
 
@@ -300,7 +315,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         await storage.createWeightHistory({
           inventoryItemId: item.id,
           netWeightG: p.netWeightG,
-          source: p.winningSource,
+          source: p.weightProvenance.source,
           isEstimated: p.weightIsEstimated,
         });
       }
@@ -317,6 +332,11 @@ export async function registerRoutes(app: Express): Promise<void> {
       status: "not_found",
       barcode: code,
       logs: result.logs,
+      // Why there is no match, so the page can say "this is a store-local
+      // code, weigh the package" instead of "not recognized", and can avoid
+      // presenting an outage as a confirmed missing product.
+      ...(result.identityProblem ? { identityProblem: result.identityProblem } : {}),
+      ...(result.inconclusive ? { inconclusive: true } : {}),
     });
   });
 
@@ -341,6 +361,19 @@ export async function registerRoutes(app: Express): Promise<void> {
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
     await runIdempotent(req, res, async (client) => {
+      // The same queue as the scan path, so an item typed in by hand cannot
+      // race a scan of the other rendering of its barcode.
+      await lockInventoryBarcode(client, result.data.barcode);
+      const already = await findItemByBarcodeForms(client, result.data.barcode);
+      if (already) {
+        return {
+          status: 409,
+          body: {
+            message: `This barcode is already saved as "${already.name}". Open that item to receive stock against it.`,
+            existingId: already.id,
+          },
+        };
+      }
       const [item] = await drizzle(client).insert(inventoryItems).values(result.data).returning();
       return { status: 201, body: item };
     });
@@ -353,52 +386,81 @@ export async function registerRoutes(app: Express): Promise<void> {
         .status(400)
         .json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
-    if (result.data.quantity !== undefined) {
+    const itemId = req.params.id;
+    const touchesQuantity = result.data.quantity !== undefined;
+    const expected = req.body?.expectedQuantity;
+    if (touchesQuantity && (typeof expected !== "number" || !Number.isInteger(expected))) {
       // An absolute count only lands on the count it was read from (PLAN.md defect 4).
-      const expected = req.body?.expectedQuantity;
-      if (typeof expected !== "number" || !Number.isInteger(expected)) {
-        return res.status(400).json({ message: "This page is out of date. Reload and try again" });
-      }
-      const itemId = req.params.id;
-      const changes = result.data;
-      return runIdempotent(req, res, async (client) => {
-        const locked = await client.query(
-          `SELECT quantity FROM inventory_items WHERE id = $1 FOR UPDATE`,
-          [itemId],
-        );
-        if (locked.rowCount === 0) return { status: 404, body: { message: "Not found" } };
-        const before: number = locked.rows[0].quantity;
-        if (before !== expected) {
-          return {
-            status: 409,
-            body: { message: "The stock count changed. Reload and try again", quantity: before },
-          };
-        }
-        const db = drizzle(client);
-        const [item] = await db
-          .update(inventoryItems)
-          .set({ ...changes, updatedAt: new Date() })
-          .where(eq(inventoryItems.id, itemId))
-          .returning();
-        if (item.quantity !== before) {
-          await db.insert(stockAdjustments).values({
-            inventoryItemId: itemId,
-            delta: item.quantity - before,
-            quantityBefore: before,
-            quantityAfter: item.quantity,
-            reason: "edit",
-            userId: req.user?.id ?? null,
-          });
-        }
-        return { status: 200, body: item };
-      });
+      return res.status(400).json({ message: "This page is out of date. Reload and try again" });
     }
-    const updated = await storage.updateInventoryItem(
-      req.params.id,
-      result.data,
-    );
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    res.json(updated);
+
+    // Read, guard and write happen under one row lock.
+    //
+    // The measurement guard used to read the item before the transaction
+    // opened. Two staff saving at once could then interleave: one read an
+    // unreviewed weight and passed the guard, the other recorded a reviewed
+    // weight with its source, and the first write landed afterwards. The row
+    // ended up holding one person's figure under the other person's
+    // provenance, which is worse than either value alone. Holding the lock
+    // across the whole decision closes that window, and the quantity check
+    // already worked this way.
+    return runIdempotent(req, res, async (client) => {
+      // Every barcode writer takes the destination identity queue before any
+      // item row lock. Taking it after the row lock could deadlock two edits
+      // against a scanner creating the same canonical barcode.
+      await lockInventoryBarcode(client, result.data.barcode);
+      const db = drizzle(client);
+      const [before] = await db
+        .select()
+        .from(inventoryItems)
+        .where(eq(inventoryItems.id, itemId))
+        .for("update");
+      if (!before) return { status: 404, body: { message: "Not found" } };
+
+      if (result.data.barcode !== undefined) {
+        const owner = await findItemByBarcodeForms(client, result.data.barcode, before.id);
+        if (owner) return {
+          status: 409,
+          body: {
+            message: `This barcode is already saved as "${owner.name}". Open that item to receive stock against it.`,
+            existingId: owner.id,
+          },
+        };
+      }
+
+      // Check every patch, including evidence-only changes. Otherwise clearing
+      // rawPayload first removes the review marker and bypasses figure checks.
+      const refusal = measurementRefusal(before, result.data);
+      if (refusal) return { status: 409, body: { message: refusal } };
+      const changes = withoutUnchangedMeasurements(before, result.data);
+
+      if (touchesQuantity && before.quantity !== expected) {
+        return {
+          status: 409,
+          body: { message: "The stock count changed. Reload and try again", quantity: before.quantity },
+        };
+      }
+
+      const hasChange = Object.values(changes).some((value) => value !== undefined);
+      if (!hasChange) return { status: 200, body: before };
+
+      const [item] = await db
+        .update(inventoryItems)
+        .set({ ...changes, updatedAt: sql`GREATEST(clock_timestamp(), date_trunc('milliseconds', ${inventoryItems.updatedAt}) + interval '1 millisecond')` })
+        .where(eq(inventoryItems.id, itemId))
+        .returning();
+      if (item.quantity !== before.quantity) {
+        await db.insert(stockAdjustments).values({
+          inventoryItemId: itemId,
+          delta: item.quantity - before.quantity,
+          quantityBefore: before.quantity,
+          quantityAfter: item.quantity,
+          reason: "edit",
+          userId: req.user?.id ?? null,
+        });
+      }
+      return { status: 200, body: item };
+    });
   });
 
   const adjustSchema = z.object({
@@ -479,14 +541,17 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
 
     // Check out sends an Idempotency-Key, so a retry returns the first answer.
-    await runIdempotent(req, res, (client) =>
-      createClientWork(result.data, {
+    // Two devices registering the same person send two different keys, so the
+    // duplicate read and the insert are also serialised against each other.
+    await runIdempotent(req, res, async (client) => {
+      await lockIdentityScope(client, CLIENT_IDENTITY_SCOPE);
+      return createClientWork(result.data, {
         checkDuplicate: (data) => checkClientDuplicate(data, null, candidateLookupOn(client)),
         duplicateMessage,
         insert: async (data) => (await drizzle(client).insert(clientsTable).values(data).returning())[0],
         isUniqueViolation: (err) => pgErrorCode(err) === PG_UNIQUE_VIOLATION,
-      }),
-    );
+      });
+    });
   });
 
   app.patch("/api/clients/:id", async (req, res) => {
@@ -498,21 +563,71 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
     const classificationError = classificationProblem(result.data.classification);
     if (classificationError) return res.status(400).json({ message: classificationError });
-    const before = await storage.getClient(req.params.id);
-    if (!before) return res.status(404).json({ message: "Not found" });
-    const dup = await checkClientDuplicate({ ...before, ...result.data, id: before.id }, before);
-    if (dup.duplicate) {
-      return res.status(409).json({ message: duplicateMessage(dup.match), duplicateOf: dup.match.id });
+
+    // An edit can create a duplicate pair just as a create can, so the read
+    // and the write share the identity queue inside one transaction.
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const db = drizzle(client);
+      // The queue is taken before the read, so the stored fields the duplicate
+      // check compares cannot already be out of date by the time it runs.
+      await lockIdentityScope(client, CLIENT_IDENTITY_SCOPE);
+      const [before] = await db.select().from(clientsTable).where(eq(clientsTable.id, req.params.id));
+      if (!before) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Not found" });
+      }
+      if (result.data.name !== undefined && normaliseDonorName(result.data.name) !== normaliseDonorName(before.name) && await hasUnlinkedDonorHistory(client, before.name)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ message: "This source name is referenced by legacy donation history. Keep the name or reconcile those records before renaming; contact details and status can still be edited." });
+      }
+      const candidate = { ...before, ...result.data, id: before.id };
+      const dup = await checkClientDuplicate(candidate, before, candidateLookupOn(client));
+      if (dup.duplicate) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ message: duplicateMessage(dup.match), duplicateOf: dup.match.id });
+      }
+      // An empty patch leaves the stored record exactly as it is, matching the
+      // previous storage behaviour instead of writing an empty update.
+      const hasChange = Object.values(result.data).some((value) => value !== undefined);
+      const [updated] = hasChange
+        ? await db.update(clientsTable).set(result.data).where(eq(clientsTable.id, req.params.id)).returning()
+        : [before];
+      await client.query("COMMIT");
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      return res.json(updated);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
     }
-    const updated = await storage.updateClient(req.params.id, result.data);
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    res.json(updated);
   });
 
   app.delete("/api/clients/:id", async (req, res) => {
-    const deleted = await storage.deleteClient(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "Not found" });
-    res.json({ success: true });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await lockIdentityScope(client, CLIENT_IDENTITY_SCOPE);
+      const db = drizzle(client);
+      const [before] = await db.select().from(clientsTable).where(eq(clientsTable.id, req.params.id));
+      if (!before) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Not found" });
+      }
+      if (await hasUnlinkedDonorHistory(client, before.name)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ message: "This source name is referenced by legacy donation history. Make the client or partner inactive to preserve those records." });
+      }
+      await db.delete(clientsTable).where(eq(clientsTable.id, before.id));
+      await client.query("COMMIT");
+      return res.json({ success: true });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (pgErrorCode(err) === "23503") return res.status(409).json({ message: "This client or partner has linked history. Make the record inactive to preserve it." });
+      throw err;
+    } finally { client.release(); }
   });
 
   // ─── Transactions ────────────────────────────────────────────────────
@@ -630,6 +745,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         transactionId: txId,
         userId: req.user?.id ?? null,
       });
+      const measuredItems = await reviewedTransactionMeasurements(client, parsedItems, (d as any).timestamp);
 
       const txRow = (
         await client.query(
@@ -656,7 +772,7 @@ export async function registerRoutes(app: Express): Promise<void> {
       ).rows[0];
 
       const createdItems: Array<ReturnType<typeof mapTransactionItemRow>> = [];
-      for (const it of parsedItems) {
+      for (const it of measuredItems) {
         const insertedItem = (
           await client.query(
             `INSERT INTO transaction_items
@@ -1614,7 +1730,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   }
 
   app.get("/api/donors", async (_req, res) => {
-    const donors = await storage.getDonors();
+    const [donors, sourceClients] = await Promise.all([storage.getDonors(), storage.getClients()]);
 
     // Single aggregate query: one row per IN transaction with its item totals.
     // We match to donors in JS by donor_id OR donor name (the same OR the old
@@ -1637,15 +1753,16 @@ export async function registerRoutes(app: Express): Promise<void> {
       )
     ).rows;
 
-    // Each row goes to one donor, by donor_id, or by a case blind name for old rows.
-    const byDonor = new Map<string, any[]>();
-    for (const r of aggRows) {
-      const owner = attributeDonor({ donorId: r.donor_id, donor: r.donor_name, clientId: r.client_id }, donors as any[]);
-      if (!owner) continue;
-      const arr = byDonor.get(owner);
-      if (arr) arr.push(r);
-      else byDonor.set(owner, [r]);
-    }
+    // Each row goes to one donor, by donor_id, or by a case blind name when
+    // exactly one donor record carries that name. A name shared by several
+    // records belongs to none of them, and those rows are counted in the open
+    // in each donor's individual activity report rather than credited to whichever
+    // record happened to sort first.
+    const { byDonor } = attributeInboundRows(
+      aggRows.map((r: any) => ({ ...r, donorId: r.donor_id, donor: r.donor_name, clientId: r.client_id })),
+      donors as any[], sourceClients as any[],
+    );
+    const sharedNames = donorsWithSharedNames(donors as any[], sourceClients as any[]);
 
     const withStats = donors.map((d: any) => {
       const seen = new Set<string>();
@@ -1677,16 +1794,32 @@ export async function registerRoutes(app: Express): Promise<void> {
         totalWeightDonated: Math.round(totalWeight * 100) / 100,
         totalValueDonated: Math.round(totalValue * 100) / 100,
         lastDonationDate: lastTimestamp,
+        // A donor whose name is shared cannot have its own legacy rows told
+        // apart from the other record's. Surfaced so staff reconcile the two
+        // records rather than reading an incomplete total as complete.
+        hasAmbiguousName: sharedNames.has(d.id),
       };
     });
     res.json(withStats);
   });
 
-  // Who donated it, donors and partner organisations in one list for the picker.
+  /**
+   * Where stock came from: donors, partner organisations and student clients
+   * in one searchable list.
+   *
+   * Students belong here because they really do bring food in, and leaving them
+   * out meant such a delivery was recorded against nobody or against a
+   * look-alike donor row typed by hand. Including them changes no one's role:
+   * the direction of a movement lives on the transaction type, so a student
+   * named here is the source of an IN row and remains the recipient of their
+   * own OUT rows. Each option carries its kind and its identifier, so two
+   * records that share a name are never confused for one another.
+   */
   app.get("/api/donation-sources", async (_req, res) => {
     const [donors, clients] = await Promise.all([storage.getDonors(), storage.getClients()]);
     const partners = (clients as any[]).filter((c) => c.clientType === "partner");
-    res.json(buildSourceOptions(donors as any[], partners));
+    const students = (clients as any[]).filter((c) => !c.clientType || c.clientType === "student");
+    res.json(buildSourceOptions(donors as any[], partners, students));
   });
 
   app.get("/api/donors/:id/export", async (req, res) => {
@@ -1808,8 +1941,27 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: "Donor name is required" });
     }
     await runIdempotent(req, res, async (client) => {
-      const { donor, created } = await findOrCreateDonor(donorStoreOn(drizzle(client)), result.data);
-      return { status: created ? 201 : 200, body: donor };
+      // Donor names carry no uniqueness, so find-or-create is a read followed
+      // by an insert and needs the same queue as client creation.
+      await lockIdentityScope(client, DONOR_IDENTITY_SCOPE);
+      const resolution = await resolveDonor(donorStoreOn(drizzle(client)), result.data);
+      if (resolution.kind === "ambiguous") {
+        // A name alone cannot choose between these people, and crediting a
+        // donation to the wrong one would travel into every later report.
+        return {
+          status: 409,
+          body: {
+            message: resolution.reason,
+            candidates: resolution.candidates.map((donor) => ({
+              id: donor.id,
+              name: donor.name,
+              organization: donor.organization,
+              status: donor.status,
+            })),
+          },
+        };
+      }
+      return { status: resolution.kind === "created" ? 201 : 200, body: resolution.donor };
     });
   });
 
@@ -1818,28 +1970,87 @@ export async function registerRoutes(app: Express): Promise<void> {
     if (!result.success) {
       return res.status(400).json({ message: "Invalid data", errors: zodErrors(result.error) });
     }
-    const updated = await storage.updateDonor(req.params.id, result.data);
-    if (!updated) return res.status(404).json({ message: "Donor not found" });
-    res.json(updated);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // The same queue as donor creation, so a rename cannot race a create.
+      await lockIdentityScope(client, DONOR_IDENTITY_SCOPE);
+      const db = drizzle(client);
+      const [before] = await db.select().from(donorsTable).where(eq(donorsTable.id, req.params.id));
+      if (!before) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Donor not found" });
+      }
+      const nextName = result.data.name ?? before.name;
+      if (normaliseDonorName(nextName) !== normaliseDonorName(before.name)) {
+        // The old name is the only evidence on unlinked legacy donations.
+        // Removing it would detach sole matches or credit shared-name history
+        // to the remaining record. Reconciliation must be a deliberate action.
+        if (await hasUnlinkedDonorHistory(client, before.name)) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ message: "This donor name is referenced by legacy donation history. Keep the name or reconcile those records before renaming; contact details and status can still be edited." });
+        }
+        // Historical donations with no donor_id are attributed by name. Giving
+        // this donor another donor's name would make those rows ambiguous and
+        // silently detach them from both people, so the rename is refused with
+        // the reason rather than quietly rewriting history.
+        const clash = (
+          await donorStoreOn(db).findDonorsByNormalisedName(normaliseDonorName(nextName))
+        ).filter(
+          (donor) => donor.id !== before.id && normaliseDonorName(donor.name) === normaliseDonorName(nextName),
+        );
+        if (clash.length > 0) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            message: `Another donor is already named ${nextName}. Renaming this one would leave older donations recorded under that name belonging to neither record. Merge or rename the other donor first.`,
+            conflictsWith: clash.map((donor) => donor.id),
+          });
+        }
+      }
+      const hasChange = Object.values(result.data).some((value) => value !== undefined);
+      const [updated] = hasChange
+        ? await db.update(donorsTable).set(result.data).where(eq(donorsTable.id, req.params.id)).returning()
+        : [before];
+      await client.query("COMMIT");
+      if (!updated) return res.status(404).json({ message: "Donor not found" });
+      return res.json(updated);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   app.delete("/api/donors/:id", async (req, res) => {
+    const client = await pool.connect();
     try {
-      const donor = await storage.getDonor(req.params.id);
-      if (!donor) return res.status(404).json({ message: "Donor not found" });
-      // Legacy name-only donations have no foreign key to stop deletion.
-      // Preserve the history currently shown on this donor's page as well.
-      if ((await loadDonorHistory(pool, donor.id, donor.name)).length > 0) {
-        return res.status(409).json({ message: "This donor has donation history. Make the donor inactive to preserve those records." });
+      await client.query("BEGIN");
+      await lockIdentityScope(client, DONOR_IDENTITY_SCOPE);
+      const db = drizzle(client);
+      const [donor] = await db.select().from(donorsTable).where(eq(donorsTable.id, req.params.id));
+      if (!donor) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Donor not found" });
       }
-      const deleted = await storage.deleteDonor(req.params.id);
-      if (!deleted) return res.status(404).json({ message: "Donor not found" });
-      res.json({ success: true });
+      // Check raw legacy evidence, not allocated history: an ambiguous name
+      // currently owns no rows, but deleting it must not award those rows to
+      // another donor who happens to retain the same name.
+      if (await hasUnlinkedDonorHistory(client, donor.name) || (await loadDonorHistory(client, donor.id, donor.name)).length > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ message: "This donor has linked or legacy donation history. Make the donor inactive to preserve those records." });
+      }
+      await db.delete(donorsTable).where(eq(donorsTable.id, donor.id));
+      await client.query("COMMIT");
+      return res.json({ success: true });
     } catch (err: any) {
+      await client.query("ROLLBACK").catch(() => undefined);
       if (err?.code === "23503" || err?.cause?.code === "23503") {
         return res.status(409).json({ message: "This donor has donation history. Make the donor inactive to preserve those records." });
       }
       throw err;
+    } finally {
+      client.release();
     }
   });
 

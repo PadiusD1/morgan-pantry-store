@@ -22,7 +22,7 @@ import { z } from "zod";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { storage } from "./storage";
-import { checkClientDuplicate } from "./client-duplicates";
+import { syncRosterClient } from "./client-roster";
 import { GENERIC_DUPLICATE_MESSAGE } from "@shared/identity";
 import type { User } from "@shared/schema";
 
@@ -232,6 +232,7 @@ const ADMIN_RULES: PathRule[] = [
 // CSV/data exports, request approve/deny/fulfill decisions, and any deletion.
 const STAFF_WRITE_RULES: PathRule[] = [
   { method: "GET", pattern: /^\/api\/reports\/monthly-csv$/ },
+  { method: "GET", pattern: /^\/api\/reports\/entity\/(donor|partner|student)\/[^/]+\/export$/ },
   { method: "GET", pattern: /^\/api\/donors\/[^/]+\/export$/ },
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/approve$/ },
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/deny$/ },
@@ -435,25 +436,23 @@ export function registerAuthRoutes(app: Express): void {
       phone: phone ?? undefined,
     });
 
-    // Keep the pantry's client roster in sync so staff see the student
-    try {
-      const client = await storage.getClientByIdentifier(studentId);
-      const dup = client
-        ? null
-        : await checkClientDuplicate({ name, identifier: studentId, email, phone, clientType: "student" });
-      if (dup?.duplicate) {
-        console.warn(`[signup] roster sync skipped. ${GENERIC_DUPLICATE_MESSAGE}`);
-      } else if (!client) {
-        await storage.createClient({
-          name,
-          identifier: studentId,
-          email,
-          phone: phone ?? undefined,
-          clientType: "student",
-        } as any);
-      }
-    } catch {
-      // roster sync is best-effort; the account itself is what matters
+    // Keep the pantry's client roster in sync so staff see the student. This
+    // read and insert share the identity queue with the staff create and edit
+    // routes, so a signup racing a desk registration cannot make two records
+    // for one person.
+    const roster = await syncRosterClient({
+      name,
+      identifier: studentId,
+      email,
+      phone: phone ?? undefined,
+      clientType: "student",
+    } as any);
+    if (roster === "duplicate-person") {
+      console.warn(`[signup] roster sync skipped. ${GENERIC_DUPLICATE_MESSAGE}`);
+    } else if (roster === "failed") {
+      // The account itself is what the signup promised, so this stays warning
+      // only rather than failing a successful registration.
+      console.warn("[signup] roster sync could not be completed");
     }
 
     await issueSession(res, user);
