@@ -149,7 +149,7 @@ describe("Idempotency-Key on release one write routes", () => {
     ).toBe(1);
   });
 
-  it("a failed write leaves the key free so a retry succeeds", async () => {
+  it("a duplicate conflict leaves the key free so a retry succeeds", async () => {
     const blocker = await newItem("Test Blocker One", 0);
     await t.pool.query(`UPDATE inventory_items SET barcode = $1 WHERE id = $2`, [
       "5550000004",
@@ -157,13 +157,34 @@ describe("Idempotency-Key on release one write routes", () => {
     ]);
     const body = { name: "Test Oats One", barcode: "5550000004" };
     const failed = await post("/api/inventory", body, "key-retry-1");
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(409);
+    expect((await failed.json()).existingId).toBe(blocker);
     expect(
       await count(`SELECT count(*) AS n FROM idempotency_keys WHERE key = $1`, ["key-retry-1"]),
     ).toBe(0);
     await t.pool.query(`DELETE FROM inventory_items WHERE id = $1`, [blocker]);
     const retry = await post("/api/inventory", body, "key-retry-1");
     expect(retry.status).toBe(201);
+  });
+
+  it("a database write failure rolls back the key before a successful retry and replay", async () => {
+    const body = { name: "Synthetic database rejection", barcode: "5550000099" };
+    await t.pool.query("ALTER TABLE inventory_items ADD CONSTRAINT synthetic_reject_name CHECK (name <> 'Synthetic database rejection')");
+    try {
+      const failed = await post("/api/inventory", body, "key-database-retry");
+      expect(failed.status).toBe(500);
+      expect(await count("SELECT count(*) AS n FROM idempotency_keys WHERE key=$1", ["key-database-retry"])).toBe(0);
+      expect(await count("SELECT count(*) AS n FROM inventory_items WHERE barcode=$1", [body.barcode])).toBe(0);
+    } finally {
+      await t.pool.query("ALTER TABLE inventory_items DROP CONSTRAINT synthetic_reject_name");
+    }
+    const retry = await post("/api/inventory", body, "key-database-retry");
+    expect(retry.status).toBe(201);
+    const item = await retry.json();
+    const replay = await post("/api/inventory", body, "key-database-retry");
+    expect(replay.status).toBe(201);
+    expect((await replay.json()).id).toBe(item.id);
+    expect(await count("SELECT count(*) AS n FROM inventory_items WHERE barcode=$1", [body.barcode])).toBe(1);
   });
 
   it("a request without the header is still accepted", async () => {

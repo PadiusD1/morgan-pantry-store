@@ -54,9 +54,15 @@ describe("findOrCreateDonor", () => {
     expect(second.donor.id).toBe(first.donor.id);
   });
 
-  it("prefers an active donor over an inactive twin", async () => {
+  it("refuses to choose between an active donor and an inactive twin", async () => {
+    // This replaces an earlier expectation that the active record was taken.
+    // Status is not identity: an inactive record is still a person, so picking
+    // the active one was a guess about whose donation was being recorded, and
+    // that guess then travelled into every report and receipt. The caller is
+    // now told to choose. See the R10 review in tests/donor-identity.test.ts.
     const { store } = fakeStore([donor("d1", "Test Donor Four", "inactive"), donor("d2", "Test Donor Four")]);
-    const r = await findOrCreateDonor(store, { name: "Test Donor Four" } as InsertDonor);
-    expect(r.donor.id).toBe("d2");
+    await expect(findOrCreateDonor(store, { name: "Test Donor Four" } as InsertDonor)).rejects.toThrow(
+      /nothing here tells them apart/,
+    );
   });
 });

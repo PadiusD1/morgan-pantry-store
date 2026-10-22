@@ -21,7 +21,7 @@ async function resizePhoto(file: File): Promise<string> {
     return result;
   } finally { bitmap.close(); }
 }
-export function ProductPhotoEditor({ item }: { item: { id: string; name: string } }) {
+export function ProductPhotoEditor({ item, disabled = false, onSaved, onBusyChange }: { item: { id: string; name: string; updatedAt?: string }; disabled?: boolean; onSaved?: (updatedAt: string) => void; onBusyChange?: (busy: boolean) => void }) {
   const { user } = useAuth();
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -31,18 +31,20 @@ export function ProductPhotoEditor({ item }: { item: { id: string; name: string 
   return <section className="space-y-2 rounded border p-3">
     <h3 className="text-sm font-medium">Student-facing product photo</h3>
     <ProductPhoto item={{ ...item, imageUrl: `/api/public/inventory/${item.id}/photo?v=${version}` }} />
-    <label className="block text-sm">Upload the actual item or package<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} className="mt-2 block w-full text-sm" onChange={async e => {
+    <label className="block text-sm">Upload the actual item or package<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || disabled} className="mt-2 block w-full text-sm" onChange={async e => {
       const file = e.target.files?.[0]; if (!file) return;
-      setBusy(true); setMessage("");
+      setBusy(true); onBusyChange?.(true); setMessage("");
       try {
         const dataUrl = await resizePhoto(file);
-        await apiRequest("PUT", `/api/inventory/${item.id}/photo`, { dataUrl, description: item.name });
+        const response = await apiRequest("PUT", `/api/inventory/${item.id}/photo`, { dataUrl, description: item.name, ...(item.updatedAt ? { expectedUpdatedAt: item.updatedAt } : {}) });
+        const saved = await response.json();
         setVersion(Date.now());
         await client.invalidateQueries({ queryKey: ["/api/inventory"] });
         await client.invalidateQueries({ queryKey: ["/api/inventory/quality"] });
+        onSaved?.(saved.updatedAt);
         setMessage("Photo saved. Students will see it when the catalogue refreshes.");
       } catch (error) { setMessage(error instanceof Error ? error.message : "Photo could not be saved."); }
-      finally { setBusy(false); }
+      finally { setBusy(false); onBusyChange?.(false); e.target.value = ""; }
     }} /></label>
     <p className="text-xs text-muted-foreground">Product photos become public in the student catalogue. Do not upload people, IDs or paperwork. Photos are resized and camera metadata is removed before saving.</p>
     <p role="status" className="text-sm">{busy ? "Saving product photo…" : message}</p>

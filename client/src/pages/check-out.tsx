@@ -1,3 +1,5 @@
+import { useAutoBarcode } from '@/lib/auto-barcode';
+import { ItemNameInput } from '@/components/item-name-input';
 import { PartnerRegistrationDialog } from "@/components/partner-registration-dialog";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -84,6 +86,7 @@ export default function CheckOutPage() {
 
   const [cart, setCart] = useState<{ itemId: string; quantity: number }[]>([]);
   const [barcode, setBarcode] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
   const [scanLoading, setScanLoading] = useState(false);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
 
@@ -315,6 +318,7 @@ export default function CheckOutPage() {
   lookupRef.current = handleBarcodeScanned;
   const [scanQueue] = useState(() => createScanQueue((code) => lookupRef.current(code)));
   const tabEndsScan = useScanner(scanQueue.push);
+  const autoBarcode = useAutoBarcode(scanQueue.push);
   useEffect(() => {
     checkoutActive.current = true;
     return () => {
@@ -633,8 +637,15 @@ export default function CheckOutPage() {
                       <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="p-0 w-[--radix-popover-trigger-width] min-w-[320px]" align="start">
+                  {/* Capped to the viewport less the gutters; a fixed 320px minimum
+                      pushed the list off the side of a narrow phone. */}
+                  <PopoverContent
+                    className="w-[--radix-popover-trigger-width] max-w-[calc(100vw-2rem)] p-0"
+                    align="start"
+                    collisionPadding={8}
+                  >
                     <Command
+                      label="Clients and partners"
                       filter={(value, search) => {
                         // value is the option's `value` prop (we encode searchable text into it)
                         return value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
@@ -644,25 +655,9 @@ export default function CheckOutPage() {
                       <CommandList>
                         <CommandEmpty>
                           <div className="py-3 text-sm text-muted-foreground">
-                            No match. Use <strong>+ New client</strong> below to add them.
+                            No match. Use <strong>+ Register partner</strong> or <strong>+ New client</strong> below.
                           </div>
                         </CommandEmpty>
-                        <CommandGroup heading="Add">
-                          <CommandItem forceMount value="register new partner organization" data-testid="option-partner-new" onSelect={() => { setClientPickerOpen(false); setPartnerRegistrationOpen(true); }}>
-                            <Handshake className="mr-2 h-4 w-4" />+ Register partner
-                          </CommandItem>
-                          <CommandItem forceMount
-                            value="new client add"
-                            onSelect={() => {
-                              setClientFromId("new");
-                              setClientPickerOpen(false);
-                            }}
-                            data-testid="option-client-new"
-                          >
-                            <PlusCircle className="mr-2 h-4 w-4" />
-                            + New client
-                          </CommandItem>
-                        </CommandGroup>
                         {(() => {
                           const students = sortedClients.filter((c) => !c.clientType || c.clientType === "student");
                           const partners = sortedClients.filter((c) => c.clientType === "partner");
@@ -718,6 +713,31 @@ export default function CheckOutPage() {
                             </>
                           );
                         })()}
+                        {/*
+                          Registration comes after the saved records, and the
+                          group is kept mounted so it is still offered when a
+                          search matches nothing. Listed first it was the
+                          highlighted row, so typing the name of a partner who
+                          is already on file and pressing Enter opened the
+                          registration form instead of selecting them, which is
+                          how a second record for one organisation gets made.
+                        */}
+                        <CommandGroup forceMount heading="Not on the list">
+                          <CommandItem forceMount value="register new partner organization" data-testid="option-partner-new" onSelect={() => { setClientPickerOpen(false); setPartnerRegistrationOpen(true); }}>
+                            <Handshake className="mr-2 h-4 w-4" />+ Register partner
+                          </CommandItem>
+                          <CommandItem forceMount
+                            value="new client add"
+                            onSelect={() => {
+                              setClientFromId("new");
+                              setClientPickerOpen(false);
+                            }}
+                            data-testid="option-client-new"
+                          >
+                            <PlusCircle className="mr-2 h-4 w-4" />
+                            + New client
+                          </CommandItem>
+                        </CommandGroup>
                       </CommandList>
                     </Command>
                   </PopoverContent>
@@ -901,6 +921,9 @@ export default function CheckOutPage() {
                   Add item to cart
                 </label>
                 <div className="flex flex-wrap gap-2">
+                  <div className="w-full">
+                    <ItemNameInput aria-label="Search inventory to add to cart" placeholder="Type an item name, brand or barcode" value={itemSearch} items={sortedInventory} onChange={setItemSearch} onSelect={item => { void addToCart(item.id); setItemSearch(""); }} data-testid="input-checkout-item-search" />
+                  </div>
                   <Select onValueChange={(id) => addToCart(id)}>
                     <SelectTrigger id="item-select" className="min-w-0 flex-1" data-testid="select-cart-item">
                       <SelectValue placeholder="Choose item" />
@@ -919,12 +942,15 @@ export default function CheckOutPage() {
                       type="text"
                       placeholder="Scan barcode"
                       value={barcode}
-                      onChange={(e) => setBarcode(e.target.value)}
+                      onChange={(e) => { setBarcode(e.target.value); autoBarcode.changed(e.currentTarget, (e.nativeEvent as InputEvent).isComposing); }}
+                      onCompositionEnd={e => autoBarcode.changed(e.currentTarget)}
+                      aria-label="Scan barcode or QR code"
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || (e.key === "Tab" && tabEndsScan(e.currentTarget.value))) {
                           e.preventDefault();
                           const code = e.key === "Enter" ? barcode : e.currentTarget.value;
                           if (code.trim()) {
+                            autoBarcode.cancel();
                             scanQueue.push(code);
                             setBarcode("");
                           }
@@ -944,7 +970,7 @@ export default function CheckOutPage() {
                 <p className="text-[10px] text-muted-foreground">
                   {scanLoading
                     ? "Looking up barcode..."
-                    : "USB Scanner: Focus scan field and Enter. Auto-lookup enabled."}
+                    : "Focus the scan field and scan. Lookup starts automatically."}
                 </p>
               </div>
 

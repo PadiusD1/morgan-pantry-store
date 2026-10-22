@@ -49,8 +49,14 @@ describe("canonical partner and source records", () => {
     await cacheSavedPartner(cache, { id: "partner", name: "Same name", clientType: "partner" });
     await cacheSavedDonor(cache, { id: "donor", name: "Same name", createdAt: "2026-10-14", status: "active" });
     expect(cache.getQueryData(key)).toEqual([
-      { id: "donor", name: "Same name", kind: "donor", key: "donor:donor", organization: null },
-      { id: "partner", name: "Same name", kind: "partner", key: "partner:partner", organization: null },
+      {
+        id: "donor", name: "Same name", kind: "donor", key: "donor:donor", organization: null,
+        identityLabel: "Donor", identifier: null, searchHints: [],
+      },
+      {
+        id: "partner", name: "Same name", kind: "partner", key: "partner:partner", organization: null,
+        identityLabel: "Partner organization", identifier: null, searchHints: [],
+      },
     ]);
     stop(); cache.clear();
   });

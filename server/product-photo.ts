@@ -23,13 +23,13 @@ export function parsePhotoUpload(dataUrl: string): { bytes: Buffer; type: string
 export function registerProductPhotoRoutes(app: Express) {
   app.put("/api/inventory/:id/photo", requireRole("admin", "staff"), async (req, res) => {
     const id = z.string().uuid().safeParse(req.params.id);
-    const body = z.object({ dataUrl: z.string().max(250_000), description: z.string().trim().min(1).max(200) }).strict().safeParse(req.body);
+    const body = z.object({ dataUrl: z.string().max(250_000), description: z.string().trim().min(1).max(200), expectedUpdatedAt: z.string().datetime({ offset: true }).optional() }).strict().safeParse(req.body);
     if (!id.success || !body.success) return res.status(400).json({ message: "A valid item and product photo are required." });
     try { parsePhotoUpload(body.data.dataUrl); } catch (error) { return res.status(400).json({ message: (error as Error).message }); }
     const photo = { ...body.data, source: "Staff-supplied product photo", reviewedAt: new Date().toISOString(), reviewedBy: req.user!.id };
-    const { rowCount } = await pool.query(`UPDATE inventory_items SET raw_payload = COALESCE(raw_payload, '{}'::jsonb) || jsonb_build_object('frcPhoto', $2::jsonb), updated_at = GREATEST(clock_timestamp(),date_trunc('milliseconds',updated_at)+interval '1 millisecond') WHERE id = $1`, [id.data, JSON.stringify(photo)]);
-    if (!rowCount) return res.status(404).json({ message: "Item not found." });
-    return res.json({ saved: true, imageUrl: `/api/public/inventory/${id.data}/photo?v=${Date.now()}` });
+    const { rowCount, rows } = await pool.query(`UPDATE inventory_items SET raw_payload = COALESCE(raw_payload, '{}'::jsonb) || jsonb_build_object('frcPhoto', $2::jsonb), updated_at = GREATEST(clock_timestamp(),date_trunc('milliseconds',updated_at)+interval '1 millisecond') WHERE id = $1 AND ($3::timestamptz IS NULL OR date_trunc('milliseconds',updated_at) = $3::timestamptz) RETURNING updated_at`, [id.data, JSON.stringify(photo), body.data.expectedUpdatedAt ?? null]);
+    if (!rowCount) return res.status(409).json({ message: "This item changed or is no longer available. Refresh and review before uploading again." });
+    return res.json({ saved: true, updatedAt: new Date(rows[0].updated_at).toISOString(), imageUrl: `/api/public/inventory/${id.data}/photo?v=${Date.now()}` });
   });
   app.get("/api/public/inventory/:id/photo", async (req, res) => {
     const id = z.string().uuid().safeParse(req.params.id);

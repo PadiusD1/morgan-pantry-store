@@ -64,8 +64,8 @@ test("inline receiving reuses the newly registered partner for the next stock en
   await page.getByTestId("input-quantity-received").fill("2");
   await page.getByLabel("Source", { exact: true }).click();
   await page.getByRole("option", { name: "Donation", exact: true }).click();
-  await page.getByLabel("Donor / Partner", { exact: true }).click();
-  await page.getByRole("option", { name: "+ Register Donor / Partner", exact: true }).click();
+  await page.getByTestId("picker-donor").click();
+  await page.getByTestId("picker-donor-register-new").click();
   await page.getByTestId("select-inline-source-kind").selectOption("partner");
   await page.getByRole("textbox", { name: "New partner name", exact: true }).fill(name);
   const [first] = await Promise.all([page.waitForResponse(write("/api/transactions")), page.getByTestId("button-save-check-in").click()]);

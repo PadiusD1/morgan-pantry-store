@@ -22,6 +22,7 @@ import { newClientRecord } from "./new-client";
 import { sendClientUpdate } from "./client-update";
 import { loadGate } from "./load-gate";
 import { invalidateDonorData } from "./donor-cache";
+import { SHARED_RECORD_FRESHNESS } from "./shared-freshness";
 
 export type PackageType = "single" | "multi_pack" | "variety_pack" | "case";
 
@@ -263,14 +264,17 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
   // ── API queries ─────────────────────────────────────────────────────────
   const inventoryQuery = useQuery<ApiInventoryItem[]>({
     queryKey: ["/api/inventory"],
+    ...SHARED_RECORD_FRESHNESS,
   });
 
   const clientsQuery = useQuery<ApiClient[]>({
     queryKey: ["/api/clients"],
+    ...SHARED_RECORD_FRESHNESS,
   });
 
   const transactionsQuery = useQuery<ApiTransaction[]>({
     queryKey: ["/api/transactions"],
+    ...SHARED_RECORD_FRESHNESS,
   });
 
   // ── Adapted data ────────────────────────────────────────────────────────
