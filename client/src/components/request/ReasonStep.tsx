@@ -1,3 +1,4 @@
+import { ProductName } from "@/components/product-name";
 import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -110,7 +111,7 @@ export function ReasonStep({
                 {entries.map(([itemId, entry]) => (
                   <TableRow key={itemId} data-testid={`row-reason-item-${itemId}`}>
                     <TableCell className={isKiosk ? "text-base" : "text-sm"}>
-                      {entry.item.name}
+                      <ProductName item={entry.item} />
                     </TableCell>
                     <TableCell className={`text-right ${isKiosk ? "text-base" : "text-sm"}`}>
                       {entry.quantity}

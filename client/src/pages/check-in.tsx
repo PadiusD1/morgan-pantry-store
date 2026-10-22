@@ -1,3 +1,5 @@
+import { ProductName } from "@/components/product-name";
+import { productLabel } from "@shared/product-identity";
 import { useAutoBarcode } from '@/lib/auto-barcode';
 import { cacheSavedPartner } from "@/lib/partner-save";
 import { cacheSavedDonor } from "@/lib/donor-cache";
@@ -169,10 +171,10 @@ export default function CheckInPage() {
       if (result.status === "exists") {
         const item = toInventoryItem(result.item as ApiInventoryItem);
         selectScannedItem(item);
-        setScanState({ phase: "found-existing", itemName: item.name });
+        setScanState({ phase: "found-existing", itemName: productLabel(item) });
         toast({
           title: "Item already on file — merged",
-          description: `${item.name} (${item.quantity} on hand). Existing data populated. Scan again or confirm to record.`,
+          description: `${productLabel(item)} (${item.quantity} on hand). Existing data populated. Scan again or confirm to record.`,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         return;
@@ -190,13 +192,13 @@ export default function CheckInPage() {
         selectScannedItem(item);
         setScanState({
           phase: "found-created",
-          itemName: item.name,
+          itemName: productLabel(item),
           source: result.product.winningSource,
           product: result.product,
         });
         toast({
           title: "New item added automatically",
-          description: `${item.name} found via ${result.product.winningSource}. Quantity preset to 1 — adjust or scan again to add more.`,
+          description: `${productLabel(item)} found via ${result.product.winningSource}. Quantity preset to 1 — adjust or scan again to add more.`,
         });
         return;
       }
@@ -584,7 +586,7 @@ export default function CheckInPage() {
         {/* Enrichment details for selected existing item */}
         {mode === "existing" && selectedItem && (
           <div className="mb-4 p-3 bg-muted/50 rounded-lg border border-dashed" data-testid="text-selected-item-details">
-            <p className="mb-1 text-sm font-medium">{selectedItem.name}</p>
+            <p className="mb-1 text-sm font-medium"><ProductName item={selectedItem} /></p>
             <p className="mb-2 text-xs text-muted-foreground">{selectedItem.category} · {selectedItem.barcode || "No barcode"} · {selectedItem.quantity} on hand</p>
             <ItemEnrichmentDetails item={selectedItem} />
             {unmatchedBarcode && <div className="mt-2 text-sm" role="status"><p>Saving this check-in will remember scanned code {unmatchedBarcode} for {selectedItem.name}. An existing different code will not be replaced.</p><Button type="button" variant="outline" onClick={() => setUnmatchedBarcode("")}>Do not link this code</Button></div>}
@@ -641,13 +643,13 @@ export default function CheckInPage() {
                   if (picked) selectExistingItem(picked);
                 }}
               >
-                <SelectTrigger id="select-item" data-testid="select-existing-item">
+                <SelectTrigger id="select-item" className="h-auto min-h-11 whitespace-normal text-left [&>span]:line-clamp-none" data-testid="select-existing-item">
                   <SelectValue placeholder="Select an item" />
                 </SelectTrigger>
                 <SelectContent>
                   {itemChoices.map((item) => (
                     <SelectItem key={item.id} value={item.id} data-testid={`option-existing-item-${item.id}`}>
-                      {item.brand ? `${item.brand} - ` : ""}{item.name} • {item.quantity} on hand
+                      <ProductName item={item} /> <span className="text-xs text-muted-foreground">{item.quantity} on hand</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1002,7 +1004,6 @@ function EnrichmentBadges({ product }: { product: EnrichedProduct }) {
 function ItemEnrichmentDetails({ item }: { item: { brand?: string; packageType?: string; unitCount?: number; netWeightG?: number; unitWeightG?: number; weightIsEstimated?: boolean; weightPerUnitLbs?: number; costCents?: number; costIsEstimated?: boolean; valuePerUnitUsd?: number; winningSource?: string; matchConfidence?: number; currency?: string; allergens?: string[] } }) {
   const details: string[] = [];
 
-  if (item.brand) details.push(`Brand: ${item.brand}`);
 
   if (item.packageType && item.packageType !== "single") {
     details.push(`Package: ${item.packageType.replace(/_/g, " ")} (${item.unitCount ?? 1} units)`);

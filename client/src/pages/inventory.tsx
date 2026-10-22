@@ -1,3 +1,5 @@
+import { ProductName } from "@/components/product-name";
+import { matchesProduct } from "@shared/product-identity";
 import { InventoryQuality } from "@/components/inventory-quality";
 import { ProductPhotoEditor } from "@/components/product-photo-editor";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -47,9 +49,7 @@ export default function InventoryPage() {
         const q = query.trim().toLowerCase();
         const matchesQuery =
           !q ||
-          item.name.toLowerCase().includes(q) ||
-          (item.category || "Uncategorized").toLowerCase().includes(q) ||
-          (item.barcode && item.barcode.includes(q));
+          matchesProduct(item, q);
         return matchesCategory && matchesQuery;
       }),
     [inventory, query, categoryFilter],
@@ -133,7 +133,7 @@ export default function InventoryPage() {
               <SearchIcon className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
-                placeholder="Search by name, category, or barcode"
+                placeholder="Search by name, brand, category, or barcode"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="pl-8"
@@ -259,7 +259,7 @@ export default function InventoryPage() {
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium" data-testid={`text-item-name-${item.id}`}>
-                        {item.name}
+                        <ProductName item={item} />
                       </span>
                       {isLowStock(item) && (
                         <span className="text-[11px] text-amber-700" data-testid={`status-low-stock-${item.id}`}>

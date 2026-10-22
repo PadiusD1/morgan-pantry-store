@@ -14,7 +14,9 @@ test('checkout scans without Enter and searches saved names while typing', async
   await expect(page.getByTestId(`input-cart-quantity-${item.id}`)).toBeVisible();
   await expect(scan).toHaveValue('');
   const search = page.getByRole('combobox', { name: 'Search inventory to add to cart' });
-  await search.fill('Protein pancake');
+  // Other scenarios deliberately seed the same product name with different brands.
+  // Narrow to this unique product before exercising Enter selection.
+  await search.fill(name);
   await expect(page.getByRole('option', { name: new RegExp(name) })).toBeVisible();
   await search.press('Enter');
   await expect(page.getByTestId(`input-cart-quantity-${item.id}`)).toHaveValue('2');

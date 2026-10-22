@@ -1,3 +1,5 @@
+import { ProductName } from "@/components/product-name";
+import { matchesProduct } from "@shared/product-identity";
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
@@ -15,6 +17,7 @@ type ItemGroupItem = {
   groupId: string;
   inventoryItemId: string;
   name: string;
+  brand?: string | null;
   quantity?: number;
   defaultQuantity: number;
 };
@@ -45,7 +48,7 @@ export default function ItemGroupsPage() {
     id?: string;
     name: string;
     description: string;
-    items: { inventoryItemId: string; name: string; defaultQuantity: number }[];
+    items: { inventoryItemId: string; name: string; brand?: string | null; defaultQuantity: number }[];
   } | null>(null);
 
   const [itemSearch, setItemSearch] = useState("");
@@ -53,7 +56,7 @@ export default function ItemGroupsPage() {
   const filteredInventory = itemSearch.trim()
     ? inventory.filter(
         (i) =>
-          i.name.toLowerCase().includes(itemSearch.toLowerCase()) &&
+          matchesProduct(i, itemSearch) &&
           !editing?.items.some((ei) => ei.inventoryItemId === i.id),
       )
     : [];
@@ -179,7 +182,7 @@ export default function ItemGroupsPage() {
                       <div className="flex flex-wrap gap-1">
                         {g.items.map((item) => (
                           <Badge key={item.id} variant="secondary" className="text-[10px]">
-                            {item.name} x{item.defaultQuantity ?? item.quantity ?? 1}
+                            <ProductName item={item} /> ×{item.defaultQuantity ?? item.quantity ?? 1}
                           </Badge>
                         ))}
                         {g.items.length === 0 && (
@@ -201,6 +204,7 @@ export default function ItemGroupsPage() {
                               items: g.items.map((i) => ({
                                 inventoryItemId: i.inventoryItemId,
                                 name: i.name,
+                                brand: i.brand,
                                 defaultQuantity: i.defaultQuantity ?? i.quantity ?? 1,
                               })),
                             })
@@ -283,7 +287,7 @@ export default function ItemGroupsPage() {
                       key={item.inventoryItemId}
                       className="flex items-center gap-2 text-sm"
                     >
-                      <span className="flex-1 truncate">{item.name}</span>
+                      <span className="min-w-0 flex-1"><ProductName item={item} /></span>
                       <Input
                         type="number"
                         min={1}
@@ -356,6 +360,7 @@ export default function ItemGroupsPage() {
                                     {
                                       inventoryItemId: inv.id,
                                       name: inv.name,
+                                      brand: inv.brand,
                                       defaultQuantity: 1,
                                     },
                                   ],
@@ -365,7 +370,7 @@ export default function ItemGroupsPage() {
                           setItemSearch("");
                         }}
                       >
-                        <span>{inv.name}</span>
+                        <ProductName item={inv} />
                         <span className="text-xs text-muted-foreground">
                           {inv.quantity} in stock
                         </span>
