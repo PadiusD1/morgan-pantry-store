@@ -143,7 +143,7 @@ test("a checkout whose answer was lost is recorded once with its event when save
     await page.goto("/check-out");
     await expect(page.getByTestId("text-active-event")).toHaveText(event.name);
     let lost = false;
-    await page.route("**/api/transactions", async (route) => {
+    await context.route("**/api/transactions", async (route) => {
       if (route.request().method() === "POST" && !lost) {
         lost = true;
         await route.fetch();
