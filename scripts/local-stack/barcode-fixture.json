@@ -4,10 +4,11 @@
     "brand": "Test Pantry Brand",
     "category": "Grains",
     "description": "Synthetic product for the local stack",
-    "weightG": 907,
-    "weightUnit": "g",
+    "packageMassG": 907,
+    "packageBasis": "whole_package",
     "priceCents": 299,
     "currency": "USD",
+    "priceObservedAt": "2026-10-01",
     "allergens": []
   },
   "2000000100024": {
@@ -15,10 +16,11 @@
     "brand": "Test Pantry Brand",
     "category": "Canned Goods",
     "description": "Synthetic product for the local stack",
-    "weightG": 425,
-    "weightUnit": "g",
+    "packageMassG": 425,
+    "packageBasis": "whole_package",
     "priceCents": 119,
     "currency": "USD",
+    "priceObservedAt": "2026-10-01",
     "allergens": []
   },
   "2000000100031": {
@@ -26,10 +28,24 @@
     "brand": "Test Snack Brand",
     "category": "Snacks",
     "description": "Synthetic product for the local stack",
-    "weightG": 504,
-    "weightUnit": "g",
+    "packageMassG": 42,
+    "packageBasis": "single_unit",
+    "unitCountHint": 12,
     "priceCents": 549,
     "currency": "USD",
+    "priceObservedAt": "2026-10-01",
     "allergens": ["oats", "almonds"]
+  },
+  "012345678905": {
+    "name": "Test Pasta 1 lb",
+    "brand": "Test Pantry Brand",
+    "category": "Grains",
+    "description": "Synthetic product on a valid UPC-A, for identity-gate tests",
+    "packageMassG": 454,
+    "packageBasis": "whole_package",
+    "priceCents": 179,
+    "currency": "USD",
+    "priceObservedAt": "2026-10-01",
+    "allergens": ["wheat"]
   }
 }

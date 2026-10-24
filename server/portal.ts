@@ -1,3 +1,6 @@
+import { accountNotifications, markAccountNotificationsRead, ownsPortalRequest } from "./portal-ownership";
+import { notifyRequestUpdate } from "./email-delivery";
+import { captureOperationalEvent } from "./integration-config";
 /**
  * Student portal — session-scoped endpoints under /api/portal/*.
  * The apiGuard restricts students to exactly these paths; identity always
@@ -30,40 +33,20 @@ const portalRequestSchema = z.object({
     .max(50),
 });
 
-/** All requests belonging to the session user (by account id or student ID). */
+/** Typed roster identifiers never grant access to another account's requests. */
 async function ownRequests(req: Request): Promise<any[]> {
-  const user = req.user!;
-  const byUser = await storage.getRequestsByUserId(user.id);
-  const byIdentifier = user.studentId
-    ? await storage.getRequestsByClientIdentifier(user.studentId)
-    : [];
-  const seen = new Set<string>();
-  const merged = [...byUser, ...byIdentifier].filter((r) => {
-    if (seen.has(r.id)) return false;
-    seen.add(r.id);
-    return true;
-  });
-  merged.sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
-  return merged;
+  return storage.getRequestsByUserId(req.user!.id);
 }
 
 function ownsRequest(req: Request, request: any): boolean {
-  const user = req.user!;
-  return (
-    (request.userId && request.userId === user.id) ||
-    (user.studentId && request.clientIdentifier === user.studentId)
-  );
+  return ownsPortalRequest(req.user!.id, request);
 }
 
 export function registerPortalRoutes(app: Express): void {
   // Session summary for the portal header
   app.get("/api/portal/me/summary", async (req, res) => {
     const user = req.user!;
-    const unreadNotifications = user.studentId
-      ? await storage.getUnreadNotificationCount(user.studentId)
-      : 0;
+    const unreadNotifications = (await accountNotifications(user.id)).filter(n => !n.read).length;
     res.json({ user, unreadNotifications });
   });
 
@@ -119,6 +102,7 @@ export function registerPortalRoutes(app: Express): void {
         },
         user.name,
       );
+      await Promise.all([notifyRequestUpdate(payload.id), captureOperationalEvent("food_request_submitted")]);
       res.status(201).json(payload);
     } catch (err) {
       if (err instanceof RequestRateLimitError) {
@@ -156,31 +140,21 @@ export function registerPortalRoutes(app: Express): void {
     res.json(await getRequestPayload(req.params.id));
   });
 
-  // My notifications
+  // Account-scoped notifications, including the read mutations.
   app.get("/api/portal/notifications", async (req, res) => {
-    const user = req.user!;
-    if (!user.studentId) return res.json([]);
-    res.json(await storage.getNotifications(user.studentId));
+    res.json(await accountNotifications(req.user!.id));
   });
 
   app.post("/api/portal/notifications/:id/read", async (req, res) => {
-    // Scope check: the notification must belong to this student
-    const user = req.user!;
-    if (user.studentId) {
-      const own = await storage.getNotifications(user.studentId);
-      if (!own.some((n: any) => n.id === req.params.id)) {
-        return res.status(404).json({ message: "Notification not found" });
-      }
-    }
-    await storage.markNotificationRead(req.params.id);
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) return res.status(404).json({ message: "Notification not found" });
+    const updated = await markAccountNotificationsRead(req.user!.id, id.data);
+    if (!updated.length) return res.status(404).json({ message: "Notification not found" });
     res.json({ success: true });
   });
 
   app.post("/api/portal/notifications/read-all", async (req, res) => {
-    const user = req.user!;
-    if (user.studentId) {
-      await storage.markAllNotificationsRead(user.studentId);
-    }
+    await markAccountNotificationsRead(req.user!.id);
     res.json({ success: true });
   });
 }

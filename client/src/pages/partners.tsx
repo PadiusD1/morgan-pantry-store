@@ -1,3 +1,4 @@
+import { DirectoryReport } from "@/components/directory-report";
 import React, { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
@@ -223,6 +224,7 @@ export default function PartnersPage() {
         </CardContent>
       </Card>
 
+      <DirectoryReport kind="partner" records={filtered} />
       <Card className="glass-panel" data-testid="card-partners-table">
         <CardHeader className="py-3 px-4 border-b border-border/80">
           <CardTitle className="section-heading flex items-center justify-between">

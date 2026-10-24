@@ -1,3 +1,4 @@
+import { ProductName } from "@/components/product-name";
 import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
@@ -71,7 +72,7 @@ export default function DashboardPage() {
       <Card className="glass-panel" data-testid="card-low-stock">
         <CardHeader className="flex flex-row items-center justify-between py-4 px-4 border-b border-border"><CardTitle className="section-heading">Low stock alerts</CardTitle><Badge variant="outline" className="text-[11px]" data-testid="badge-low-stock-count">{lowStockItems.length} shown</Badge></CardHeader>
         <CardContent className="p-0">{lowStockItems.length === 0 ? <div className="py-6 px-4 text-sm text-muted-foreground" data-testid="text-no-low-stock">No items are currently below their reorder threshold.</div> : <Table><TableHeader><TableRow><TableHead>Item</TableHead><TableHead>Category</TableHead><TableHead className="text-right">On hand</TableHead></TableRow></TableHeader><TableBody>{lowStockItems.map(item => <TableRow key={item.id} className="low-stock-row" data-testid={`row-low-stock-${item.id}`}>
-          <TableCell><span className="text-sm font-medium" data-testid={`text-low-stock-name-${item.id}`}>{item.name}</span></TableCell><TableCell className="text-xs text-muted-foreground" data-testid={`text-low-stock-category-${item.id}`}>{item.category || "Uncategorized"}</TableCell><TableCell className="text-right text-sm font-semibold" data-testid={`text-low-stock-quantity-${item.id}`}>{item.quantity}</TableCell>
+          <TableCell><span className="text-sm font-medium" data-testid={`text-low-stock-name-${item.id}`}><ProductName item={item} /></span></TableCell><TableCell className="text-xs text-muted-foreground" data-testid={`text-low-stock-category-${item.id}`}>{item.category || "Uncategorized"}</TableCell><TableCell className="text-right text-sm font-semibold" data-testid={`text-low-stock-quantity-${item.id}`}>{item.quantity}</TableCell>
         </TableRow>)}</TableBody></Table>}</CardContent>
         <div className="px-4 py-3 border-t border-border"><Link href="/inventory" className="text-xs font-semibold text-primary">Review inventory <span aria-hidden="true">→</span></Link></div>
       </Card>

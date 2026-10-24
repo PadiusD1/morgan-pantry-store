@@ -1,3 +1,4 @@
+import { IntegrationStatus } from "@/components/integration-status";
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository } from "@/lib/repository";
@@ -91,6 +92,7 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-4 max-w-2xl">
+      <IntegrationStatus />
       <Card className="glass-panel" data-testid="card-org-settings">
         <CardHeader className="py-3 px-4 border-b border-border/80">
           <CardTitle className="section-heading flex items-center gap-1.5">

@@ -1,3 +1,4 @@
+import { ProductName } from "@/components/product-name";
 import React, { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -180,14 +181,14 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
     <div className={`min-h-screen bg-background ${isKiosk ? "text-xl" : ""}`}>
       {/* Header */}
       <div className="bg-primary text-primary-foreground px-4 py-3 flex items-center gap-3">
-        <PackageIcon className="h-6 w-6" />
-        <div className="min-w-0">
+        <PackageIcon className="h-6 w-6 shrink-0" />
+        <div className="min-w-0 flex-1">
           <h1 className="font-semibold text-lg">Morgan State FRC</h1>
           <p className="text-xs opacity-80">Food Resource Center - Item Request</p>
         </div>
         {isStudent && user && (
-          <div className="ml-auto flex items-center gap-2 min-w-0">
-            <span className="text-xs opacity-90 truncate hidden sm:inline" data-testid="text-portal-user">
+          <div className="ml-auto flex items-center gap-2 min-w-0 shrink-0">
+            <span className="max-w-32 text-xs opacity-90 truncate hidden sm:inline" data-testid="text-portal-user">
               {user.name}
             </span>
             <Button
@@ -294,7 +295,7 @@ export default function PublicRequestPage({ variant = "default" }: { variant?: "
                   <p className="text-xs font-medium text-muted-foreground uppercase">Items ({cart.size})</p>
                   {Array.from(cart.entries()).map(([id, entry]) => (
                     <div key={id} className="flex justify-between text-sm py-1 border-b border-border/50">
-                      <span>{entry.item.name}</span>
+                      <span><ProductName item={entry.item} /></span>
                       <span className="text-muted-foreground">x{entry.quantity}</span>
                     </div>
                   ))}

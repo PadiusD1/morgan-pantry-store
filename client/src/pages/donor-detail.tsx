@@ -1,4 +1,5 @@
 import React from "react";
+import { SHARED_RECORD_FRESHNESS } from "@/lib/shared-freshness";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { donorKeys, type DonorRecord as Donor } from "@/lib/donor-cache";
@@ -46,11 +47,15 @@ export default function DonorDetailPage() {
   const { data: donor, isLoading: loadingDonor, isError: donorError, refetch: refetchDonor } = useQuery<Donor>({
     queryKey: donorKeys.detail(donorId ?? ""),
     enabled: !!donorId,
+    // An individual record and its history are canonical shared data, so they
+    // carry the same bounded freshness as the directory lists.
+    ...SHARED_RECORD_FRESHNESS,
   });
 
   const { data: history = [], isLoading: loadingHistory, isError: historyError, refetch: refetchHistory } = useQuery<DonationHistoryItem[]>({
     queryKey: donorKeys.history(donorId ?? ""),
     enabled: !!donorId,
+    ...SHARED_RECORD_FRESHNESS,
   });
 
   const stats: DonorStats = React.useMemo(() => {

@@ -1,3 +1,4 @@
+import { matchesProduct } from "@shared/product-identity";
 import React, { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -43,11 +44,7 @@ export function ItemBrowser({
         return false;
       }
 
-      if (term) {
-        const nameMatch = (item.name ?? "").toLowerCase().includes(term);
-        const catMatch = (item.category ?? "").toLowerCase().includes(term);
-        if (!nameMatch && !catMatch) return false;
-      }
+      if (!matchesProduct(item, term)) return false;
 
       return true;
     });
@@ -60,7 +57,8 @@ export function ItemBrowser({
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search items..."
+          placeholder="Search item names or brands..."
+          aria-label="Search item names or brands"
           className={`pl-9 ${isKiosk ? "h-14 text-lg" : ""}`}
           data-testid="input-item-search"
         />

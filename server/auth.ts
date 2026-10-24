@@ -1,3 +1,4 @@
+import { integrationConfig, verifyTurnstile } from "./integration-config";
 /**
  * Authentication & authorization.
  *
@@ -21,7 +22,7 @@ import { z } from "zod";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { storage } from "./storage";
-import { checkClientDuplicate } from "./client-duplicates";
+import { syncRosterClient } from "./client-roster";
 import { GENERIC_DUPLICATE_MESSAGE } from "@shared/identity";
 import type { User } from "@shared/schema";
 
@@ -217,6 +218,7 @@ const PUBLIC_RULES: PathRule[] = [
   { method: "GET", pattern: /^\/api\/health$/ },
   { pattern: /^\/api\/auth\// },
   { method: "GET", pattern: /^\/api\/public\/inventory$/ },
+  { method: "GET", pattern: /^\/api\/public\/inventory\/[a-f0-9-]+\/photo$/i },
 ];
 
 const ADMIN_RULES: PathRule[] = [
@@ -230,6 +232,7 @@ const ADMIN_RULES: PathRule[] = [
 // CSV/data exports, request approve/deny/fulfill decisions, and any deletion.
 const STAFF_WRITE_RULES: PathRule[] = [
   { method: "GET", pattern: /^\/api\/reports\/monthly-csv$/ },
+  { method: "GET", pattern: /^\/api\/reports\/entity\/(donor|partner|student)\/[^/]+\/export$/ },
   { method: "GET", pattern: /^\/api\/donors\/[^/]+\/export$/ },
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/approve$/ },
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/deny$/ },
@@ -362,6 +365,10 @@ async function ensureAdminSeed(): Promise<void> {
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 export function registerAuthRoutes(app: Express): void {
+  app.get("/api/auth/security-config", (_req, res) => {
+    const { required, ready, siteKey } = integrationConfig().turnstile;
+    res.json({ required, ready, siteKey });
+  });
   // Sign in (all roles)
   app.post("/api/auth/login", async (req, res) => {
     const parsed = loginSchema.safeParse(req.body);
@@ -380,6 +387,7 @@ export function registerAuthRoutes(app: Express): void {
       return res.status(429).json({ message: "Too many attempts. Try again in a few minutes." });
     }
 
+    if (!(await verifyTurnstile(req.body?.turnstileToken, "login"))) return res.status(403).json({ message: "Complete a new security check and try again." });
     await ensureAdminSeed();
 
     const user = await storage.getUserByEmail(email);
@@ -412,6 +420,8 @@ export function registerAuthRoutes(app: Express): void {
       return res.status(429).json({ message: "Too many attempts. Try again in a few minutes." });
     }
 
+    if (!(await verifyTurnstile(req.body?.turnstileToken, "signup"))) return res.status(403).json({ message: "Complete a new security check and try again." });
+
     const existing = await storage.getUserByEmail(email);
     if (existing) {
       return res.status(409).json({ message: "An account with this email already exists. Sign in instead." });
@@ -426,25 +436,23 @@ export function registerAuthRoutes(app: Express): void {
       phone: phone ?? undefined,
     });
 
-    // Keep the pantry's client roster in sync so staff see the student
-    try {
-      const client = await storage.getClientByIdentifier(studentId);
-      const dup = client
-        ? null
-        : await checkClientDuplicate({ name, identifier: studentId, email, phone, clientType: "student" });
-      if (dup?.duplicate) {
-        console.warn(`[signup] roster sync skipped. ${GENERIC_DUPLICATE_MESSAGE}`);
-      } else if (!client) {
-        await storage.createClient({
-          name,
-          identifier: studentId,
-          email,
-          phone: phone ?? undefined,
-          clientType: "student",
-        } as any);
-      }
-    } catch {
-      // roster sync is best-effort; the account itself is what matters
+    // Keep the pantry's client roster in sync so staff see the student. This
+    // read and insert share the identity queue with the staff create and edit
+    // routes, so a signup racing a desk registration cannot make two records
+    // for one person.
+    const roster = await syncRosterClient({
+      name,
+      identifier: studentId,
+      email,
+      phone: phone ?? undefined,
+      clientType: "student",
+    } as any);
+    if (roster === "duplicate-person") {
+      console.warn(`[signup] roster sync skipped. ${GENERIC_DUPLICATE_MESSAGE}`);
+    } else if (roster === "failed") {
+      // The account itself is what the signup promised, so this stays warning
+      // only rather than failing a successful registration.
+      console.warn("[signup] roster sync could not be completed");
     }
 
     await issueSession(res, user);

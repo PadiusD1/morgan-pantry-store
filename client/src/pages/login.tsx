@@ -1,3 +1,4 @@
+import { TurnstileChallenge } from "@/components/turnstile-challenge";
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [securityToken, setSecurityToken] = useState<string | undefined>(undefined);
+  const [securityReset, setSecurityReset] = useState(0);
 
   useEffect(() => {
     if (!isLoading && user) {
@@ -22,15 +25,18 @@ export default function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (securityToken === undefined) return;
     if (submitting || !email.trim() || !password) return;
     setError(null);
     setSubmitting(true);
     try {
-      const signedIn = await login({ email: email.trim(), password });
+      const signedIn = await login({ email: email.trim(), password, turnstileToken: securityToken });
       navigate(homePathForRole(signedIn.role), { replace: true });
     } catch (err: unknown) {
       setError(apiErrorMessage(err, "Unable to sign in. Please try again."));
       setSubmitting(false);
+      setSecurityToken(undefined);
+      setSecurityReset(value => value + 1);
     }
   }
 
@@ -108,10 +114,11 @@ export default function LoginPage() {
                 />
               </div>
 
+              <TurnstileChallenge action="login" reset={securityReset} onToken={setSecurityToken} />
               <Button
                 type="submit"
                 className="w-full"
-                disabled={submitting || !email.trim() || !password}
+                disabled={submitting || securityToken === undefined || !email.trim() || !password}
                 data-testid="button-login-submit"
               >
                 {submitting ? (

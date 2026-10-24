@@ -60,7 +60,7 @@ export async function applyTransactionStock(
       }
     }
     await client.query(
-      `UPDATE inventory_items SET quantity = $1, updated_at = now() WHERE id = $2`,
+      `UPDATE inventory_items SET quantity = $1, updated_at = GREATEST(clock_timestamp(),date_trunc('milliseconds',updated_at)+interval '1 millisecond') WHERE id = $2`,
       [type === "IN" ? quantity + units : quantity - units, item.id],
     );
   }

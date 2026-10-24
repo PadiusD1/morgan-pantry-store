@@ -1,15 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { OPEN_PICKER_FRESHNESS } from "@/lib/shared-freshness";
 import { sourceFields, type SourceFields, type SourceOption } from "@shared/donation-source";
 
 export type { SourceOption, SourceFields };
 
 /**
- * Donors and partners in one list, from the server. Refetched on every mount,
- * because the Donors and Partners pages invalidate their own keys, not this one.
+ * Donors, partner organisations and student clients in one list, from the
+ * server. Always refetched on mount, because the Donors and Partners pages
+ * invalidate their own keys and not this one, and on the shared bounded timer,
+ * so a picker left open converges on a record another device just created.
  */
 export function useDonationSources() {
-  return useQuery<SourceOption[]>({ queryKey: ["/api/donation-sources"], staleTime: 0, refetchOnMount: true, refetchOnWindowFocus: true });
+  return useQuery<SourceOption[]>({ queryKey: ["/api/donation-sources"], ...OPEN_PICKER_FRESHNESS });
 }
 
 /** A pick from the list, or a new donor name typed inline. */

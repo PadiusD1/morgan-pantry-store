@@ -1,3 +1,7 @@
+import { ProductName } from "@/components/product-name";
+import { matchesProduct } from "@shared/product-identity";
+import { InventoryQuality } from "@/components/inventory-quality";
+import { ProductPhotoEditor } from "@/components/product-photo-editor";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRepository, InventoryItem, isLowStock, suggestCategory, learnCategoryAssociation } from "@/lib/repository";
@@ -11,6 +15,7 @@ import { useSaveGuard } from "@/lib/save-guard";
 import { importRow, runItemSave } from "@/lib/item-action";
 import { donorFieldsFromRecorded, failureToastSlot, importFailureText, inventoryEarlierNote, inventoryFailureToast, inventorySuccessToast } from "@/lib/inventory-save";
 import { pickFields, postDonor, useDonationSources, type DonorPick, type SourceFields } from "@/lib/donation-source";
+import { SourcePicker } from "@/components/source-picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -44,9 +49,7 @@ export default function InventoryPage() {
         const q = query.trim().toLowerCase();
         const matchesQuery =
           !q ||
-          item.name.toLowerCase().includes(q) ||
-          (item.category || "Uncategorized").toLowerCase().includes(q) ||
-          (item.barcode && item.barcode.includes(q));
+          matchesProduct(item, q);
         return matchesCategory && matchesQuery;
       }),
     [inventory, query, categoryFilter],
@@ -122,6 +125,7 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
+      <InventoryQuality />
       <Card className="glass-panel" data-testid="card-inventory-filters">
         <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-1 items-center gap-2">
@@ -129,7 +133,7 @@ export default function InventoryPage() {
               <SearchIcon className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
-                placeholder="Search by name, category, or barcode"
+                placeholder="Search by name, brand, category, or barcode"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="pl-8"
@@ -255,7 +259,7 @@ export default function InventoryPage() {
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium" data-testid={`text-item-name-${item.id}`}>
-                        {item.name}
+                        <ProductName item={item} />
                       </span>
                       {isLowStock(item) && (
                         <span className="text-[11px] text-amber-700" data-testid={`status-low-stock-${item.id}`}>
@@ -338,7 +342,8 @@ function InventoryEditDialog({
   const isNew = !item.id;
   const { inventory } = useRepository();
   const queryClient = useQueryClient();
-  const { data: donorOptions = [] } = useDonationSources();
+  const donorSources = useDonationSources();
+  const donorOptions = donorSources.data ?? [];
   const [form, setForm] = useState({
     ...itemEntryFields(item),
     // extra fields for new item check-in
@@ -678,32 +683,32 @@ function InventoryEditDialog({
                      <div className="relative">
                         <div className="absolute -left-[21px] top-[14px] w-4 h-px bg-indigo-200"></div>
                         <label className="text-sm font-medium" htmlFor="donor">
-                            Donor
+                            Source record (donor, partner or student)
                         </label>
                       </div>
                       <div className="flex gap-2">
                         {!isNewDonor ? (
-                            <Select value={form.donor} onValueChange={(val) => {
-                                if (val === "new_donor_custom") {
-                                    setIsNewDonor(true);
-                                    setForm(p => ({...p, donor: ""}));
-                                } else {
-                                    setForm(p => ({...p, donor: val}));
-                                }
-                            }}>
-                                <SelectTrigger id="donor">
-                                    <SelectValue placeholder="Select Donor" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {donorOptions.map(d => (
-                                      <SelectItem key={d.key} value={d.key}>
-                                        {d.organization ? `${d.name} (${d.organization})` : d.name}
-                                        {d.kind === "partner" ? " · Partner org" : ""}
-                                      </SelectItem>
-                                    ))}
-                                    <SelectItem value="new_donor_custom">+ Add New Donor</SelectItem>
-                                </SelectContent>
-                            </Select>
+                            <div className="min-w-0 flex-1">
+                              <SourcePicker
+                                id="donor"
+                                options={donorOptions}
+                                isLoading={donorSources.isLoading}
+                                isError={donorSources.isError}
+                                onRetry={() => void donorSources.refetch()}
+                                value={form.donor ?? ""}
+                                onSelect={(option) => setForm(p => ({ ...p, donor: option.key }))}
+                                onRegisterNew={() => {
+                                  setIsNewDonor(true);
+                                  setForm(p => ({ ...p, donor: "" }));
+                                }}
+                                registerLabel="+ Add a new donor"
+                                data-testid="picker-donor"
+                              />
+                              <p className="mt-1 text-[11px] text-muted-foreground">
+                                Type a name, student ID, organization, email or phone. Each result shows which kind of
+                                record it is.
+                              </p>
+                            </div>
                         ) : (
                             <div className="flex gap-1 w-full">
                                 <Input 

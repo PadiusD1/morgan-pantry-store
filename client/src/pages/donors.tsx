@@ -1,3 +1,6 @@
+import { DirectoryReport } from "@/components/directory-report";
+import { OPEN_PICKER_FRESHNESS } from "@/lib/shared-freshness";
+import { UnregisteredDonors } from "@/components/unregistered-donors";
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -52,10 +55,10 @@ export default function DonorsPage() {
 
   const { data: donorData, isLoading, isError, isFetching, refetch } = useQuery<Donor[]>({
     queryKey: donorKeys.all,
-    // Staff may register a donor from another screen, tab, or device.
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    // Staff may register a donor from another screen, tab or device, so this
+    // list carries the shared bounded freshness rather than the application
+    // default. A tab left open on this page converges without a reload.
+    ...OPEN_PICKER_FRESHNESS,
   });
   const donors = donorData ?? [];
 
@@ -248,6 +251,8 @@ export default function DonorsPage() {
         </CardContent>
       </Card>
 
+      <DirectoryReport kind="donor" records={filtered} directory={donors} />
+      <UnregisteredDonors donors={donors} />
       <Card className="glass-panel" data-testid="card-donors-table">
         <CardHeader className="py-3 px-4 border-b border-border/80">
           <CardTitle className="section-heading flex items-center justify-between">

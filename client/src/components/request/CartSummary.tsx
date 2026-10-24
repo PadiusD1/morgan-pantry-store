@@ -1,3 +1,4 @@
+import { ProductName } from "@/components/product-name";
 import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -56,8 +57,8 @@ export function CartSummary({
                 data-testid={`row-cart-${itemId}`}
               >
                 <div className="min-w-0 flex-1">
-                  <p className={`truncate font-medium ${isKiosk ? "text-base" : "text-sm"}`}>
-                    {entry.item.name}
+                  <p className={`break-words font-medium ${isKiosk ? "text-base" : "text-sm"}`}>
+                    <ProductName item={entry.item} />
                   </p>
                   <p className={`text-muted-foreground ${isKiosk ? "text-sm" : "text-[11px]"}`}>
                     Qty: {entry.quantity}

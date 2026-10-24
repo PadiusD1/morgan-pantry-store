@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { canUseServerExports, downloadBlob, downloadCsvText, downloadServerCsv } from "@/lib/download";
 import { printBoardSummary } from "@/lib/board-print";
+import { EntityReport } from "@/components/entity-report";
 import {
   boardSummaryCsv, buildBoardReport, detailedReportCsv, filterReportTransactions,
   reportDateKey, reportDatePreset, reportFilenameRange, reportRangeError, reportYears,
@@ -277,6 +278,8 @@ export default function ReportsPage() {
           </details>}
         </CardContent>
       </Card>}
+
+      {!rangeError && <EntityReport range={{ from, to }} />}
 
       {canExportServer && <Card className="glass-panel" data-testid="card-report-monthly-summary">
         <CardHeader className="border-b border-border/80 px-4 py-3">

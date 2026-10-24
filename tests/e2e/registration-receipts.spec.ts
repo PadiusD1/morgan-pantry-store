@@ -64,8 +64,8 @@ test("inline receiving reuses the newly registered partner for the next stock en
   await page.getByTestId("input-quantity-received").fill("2");
   await page.getByLabel("Source", { exact: true }).click();
   await page.getByRole("option", { name: "Donation", exact: true }).click();
-  await page.getByLabel("Donor / Partner", { exact: true }).click();
-  await page.getByRole("option", { name: "+ Register Donor / Partner", exact: true }).click();
+  await page.getByTestId("picker-donor").click();
+  await page.getByTestId("picker-donor-register-new").click();
   await page.getByTestId("select-inline-source-kind").selectOption("partner");
   await page.getByRole("textbox", { name: "New partner name", exact: true }).fill(name);
   const [first] = await Promise.all([page.waitForResponse(write("/api/transactions")), page.getByTestId("button-save-check-in").click()]);
@@ -86,7 +86,8 @@ test("inline receiving reuses the newly registered partner for the next stock en
 test("partner registration preserves the checkout cart and receipts keep saved value, weight and savings", async ({ page, request }, testInfo) => {
   await page.context().addInitScript(() => { window.print = () => {}; });
   const name = unique("Checkout partner");
-  const rice = await post(request, "/api/inventory", { name: unique("Receipt rice"), quantity: 10, weightPerUnitLbs: "0.5", valuePerUnitUsd: "1.25" });
+  const receiptBrand = "Synthetic Family Farms & Pantry";
+  const rice = await post(request, "/api/inventory", { name: unique("Receipt rice"), brand: receiptBrand, quantity: 10, weightPerUnitLbs: "0.5", valuePerUnitUsd: "1.25" });
   const beans = await post(request, "/api/inventory", { name: unique("Receipt beans"), quantity: 10, weightPerUnitLbs: "1", valuePerUnitUsd: "2" });
   await page.goto("/check-out");
   for (const item of [rice, beans]) {
@@ -108,11 +109,12 @@ test("partner registration preserves the checkout cart and receipts keep saved v
   expect(saved.status()).toBe(201);
   const receipt = page.getByRole("dialog", { name: "Distribution Receipt" });
   await receipt.hover();
+  await expect(receipt).toContainText(`${receiptBrand} — ${rice.name}`);
   await expect(page.getByTestId("receipt-weight")).toHaveText("4.00 lbs");
   await expect(page.getByTestId("receipt-value")).toHaveText("$8.50");
   await expect(page.getByTestId("receipt-savings")).toHaveText("−$8.50");
   await expect(page.getByTestId("receipt-amount-due")).toHaveText("$0.00");
-  expect((await request.patch(`/api/inventory/${rice.id}`, { data: { valuePerUnitUsd: "99.00" } })).status()).toBe(200);
+  expect((await request.patch(`/api/inventory/${rice.id}`, { data: { valuePerUnitUsd: "99.00", brand: "Later brand edit" } })).status()).toBe(200);
   await receipt.getByRole("button", { name: "Close", exact: true }).first().click();
   await page.getByTestId("button-reprint-last-receipt").click();
   await receipt.hover();
@@ -124,6 +126,8 @@ test("partner registration preserves the checkout cart and receipts keep saved v
   await page.getByTestId("button-print-receipt").click();
   const printed = await opened;
   await expect(printed.getByTestId("receipt-value")).toHaveText("$8.50");
+  await expect(printed.locator('body')).toContainText(`${receiptBrand} — ${rice.name}`);
+  await expect(printed.locator('body')).not.toContainText('Later brand edit');
   await expect(printed.getByTestId("receipt-amount-due")).toHaveText("$0.00");
   await printed.pdf({ path: testInfo.outputPath("receipt-values.pdf"), format: "Letter", printBackground: true, tagged: true });
   await printed.screenshot({ path: testInfo.outputPath("receipt-print.png"), fullPage: true });
