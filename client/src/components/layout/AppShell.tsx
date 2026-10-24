@@ -6,13 +6,14 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 import { RefreshNotice } from "@/lib/repository";
 import { BRAND, BRAND_MARK_PATH } from "@shared/brand";
-import { BoxesIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, Handshake, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, LogOutIcon, MonitorIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
+import { BoxesIcon, CalendarDaysIcon, ClipboardListIcon, ExternalLinkIcon, FileTextIcon, Handshake, HeartHandshakeIcon, HistoryIcon, HomeIcon, InboxIcon, LayersIcon, LogOutIcon, MonitorIcon, SettingsIcon, ShoppingCartIcon, UsersIcon } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: HomeIcon, group: "Operate", testId: "nav-dashboard" },
   { href: "/inventory", label: "Inventory", icon: BoxesIcon, group: "Operate", testId: "nav-inventory" },
   { href: "/check-in", label: "Check-In", icon: ClipboardListIcon, group: "Operate", testId: "nav-check-in" },
   { href: "/check-out", label: "Check-Out", icon: ShoppingCartIcon, group: "Operate", testId: "nav-check-out" },
+  { href: "/events", label: "Events", icon: CalendarDaysIcon, group: "Operate", testId: "nav-events" },
   { href: "/requests", label: "Requests", icon: InboxIcon, group: "Operate", testId: "nav-requests" },
   { href: "/item-groups", label: "Item Groups", icon: LayersIcon, group: "Operate", testId: "nav-item-groups" },
   { href: "/clients", label: "Clients", icon: UsersIcon, group: "Relationships", testId: "nav-clients" },
@@ -106,6 +107,7 @@ function pageTitleForPath(path: string) {
   if (path.startsWith("/inventory")) return "Inventory";
   if (path.startsWith("/check-in")) return "Check-In (Receiving)";
   if (path.startsWith("/check-out")) return "Check-Out (Distribution)";
+  if (path.startsWith("/events")) return "Events";
   if (path.startsWith("/clients")) return "Clients";
   if (path.startsWith("/partners")) return "Partners Hub";
   if (path.startsWith("/donors")) return "Donors";
@@ -120,6 +122,7 @@ function pageSubtitleForPath(path: string) {
   if (path.startsWith("/inventory")) return "Know what is on hand. Keep product details and shelf counts aligned.";
   if (path.startsWith("/check-in")) return "Receive stock, connect its source, and keep a complete record.";
   if (path.startsWith("/check-out")) return "Build the cart. Confirm the visit. Record what leaves the pantry.";
+  if (path.startsWith("/events")) return "Name each distribution or drive once, so every visit and donation counts toward it.";
   if (path.startsWith("/clients")) return "Client records and service history, in one place.";
   if (path.startsWith("/partners")) return "Manage the organizations receiving bulk distributions.";
   if (path.startsWith("/donors")) return "Connect each contribution to the people and organizations behind it.";

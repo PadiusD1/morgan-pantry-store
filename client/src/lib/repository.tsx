@@ -114,6 +114,8 @@ export type Transaction = {
   clientId?: string;
   clientName?: string;
   isEmergency?: boolean;
+  /** The event saved on the transaction, absent when none was selected. */
+  eventId?: string;
   location?: GeoLocation;
 };
 
@@ -153,6 +155,7 @@ export type RepositoryContextValue = RepositoryState & {
     donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
+    eventId?: string | null;
   }) => Promise<unknown>;
   recordOutbound: (options: {
     client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
@@ -597,8 +600,10 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
     donorId?: string;
     timestamp?: string;
     location?: GeoLocation;
+    eventId?: string | null;
   }): Promise<unknown> {
     const { itemId, quantity, source, donor, donorClientId, donorId, location } = options;
+    const eventId = options.eventId ?? null;
     const timestamp = options.timestamp ?? new Date().toISOString();
 
     if (!quantity || quantity <= 0) return;
@@ -640,6 +645,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       donorId: donorId ?? null,
       clientId: donorClientId ?? null,
       clientName: donorClientId ? donor ?? null : null,
+      eventId,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
       accuracy: location?.accuracy ?? null,
@@ -677,6 +683,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
         clientId: donorClientId ?? null,
         clientName: donorClientId ? donor ?? null : null,
         donorId: donorId ?? null,
+        // Sent only when a check in counts toward an event, so a save from a
+        // database without the event tables is unchanged.
+        ...(eventId ? { eventId } : {}),
         latitude: location?.latitude ?? null,
         longitude: location?.longitude ?? null,
         accuracy: location?.accuracy ?? null,
@@ -773,6 +782,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       clientId: client.id,
       clientName: client.name,
       isEmergency,
+      eventId: options.eventId ?? null,
       latitude: options.location?.latitude ?? null,
       longitude: options.location?.longitude ?? null,
       accuracy: options.location?.accuracy ?? null,
@@ -824,7 +834,9 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           clientName: client.name,
           clientClassification: options.client.classification ?? null,
           isEmergency,
-          eventId: options.eventId ?? null,
+          // The live selection of this session, checked again by the server
+          // inside the save. Absent when no event applies.
+          ...(options.eventId ? { eventId: options.eventId } : {}),
           latitude: options.location?.latitude ?? null,
           longitude: options.location?.longitude ?? null,
           accuracy: options.location?.accuracy ?? null,

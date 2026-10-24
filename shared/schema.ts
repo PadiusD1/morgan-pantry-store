@@ -268,18 +268,27 @@ export const settings = pgTable("settings", {
 
 export type Setting = typeof settings.$inferSelect;
 
-// ─── Transactions ────────────────────────────────────────────────────────────
+// ─── Events (migrations/0003_frc_events.sql) ─────────────────────────────────
 
+// A dated distribution or collection with a stable id. Checkouts and check ins
+// may name one. Rows written before the migration keep a NULL event_id.
 export const frcEvents = pgTable("frc_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   description: text("description"),
-  startsAt: timestamp("starts_at", { withTimezone: true }),
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull().defaultNow(),
   endsAt: timestamp("ends_at", { withTimezone: true }),
   status: text("status").notNull().default("active"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+}, (t) => [index("idx_frc_events_status_starts_at").on(t.status, t.startsAt)]);
+
+export type FrcEvent = typeof frcEvents.$inferSelect;
+
+// ─── Transactions ────────────────────────────────────────────────────────────
+
 export const transactions = pgTable("transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
   type: transactionTypeEnum("type").notNull(),
@@ -289,7 +298,7 @@ export const transactions = pgTable("transactions", {
   clientId: uuid("client_id").references(() => clients.id),
   clientName: text("client_name"),
   donorId: uuid("donor_id").references(() => donors.id),
-  eventId: uuid("event_id").references(() => frcEvents.id),
+  eventId: uuid("event_id").references(() => frcEvents.id, { onDelete: "restrict" }),
   // Emergency Shop Appointment flag: tracks emergency check-outs separately in reports
   isEmergency: boolean("is_emergency").notNull().default(false),
   latitude: doublePrecision("latitude"),
@@ -300,7 +309,8 @@ export const transactions = pgTable("transactions", {
 });
 
 export const insertTransactionSchema = createInsertSchema(transactions)
-  .omit({ id: true, createdAt: true });
+  .omit({ id: true, createdAt: true })
+  .extend({ eventId: z.string().uuid("Choose a valid event.").nullish() });
 
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 export type Transaction = typeof transactions.$inferSelect;
@@ -693,3 +703,37 @@ export const stockAdjustments = pgTable(
 );
 
 export type StockAdjustment = typeof stockAdjustments.$inferSelect;
+
+// The event one signed in session is working, keyed by a SHA-256 of the
+// session cookie. See server/frc-events.ts.
+export const frcEventSessions = pgTable(
+  "frc_event_sessions",
+  {
+    sessionKey: text("session_key").primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id").notNull().references(() => frcEvents.id, { onDelete: "cascade" }),
+    tagInbound: boolean("tag_inbound").notNull().default(false),
+    selectedAt: timestamp("selected_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("idx_frc_event_sessions_expires_at").on(t.expiresAt),
+    index("idx_frc_event_sessions_user_id").on(t.userId),
+    index("idx_frc_event_sessions_event_id").on(t.eventId),
+  ],
+);
+
+// Who created, changed, ended, reopened, deleted or selected an event. No key
+// to frc_events, so the record of a deleted event survives it.
+export const frcEventAudit = pgTable(
+  "frc_event_audit",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    eventId: uuid("event_id"),
+    action: text("action").notNull(),
+    actorUserId: uuid("actor_user_id"),
+    details: jsonb("details").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_frc_event_audit_event_id_created_at").on(t.eventId, t.createdAt)],
+);

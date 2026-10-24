@@ -25,6 +25,8 @@ import { applyTransactionStock } from "./transaction-stock";
 import { reviewedTransactionMeasurements } from "./reviewed-transaction-measurements";
 import { loadDashboardStats } from "./dashboard-stats";
 import { registerEntityReportRoutes } from "./entity-report";
+import { registerFrcEventRoutes } from "./frc-events";
+import { EventAttributionError, lockAttributableEvent } from "./frc-event-store";
 import { attributeDonor, attributeInboundRows, buildSourceOptions, donorsWithSharedNames, normaliseDonorName } from "@shared/donation-source";
 import { duplicateMessage } from "@shared/identity";
 import { CSV_BOM, csvRow } from "@shared/csv";
@@ -111,6 +113,8 @@ function mapTransactionRow(row: any) {
     clientName: row.client_name,
     clientClassification: row.client_classification ?? null,
     donorId: row.donor_id,
+    // Absent before migration 0003, and NULL on every older transaction.
+    eventId: row.event_id ?? null,
     isEmergency: row.is_emergency,
     latitude: row.latitude,
     longitude: row.longitude,
@@ -155,6 +159,8 @@ const fulfillBodySchema = z.object({
       }),
     )
     .optional(),
+  // The event the staff session had selected when the pickup was completed.
+  eventId: z.string().uuid().nullish(),
 });
 
 async function getHydratedItemGroupItems(groupId: string) {
@@ -206,6 +212,7 @@ function parseItemGroupItems(rawItems: unknown, groupId: string) {
 
 export async function registerRoutes(app: Express): Promise<void> {
   registerEntityReportRoutes(app);
+  registerFrcEventRoutes(app);
   registerInventoryBarcodeRoutes(app);
   // ─── Barcode Lookup ──────────────────────────────────────────────────
 
@@ -741,17 +748,32 @@ export async function registerRoutes(app: Express): Promise<void> {
         return sendClaim(res, claim);
       }
 
+      // The event is checked and share locked before any stock moves, so the
+      // visit, its stock movement and its event are saved together or not at all.
+      let event: { id: string; name: string } | null = null;
+      if (d.eventId) {
+        try {
+          event = await lockAttributableEvent(client, d.eventId);
+        } catch (error) {
+          if (!(error instanceof EventAttributionError)) throw error;
+          await client.query("ROLLBACK");
+          return res.status(error.status).json({ message: error.message, code: error.code });
+        }
+      }
+
       const stockAdjustments = await applyTransactionStock(client, d.type, parsedItems, {
         transactionId: txId,
         userId: req.user?.id ?? null,
       });
       const measuredItems = await reviewedTransactionMeasurements(client, parsedItems, (d as any).timestamp);
 
+      // event_id is written only for an attributed visit, so a database
+      // without migration 0003 keeps recording every other transaction.
       const txRow = (
         await client.query(
           `INSERT INTO transactions
-             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy, client_classification)
-           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12, $13)
+             (id, type, timestamp, source, donor, client_id, client_name, donor_id, is_emergency, latitude, longitude, accuracy, client_classification${event ? ", event_id" : ""})
+           VALUES ($1, $2, COALESCE($3, now()), $4, $5, $6, $7, $8, COALESCE($9, false), $10, $11, $12, $13${event ? ", $14" : ""})
            RETURNING *`,
           [
             txId,
@@ -767,6 +789,7 @@ export async function registerRoutes(app: Express): Promise<void> {
             (d as any).longitude ?? null,
             (d as any).accuracy ?? null,
             transactionClassification((d as any).clientClassification),
+            ...(event ? [event.id] : []),
           ],
         )
       ).rows[0];
@@ -792,7 +815,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         createdItems.push(mapTransactionItemRow(insertedItem));
       }
 
-      responsePayload = { ...mapTransactionRow(txRow), items: createdItems, stockAdjustments };
+      responsePayload = { ...mapTransactionRow(txRow), eventName: event?.name ?? null, items: createdItems, stockAdjustments };
       await saveRequestKey(client, req, 201, responsePayload);
       await client.query("COMMIT");
     } catch (err) {
@@ -1404,7 +1427,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         .status(400)
         .json({ message: "Invalid data", errors: zodErrors(bodyResult.error) });
     }
-    const { items: bodyItems } = bodyResult.data;
+    const { items: bodyItems, eventId } = bodyResult.data;
     const fulfillMap = new Map<string, number>();
     if (Array.isArray(bodyItems)) {
       for (const bi of bodyItems) {
@@ -1422,6 +1445,7 @@ export async function registerRoutes(app: Express): Promise<void> {
 
     const client = await pool.connect();
     let txId: string;
+    let fulfilledEvent: { id: string; name: string } | null = null;
     try {
       await client.query("BEGIN");
 
@@ -1432,13 +1456,24 @@ export async function registerRoutes(app: Express): Promise<void> {
         return res.status(409).json({ message: "This request was already changed" });
       }
 
+      if (eventId) {
+        try {
+          fulfilledEvent = await lockAttributableEvent(client, eventId);
+        } catch (error) {
+          if (!(error instanceof EventAttributionError)) throw error;
+          await client.query("ROLLBACK");
+          client.release();
+          return res.status(error.status).json({ message: error.message, code: error.code });
+        }
+      }
+
       // The student's classification is copied onto the check out, only a listed value.
       const txResult = await client.query(
-        `INSERT INTO transactions (type, timestamp, client_id, client_name, client_classification)
+        `INSERT INTO transactions (type, timestamp, client_id, client_name, client_classification${fulfilledEvent ? ", event_id" : ""})
          VALUES ('OUT', now(), $1, $2,
-           (SELECT classification FROM clients WHERE id = $1 AND classification = ANY($3::text[])))
+           (SELECT classification FROM clients WHERE id = $1 AND classification = ANY($3::text[]))${fulfilledEvent ? ", $4" : ""})
          RETURNING id`,
-        [request.clientId || null, request.clientName, CLASSIFICATIONS],
+        [request.clientId || null, request.clientName, CLASSIFICATIONS, ...(fulfilledEvent ? [fulfilledEvent.id] : [])],
       );
       txId = txResult.rows[0].id;
 
@@ -1509,7 +1544,7 @@ export async function registerRoutes(app: Express): Promise<void> {
     const transaction = (await pool.query("SELECT * FROM transactions WHERE id = $1", [txId])).rows[0];
     // Include immutable checkout line snapshots, not today's inventory values.
     const savedLines = await storage.getTransactionItems(txId);
-    res.json({ ...updated, transaction: { ...transaction, items: savedLines } });
+    res.json({ ...updated, transaction: { ...transaction, eventId: transaction?.event_id ?? null, eventName: fulfilledEvent?.name ?? null, items: savedLines } });
   });
 
   // ─── 9. Cancel Request ───────────────────────────────────────────────

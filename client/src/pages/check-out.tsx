@@ -3,6 +3,8 @@ import { productLabel } from "@shared/product-identity";
 import { useAutoBarcode } from '@/lib/auto-barcode';
 import { ItemNameInput } from '@/components/item-name-input';
 import { PartnerRegistrationDialog } from "@/components/partner-registration-dialog";
+import { EventSessionBar } from "@/components/event-session-bar";
+import { isEventRefusal, refreshEventData, useEventSession } from "@/lib/events";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRepository, type InventoryItem } from "@/lib/repository";
@@ -72,6 +74,10 @@ export default function CheckOutPage() {
   const [clientContact, setClientContact] = useState("");
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
   const [isEmergency, setIsEmergency] = useState(false);
+  // The event this session is working, kept on the server for the session, so
+  // it stays through every checkout, a reload and other pages.
+  const eventSession = useEventSession();
+  const activeEvent = eventSession.data?.selection?.event ?? null;
   const selectedClientRecord = clients.find(client => client.id === clientId);
   const isPartner = selectedClientRecord?.clientType === "partner";
   const [partnerRegistrationOpen, setPartnerRegistrationOpen] = useState(false);
@@ -475,10 +481,14 @@ export default function CheckOutPage() {
         const fulfillItems = cart
           .map((c) => ({ id: requestItemIdByInventoryId[c.itemId], fulfilledQuantity: c.quantity }))
           .filter((it): it is { id: string; fulfilledQuantity: number } => Boolean(it.id));
+        const fulfilBody = {
+          ...(fulfillItems.length > 0 ? { items: fulfillItems } : {}),
+          ...(activeEvent ? { eventId: activeEvent.id } : {}),
+        };
         const res = await apiRequest(
           "POST",
           `/api/requests/${fulfillingRequestId}/fulfill`,
-          fulfillItems.length > 0 ? { items: fulfillItems } : undefined,
+          Object.keys(fulfilBody).length > 0 ? fulfilBody : undefined,
         );
         // The receipt shows what the server saved, never the cart.
         const saved: unknown = await res.json().catch(() => null);
@@ -505,6 +515,7 @@ export default function CheckOutPage() {
         queryClient.invalidateQueries({ queryKey: ["/api/requests"] });
         queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
         queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+        if (isEventRefusal(e)) refreshEventData(queryClient);
         const failure = fulfilFailure(e);
         toast({ title: failure.title, description: failure.description, variant: "destructive" });
       }
@@ -520,6 +531,7 @@ export default function CheckOutPage() {
         items: cart,
         location,
         isEmergency,
+        eventId: activeEvent?.id ?? null,
         timestamp: startedAt,
       }));
     } catch (e) {
@@ -557,6 +569,9 @@ export default function CheckOutPage() {
         }
         return;
       }
+      // An event ended or removed since it was chosen. Nothing was saved, the
+      // cart is kept, and the bar shows the change before the next save.
+      if (isEventRefusal(e)) refreshEventData(queryClient);
       // A lost response, a 5xx or a timeout may already be recorded. The cart and key are kept.
       const failure = checkOutFailure(e, duplicateRefusal(e) ?? clientUpdateFailureText(e));
       toast({
@@ -571,9 +586,10 @@ export default function CheckOutPage() {
       // The receipt shows what the server saved, never the cart.
       setReceipt(receiptFromSaved(result.saved, [result.client, ...clients], new Date().toISOString()));
 
+      const savedEvent = (result.saved as { eventName?: string | null } | null)?.eventName;
       toast({
         title: isEmergency ? "Emergency shop recorded" : "Check-out recorded",
-        description: `Distribution recorded for ${savedCheckOutName(result.saved, result.client.name)}${isEmergency ? " (Emergency Shop Appointment)" : ""}${location ? " with location" : ""}.`,
+        description: `Distribution recorded for ${savedCheckOutName(result.saved, result.client.name)}${isEmergency ? " (Emergency Shop Appointment)" : ""}${savedEvent ? ` at ${savedEvent}` : ""}${location ? " with location" : ""}.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       setCart([]);
@@ -596,6 +612,9 @@ export default function CheckOutPage() {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        {/* Outside the checkout form: the new event dialog has its own form,
+            and a portal still passes React submit events up this tree. */}
+        <div className="mb-4"><EventSessionBar mode="checkout" /></div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <section className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
             <div className="space-y-3">
@@ -1081,7 +1100,9 @@ export default function CheckOutPage() {
             <p className="text-[11px] text-muted-foreground" data-testid="text-check-out-help">
               This will reduce inventory and log an OUT transaction linked to this client.
             </p>
-            <Button type="submit" disabled={!cart.length} data-testid="button-save-check-out">
+            {/* Held only until the session's event first loads, so a checkout at an
+                event is never saved as general distribution by a fast click. */}
+            <Button type="submit" disabled={!cart.length || eventSession.isPending} data-testid="button-save-check-out">
               Complete check-out ({totalUnits} units)
             </Button>
           </div>
@@ -1355,6 +1376,7 @@ function ReceiptContent({ receipt }: { receipt: ReceiptData }) {
         <div><strong>ID:</strong> {receipt.clientIdentifier}</div>
         <div><strong>Date:</strong> {formattedDate}</div>
         <div><strong>Time:</strong> {formattedTime}</div>
+        {receipt.eventName && <div data-testid="receipt-event"><strong>Event:</strong> {receipt.eventName}</div>}
       </div>
 
       <div className="border-t border-dashed" />

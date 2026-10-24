@@ -85,6 +85,8 @@ export type ApiTransaction = {
   clientId: string | null;
   clientName: string | null;
   isEmergency?: boolean;
+  /** The event saved on this transaction. NULL for every row before events. */
+  eventId?: string | null;
   latitude: number | null;
   longitude: number | null;
   accuracy: number | null;
@@ -179,6 +181,7 @@ export function toTransaction(api: ApiTransaction): Transaction {
     clientId: api.clientId ?? undefined,
     clientName: api.clientName ?? undefined,
     isEmergency: Boolean(api.isEmergency),
+    eventId: api.eventId ?? undefined,
     location,
   };
 }

@@ -18,6 +18,7 @@ import { integrationConfig, verifyTurnstile } from "./integration-config";
 import type { Express, NextFunction, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
@@ -25,6 +26,7 @@ import { storage } from "./storage";
 import { syncRosterClient } from "./client-roster";
 import { GENERIC_DUPLICATE_MESSAGE } from "@shared/identity";
 import type { User } from "@shared/schema";
+import { forgetSessionSelection } from "./frc-event-store";
 
 const SESSION_COOKIE = "frc_session";
 const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12 hours
@@ -44,6 +46,10 @@ declare global {
   namespace Express {
     interface Request {
       user?: SessionUser;
+      /** SHA-256 of this session's cookie, a stable key for per session state. */
+      sessionKey?: string;
+      /** When the session cookie expires, in epoch milliseconds. */
+      sessionExpiresAt?: number;
     }
   }
 }
@@ -196,6 +202,10 @@ export function authenticate() {
           if (dbUser) {
             // Role/identity come from the DB row, never the token.
             req.user = toSessionUser(dbUser);
+            // Per session state is keyed by a hash of the cookie, never the
+            // cookie itself, so no stored value can be replayed to sign in.
+            req.sessionKey = createHash("sha256").update(token).digest("hex");
+            if (typeof payload.exp === "number") req.sessionExpiresAt = payload.exp * 1000;
           }
           // If the user no longer exists, req.user stays undefined (anonymous).
         }
@@ -223,6 +233,7 @@ const PUBLIC_RULES: PathRule[] = [
 
 const ADMIN_RULES: PathRule[] = [
   { method: "PUT", pattern: /^\/api\/settings\// },
+  { method: "DELETE", pattern: /^\/api\/frc-events\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/api\/clients\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/api\/donors\/[^/]+$/ },
   { pattern: /^\/api\/users(\/|$)/ },
@@ -237,6 +248,11 @@ const STAFF_WRITE_RULES: PathRule[] = [
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/approve$/ },
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/deny$/ },
   { method: "POST", pattern: /^\/api\/requests\/[^/]+\/fulfill$/ },
+  // Volunteers choose an event for their own session. Creating, editing,
+  // ending and reopening events stays with staff.
+  { method: "POST", pattern: /^\/api\/frc-events$/ },
+  { method: "PATCH", pattern: /^\/api\/frc-events\/[^/]+$/ },
+  { method: "POST", pattern: /^\/api\/frc-events\/[^/]+\/(close|reopen)$/ },
   { method: "DELETE", pattern: /^\/api\// },
 ];
 
@@ -471,7 +487,10 @@ export function registerAuthRoutes(app: Express): void {
   });
 
   // Sign out
-  app.post("/api/auth/logout", (_req, res) => {
+  app.post("/api/auth/logout", async (req, res) => {
+    // The event this session was working ends with it, so the next person to
+    // sign in on this device starts with no event selected.
+    await forgetSessionSelection(req.sessionKey);
     clearSession(res);
     return res.json({ ok: true });
   });

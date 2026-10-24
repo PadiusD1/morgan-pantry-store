@@ -23,6 +23,7 @@ const DashboardPage = lazy(() => import("@/pages/dashboard"));
 const InventoryPage = lazy(() => import("@/pages/inventory"));
 const CheckInPage = lazy(() => import("@/pages/check-in"));
 const CheckOutPage = lazy(() => import("@/pages/check-out"));
+const EventsPage = lazy(() => import("@/pages/events"));
 const ClientsPage = lazy(() => import("@/pages/clients"));
 const ClientDetailPage = lazy(() => import("@/pages/client-detail"));
 const ItemGroupsPage = lazy(() => import("@/pages/item-groups"));
@@ -56,6 +57,7 @@ function Router() {
       <Route path="/inventory" component={InventoryPage} />
       <Route path="/check-in" component={CheckInPage} />
       <Route path="/check-out" component={CheckOutPage} />
+      <Route path="/events" component={EventsPage} />
       <Route path="/clients" component={ClientsPage} />
       <Route path="/clients/:id" component={ClientDetailPage} />
       <Route path="/donors/:id" component={DonorDetailPage} />

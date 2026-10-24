@@ -5,11 +5,16 @@ export { boardSummaryHtml } from "@shared/board-document";
 
 /** The print document never includes the operational client tables. */
 export function printBoardSummary(report: BoardReport, selection?: BoardSelection): void {
+  printBoardDocument(boardSummaryHtml(report, selection));
+}
+
+/** Opens a branded board document and starts printing once its fonts load. */
+export function printBoardDocument(html: string): void {
   const popup = window.open("", "_blank", "width=1100,height=850");
   if (!popup) throw new Error("Allow pop-ups for this site, then choose Print / save PDF again.");
   popup.opener = null;
   popup.document.open();
-  popup.document.write(boardSummaryHtml(report, selection));
+  popup.document.write(html);
   popup.document.close();
   let autoPrinted = false;
   const print = () => { if (!popup.closed) { popup.focus(); popup.print(); } };

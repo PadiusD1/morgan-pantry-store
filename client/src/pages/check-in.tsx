@@ -23,6 +23,8 @@ import { itemOptions, nextSelectedId, resolveSelectedId, selectedAfterCheckIn } 
 import { createItemLookupGuard } from "@/lib/item-entry";
 import { ItemNameInput } from "@/components/item-name-input";
 import { SourcePicker } from "@/components/source-picker";
+import { EventSessionBar } from "@/components/event-session-bar";
+import { isEventRefusal, refreshEventData, useEventSession } from "@/lib/events";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -51,6 +53,10 @@ export default function CheckInPage() {
   const donorSources = useDonationSources();
   const donorOptions = donorSources.data ?? [];
   const partnerCount = donorOptions.filter((o) => o.kind === "partner").length;
+
+  // A check in counts toward the session's event only when staff ticked that.
+  const eventSession = useEventSession();
+  const inboundEvent = eventSession.data?.selection?.tagInbound ? eventSession.data.selection.event : null;
 
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedId, setSelectedId] = useState<string | "">("");
@@ -405,12 +411,14 @@ export default function CheckInPage() {
         donorId: picked?.donorId,
         donorClientId: picked?.donorClientId,
         location,
+        eventId: inboundEvent?.id ?? null,
         timestamp: startedAt,
       })),
     });
 
     if (!result.ok) {
       const err = result.error;
+      if (isEventRefusal(err)) refreshEventData(queryClient);
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.error("Failed to record check-in:", err);
@@ -485,9 +493,10 @@ export default function CheckInPage() {
     const saved = result.saved;
     setUnmatchedBarcode("");
 
+    const savedEvent = (saved as { eventName?: string | null } | null)?.eventName;
     toast({
       title: "Stock received",
-      description: savedCheckInText(saved, Boolean(location)),
+      description: `${savedCheckInText(saved, Boolean(location))}${savedEvent ? ` Counted toward ${savedEvent}.` : ""}`,
     });
 
     setQuantity(0);
@@ -512,6 +521,7 @@ export default function CheckInPage() {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        <div className="mb-4"><EventSessionBar mode="checkin" /></div>
         <div className="mb-6">
            <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -923,7 +933,7 @@ export default function CheckInPage() {
             <p className="text-[11px] text-muted-foreground" data-testid="text-check-in-help">
               This will increase on-hand quantity and log an IN transaction in Activity.
             </p>
-            <Button type="submit" disabled={scanState.phase === "scanning"} data-testid="button-save-check-in">
+            <Button type="submit" disabled={scanState.phase === "scanning" || eventSession.isPending} data-testid="button-save-check-in">
               Record check-in
             </Button>
           </div>

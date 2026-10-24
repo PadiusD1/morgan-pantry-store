@@ -34,12 +34,15 @@ export type ReceiptData = {
   clientIdentifier: string;
   items: ReceiptLine[];
   timestamp: string;
+  /** The event the server saved on this checkout, never the one on screen now. */
+  eventName?: string;
 };
 
 type SavedCheckOut = {
   type?: string;
   clientId?: string | null;
   clientName?: string | null;
+  eventName?: string | null;
   timestamp?: string | null;
   items?: Array<{ name?: string | null; quantity?: number | null; weightPerUnitLbs?: unknown; valuePerUnitUsd?: unknown }> | null;
 };
@@ -65,6 +68,7 @@ export function receiptFromSaved(
     clientIdentifier: person?.identifier ?? "",
     items: tx.items.map((line) => ({ name: String(line?.name ?? ""), quantity: Number(line?.quantity) || 0, ...measurements(line ?? {}) })),
     timestamp: tx.timestamp ? String(tx.timestamp) : fallbackTimestamp,
+    ...(typeof tx.eventName === "string" && tx.eventName.trim() ? { eventName: tx.eventName.trim() } : {}),
   };
 }
 
@@ -95,5 +99,6 @@ export function receiptFromFulfilled(saved: unknown, fallbackTimestamp: string):
     clientIdentifier: request.clientIdentifier ?? "",
     items,
     timestamp: time ? String(time) : fallbackTimestamp,
+    ...(transactionReceipt?.eventName ? { eventName: transactionReceipt.eventName } : {}),
   };
 }
