@@ -363,8 +363,8 @@ function measureColumns(selection: EventBoardSelection): { label: string; value:
   const has = (key: EventBoardKey) => selection.includes(key);
   return [
     ...(has("units") ? [{ label: "Units", value: (m: Movement) => m.units }] : []),
-    ...(has("weight") ? [{ label: "Recorded lbs", value: (m: Movement) => pounds(m.weightLbs) }, { label: "Units without weight", value: (m: Movement) => m.unweighedUnits }] : []),
-    ...(has("value") ? [{ label: "Estimated value (USD)", value: (m: Movement) => dollars(m.valueCents) }, { label: "Units without value", value: (m: Movement) => m.unvaluedUnits }] : []),
+    ...(has("weight") ? [{ label: "Recorded lbs", value: (m: Movement) => pounds(m.weightLbs) }, { label: "Unweighed units", value: (m: Movement) => m.unweighedUnits }] : []),
+    ...(has("value") ? [{ label: "Est. value (USD)", value: (m: Movement) => dollars(m.valueCents) }, { label: "Unvalued units", value: (m: Movement) => m.unvaluedUnits }] : []),
   ];
 }
 
@@ -414,17 +414,17 @@ export function eventBoardSections(report: EventBoardReport, selection: EventBoa
   }
   if (has("contributors")) {
     const list = topN > 0 ? report.contributors.slice(0, topN) : report.contributors;
-    const rankLabel = report.rankMetric === "units" ? "Units" : report.rankMetric === "weight" ? "Recorded lbs" : "Estimated value (USD)";
+    const rankLabel = report.rankMetric === "units" ? "Units" : report.rankMetric === "weight" ? "Recorded lbs" : "Est. value (USD)";
     const rankCell = (m: Movement) => report.rankMetric === "units" ? m.units : report.rankMetric === "weight" ? pounds(m.weightLbs) : dollars(m.valueCents);
     const otherMeasures = measures.filter((m) => m.label !== rankLabel);
     sections.push({
       key: "contributors", title: `Top donors and partners by ${RANK_METRIC_LABELS[report.rankMetric]}`,
-      columns: ["Rank", "Contributor", "Type", "Entries", rankLabel, ...otherMeasures.map((m) => m.label), "Measurement"],
+      columns: ["Rank", "Contributor", "Type", "Entries", rankLabel, ...otherMeasures.map((m) => m.label), "Ranked figure"],
       rows: list.map((row, index) => [
         index + 1, row.name,
-        row.kind === "donor" ? "Donor" : row.kind === "partner" ? "Partner organization" : `${row.contributors} students`,
+        row.kind === "donor" ? "Donor" : row.kind === "partner" ? "Partner" : `${row.contributors} students`,
         row.movement.entries, rankCell(row.movement), ...otherMeasures.map((m) => m.value(row.movement)),
-        row.incomplete ? "Incomplete" : "Recorded",
+        row.incomplete ? "Incomplete" : "Complete",
       ]),
       note: `${topN > 0 && report.contributors.length > topN ? `Top ${topN} of ${report.contributors.length} contributors. ` : ""}Ranked only by recorded figures. Incomplete means some of these units have no recorded ${report.rankMetric === "value" ? "value" : "weight"}, so the true position may be higher.`,
     });

@@ -167,12 +167,17 @@ export function EventBoardReport({ range }: { range: ReportRange }) {
             {sections.map((section) => (
               <section key={section.key} data-testid={`event-board-section-${section.key}`}>
                 <h3 className="text-sm font-semibold">{section.title}</h3>
-                <div className="overflow-x-auto">
+                {/* Figures stay on one line and the table scrolls inside the card on
+                    a phone, rather than squeezing every column into a sliver. */}
+                <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={`${section.title}, scroll sideways on small screens`}>
                   <Table>
-                    <TableHeader><TableRow>{section.columns.map((column) => <TableHead key={column}>{column}</TableHead>)}</TableRow></TableHeader>
+                    <TableHeader><TableRow>{section.columns.map((column) => <TableHead key={column} className="min-w-[5.5rem] align-bottom">{column}</TableHead>)}</TableRow></TableHeader>
                     <TableBody>
                       {section.rows.slice(0, PREVIEW_ROWS).map((row, index) => (
-                        <TableRow key={index}>{row.map((cell, column) => <TableCell key={column} className={column === 0 ? "font-medium" : undefined}>{cell}</TableCell>)}</TableRow>
+                        <TableRow key={index}>{row.map((cell, column) => {
+                          const name = column === (section.key === "contributors" ? 1 : 0);
+                          return <TableCell key={column} className={name ? "min-w-[11rem] font-medium" : "whitespace-nowrap tabular-nums"}>{cell}</TableCell>;
+                        })}</TableRow>
                       ))}
                     </TableBody>
                   </Table>

@@ -62,6 +62,8 @@ This audit adds no paid runtime service, but hosting, database, external lookup,
 
 The deployment can be rolled back to a previously verified Git commit or Vercel deployment. Application rollback does not undo database writes. The October 8 workflow fixes do not introduce a production schema migration or rewrite historical records.
 
+Event tracking needs the additive `migrations/0003_frc_events.sql`, applied deliberately before or with its release. It backfills nothing, and the application keeps recording checkouts without events until it is present. [FRC events](docs/FRC-EVENTS-2026-10-24.md) covers the review, the before and after fingerprint, and rollback.
+
 ## Repository map
 
 ```text

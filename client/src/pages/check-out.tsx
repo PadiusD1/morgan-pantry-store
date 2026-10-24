@@ -947,7 +947,9 @@ export default function CheckOutPage() {
                   <div className="w-full">
                     <ItemNameInput aria-label="Search inventory to add to cart" placeholder="Type an item name, brand or barcode" value={itemSearch} items={sortedInventory} onChange={setItemSearch} onSelect={item => { void addToCart(item.id); setItemSearch(""); }} data-testid="input-checkout-item-search" />
                   </div>
-                  <Select onValueChange={(id) => addToCart(id)}>
+                  {/* Always shows the placeholder, so choosing the item the last
+                      student took adds it again instead of changing nothing. */}
+                  <Select value="" onValueChange={(id) => { if (id) void addToCart(id); }}>
                     <SelectTrigger id="item-select" className="h-auto min-h-11 min-w-0 flex-1 whitespace-normal text-left [&>span]:line-clamp-none" data-testid="select-cart-item">
                       <SelectValue placeholder="Choose item" />
                     </SelectTrigger>

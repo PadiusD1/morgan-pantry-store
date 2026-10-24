@@ -8,7 +8,7 @@ import { seed } from "./seed.mjs";
 import { localStackDatabaseUrl } from "./safety.mjs";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
-const { DATABASE_URL, STACK_MIGRATION_0001, STACK_INDEXES, ADMIN_EMAIL, ADMIN_PASSWORD, VOLUNTEER_EMAIL, VOLUNTEER_PASSWORD } = process.env;
+const { DATABASE_URL, STACK_MIGRATION_0001, STACK_MIGRATION_0003, STACK_INDEXES, ADMIN_EMAIL, ADMIN_PASSWORD, VOLUNTEER_EMAIL, VOLUNTEER_PASSWORD } = process.env;
 
 function refuse(msg) {
   console.error(`setup refused because ${msg}`);
@@ -48,6 +48,13 @@ if (!exists) {
   await db.query(fs.readFileSync(STACK_MIGRATION_0001, "utf8"));
   console.log(`schema applied, 0000 then ${added} production only indexes then 0001`);
   await seed(db);
+}
+// Events come after the seed, as in production, so the seeded history stays
+// what it is there, transactions saved before events and with no event. The
+// migration is idempotent, so a restarted stack applies it safely again.
+if (STACK_MIGRATION_0003) {
+  await db.query(fs.readFileSync(STACK_MIGRATION_0003, "utf8"));
+  console.log("events migration 0003 applied after the seed");
 }
 
 // Fresh throwaway passwords on every start, printed once by start.sh.

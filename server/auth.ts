@@ -18,7 +18,7 @@ import { integrationConfig, verifyTurnstile } from "./integration-config";
 import type { Express, NextFunction, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
@@ -111,6 +111,9 @@ async function issueSession(res: Response, user: User): Promise<void> {
   const token = await new SignJWT({ ...session })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.id)
+    // Unique per sign in, so two sign ins in the same second are still two
+    // sessions and never share per session state such as the active event.
+    .setJti(randomUUID())
     .setIssuedAt()
     .setExpirationTime(Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS)
     .sign(getSecret());

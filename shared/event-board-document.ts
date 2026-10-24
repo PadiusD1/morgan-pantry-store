@@ -9,6 +9,7 @@ import { reportDateKey } from "./reporting";
 const esc = (value: string | number) => String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
 const number = (value: number) => value.toLocaleString("en-US");
 const money = (cents: number) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const BAR_DATE = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "2-digit" });
 
 function masthead(section: string): string {
   return `<header class="masthead"><div class="signature">${brandMarkSvg()}<div><strong>${BRAND.name}</strong><span>System design &amp; reporting</span></div></div><div class="client"><strong>${BRAND.client}</strong><span>${BRAND.program}</span><small>${esc(section)}</small></div></header>`;
@@ -41,8 +42,11 @@ export function eventBoardHtml(report: EventBoardReport, selection: EventBoardSe
   const chartEvents = report.events.filter((row) => row.key !== UNASSIGNED_KEY).slice(-12);
   const maxVisits = Math.max(1, ...chartEvents.map((row) => row.distribution.entries));
   const label = (row: (typeof chartEvents)[number]) => `${row.name}${row.startsAt ? ` ${reportDateKey(row.startsAt) ?? ""}` : ""}`;
+  // Bars carry the event date, one line each so every bar shares a baseline.
+  // The full names are in the aria label and in the tables that follow.
+  const barDate = (row: (typeof chartEvents)[number]) => row.startsAt ? BAR_DATE.format(new Date(row.startsAt)) : "No date";
   const chart = (has("distributions") || has("trend")) ? (chartEvents.length
-    ? `<h2>Visits by event</h2><p class="note">${report.events.filter((row) => row.key !== UNASSIGNED_KEY).length > 12 ? "The latest 12 events in this selection, in date order. The tables that follow list every event." : "Events in date order."}</p><div class="chart" role="img" aria-label="${esc(chartEvents.map((row) => `${label(row)}: ${row.distribution.entries} visits`).join("; "))}">${chartEvents.map((row) => `<div class="bar"><strong>${number(row.distribution.entries)}</strong><svg viewBox="0 0 36 100" preserveAspectRatio="none" aria-hidden="true"><rect x="3" y="${100 - (row.distribution.entries / maxVisits) * 92}" width="30" height="${(row.distribution.entries / maxVisits) * 92}" fill="var(--sbd-blue)"/></svg><span>${esc(row.name)}</span></div>`).join("")}</div>`
+    ? `<h2>Visits by event</h2><p class="note">${report.events.filter((row) => row.key !== UNASSIGNED_KEY).length > 12 ? "The latest 12 events in this selection, in date order. The tables that follow list every event." : "Events in date order."}</p><div class="chart event-chart" role="img" aria-label="${esc(chartEvents.map((row) => `${label(row)}: ${row.distribution.entries} visits`).join("; "))}">${chartEvents.map((row) => `<div class="bar"><strong>${number(row.distribution.entries)}</strong><svg viewBox="0 0 36 100" preserveAspectRatio="none" aria-hidden="true"><rect x="3" y="${100 - (row.distribution.entries / maxVisits) * 92}" width="30" height="${(row.distribution.entries / maxVisits) * 92}" fill="var(--sbd-blue)"/></svg><span>${esc(barDate(row))}</span></div>`).join("")}</div>`
     : `<p class="empty">No event activity in this selection.</p>`) : "";
   const c = report.coverage;
   const gaps = (has("weight") && d.unweighedUnits > 0) || (has("value") && d.unvaluedUnits > 0) || c.ambiguousInbound > 0 || c.unattributedInbound > 0 || c.unknownEventEntries > 0;
@@ -58,29 +62,40 @@ export function eventBoardHtml(report: EventBoardReport, selection: EventBoardSe
 
   const pages: string[] = [`<section class="report-page">${masthead("Events and contributors")}<p class="eyebrow">01 / Event overview</p><h1>Events and Contributors</h1><p class="lede">What each event distributed and received, and the donors and partners behind it, from saved FRC records.</p>${period(report)}${metrics.length ? `<div class="metrics">${metrics.map(([value, name, detail]) => `<div class="metric"><strong>${esc(value)}</strong><span>${esc(name)}</span><small>${esc(detail)}</small></div>`).join("")}</div>` : ""}${chart}${quality}${footer("Event overview")}</section>`];
 
+  // One flowing detail section after the overview. Tables break across pages
+  // with repeated headers, so a short selection is not spread one table per
+  // half empty page, and a long one is never cut or shrunk to fit.
   const sections = eventBoardSections(report, selection, topN);
-  for (const section of sections) {
-    const size = section.columns.length > 6 ? 14 : 20;
+  const tables = sections.map((section) => {
     // The contributor's name, not the rank, identifies a contributor row.
     const header = section.key === "contributors" ? 1 : 0;
-    for (let offset = 0; offset < Math.max(1, section.rows.length); offset += size) {
-      const rows = section.rows.slice(offset, offset + size);
-      const caption = `${section.title}${section.rows.length > size ? ` (rows ${offset + 1} to ${offset + rows.length} of ${section.rows.length})` : ""}`;
-      pages.push(`<section class="report-page ledger event-${esc(section.key)}">${masthead("Events and contributors")}<p class="eyebrow">Selected data / ${esc(section.key)}</p><h2 class="display">${esc(section.title)}</h2>${period(report)}${rows.length
-        ? `<div class="table-wrap" tabindex="0" role="region" aria-label="${esc(section.title)}"><table><caption>${esc(caption)}</caption><thead><tr>${section.columns.map((column) => `<th scope="col">${esc(column)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value, i) => i === header ? `<th scope="row">${esc(value)}</th>` : `<td>${esc(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
-        : `<p class="empty">No recorded activity for this section in the selected period.</p>`}${section.note && offset + size >= section.rows.length ? `<p class="note">${esc(section.note)}</p>` : ""}${footer(section.title)}</section>`);
-    }
-  }
-
-  const selectedLabels = EVENT_BOARD_OPTIONS.filter((option) => selection.includes(option.key)).map((option) => option.label).join(", ");
-  pages.push(`<section class="report-page ledger">${masthead("Definitions and scope")}<p class="eyebrow">Interpretation</p><h2 class="display">What the numbers mean.</h2><p class="lede">Selected data ${esc(selectedLabels)}.${has("contributors") ? ` Contributors are ranked by ${esc(RANK_METRIC_LABELS[report.rankMetric])}.` : ""}</p><ol class="definitions">${eventBoardDefinitions(report, selection).map((note) => `<li>${esc(note)}</li>`).join("")}</ol>${footer("Definitions and scope")}</section>`);
+    const body = section.rows.length
+      ? `<div class="table-wrap" tabindex="0" role="region" aria-label="${esc(section.title)}"><table class="event-table event-${esc(section.key)}"><thead><tr>${section.columns.map((column) => `<th scope="col">${esc(column)}</th>`).join("")}</tr></thead><tbody>${section.rows.map((row) => `<tr>${row.map((value, i) => i === header ? `<th scope="row">${esc(value)}</th>` : `<td>${esc(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+      : `<p class="empty">No recorded activity for this section in the selected period.</p>`;
+    return `<section class="event-section" aria-labelledby="event-section-${esc(section.key)}"><h2 id="event-section-${esc(section.key)}" class="section-rule">${esc(section.title)}</h2>${body}${section.note ? `<p class="note">${esc(section.note)}</p>` : ""}</section>`;
+  }).join("");
+  const included = EVENT_BOARD_OPTIONS.filter((option) => selection.includes(option.key)).map((option) => option.label.toLowerCase()).join(", ");
+  pages.push(`<section class="report-page ledger">${masthead("Events and contributors")}<p class="eyebrow">02 / Selected detail</p><h2 class="display">The record, event by event.</h2>${period(report)}${tables}<section class="methodology" aria-labelledby="event-definitions"><h2 id="event-definitions" class="section-rule">What the numbers mean</h2><p class="note">This report includes ${esc(included)}.${has("contributors") ? ` Contributors are ranked by ${esc(RANK_METRIC_LABELS[report.rankMetric])}.` : ""}</p><ol class="definitions">${eventBoardDefinitions(report, selection).map((note) => `<li>${esc(note)}</li>`).join("")}</ol></section>${footer("Selected detail and definitions")}</section>`);
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="author" content="Systems by Design"><title>FRC Events and Contributors | Systems by Design</title><link rel="stylesheet" href="${esc(BRAND.fontStylesheet)}"><style>${BRAND_CSS}${BOARD_DOCUMENT_STYLE}
 .scope { font-size: 9pt; color: var(--sbd-muted); margin: 6px 0 14px; }
 .scope strong { color: var(--sbd-ink); margin-right: 6px; }
 .ledger .display { margin-top: 4px; }
-.event-contributors th:first-child { width: 7%; padding-left: 0; text-align: left; }
-.event-contributors tbody th { text-align: left; width: 26%; }
-.event-distributions th:first-child, .event-donations th:first-child, .event-clients th:first-child, .event-trend th:first-child { width: 26%; }
+/* Columns size to their content and words break only between words. The
+   board table rules assume four columns, these tables carry up to ten. */
+.event-table { table-layout: auto; }
+.event-table th, .event-table td { overflow-wrap: normal; word-break: normal; padding: 6px 4px; }
+/* Figures, dates and short labels stay on one line. Only names and headers wrap. */
+.event-table td { white-space: nowrap; }
+.event-table thead th { font-size: 8.5pt; line-height: 1.25; }
+.event-table tbody th { font-weight: 500; overflow-wrap: anywhere; min-width: 14ch; text-align: left; }
+.event-contributors tbody th { min-width: 20ch; }
+.event-contributors thead th:nth-child(2) { text-align: left; }
+.event-table th:first-child { width: auto; }
+.event-contributors td:first-child { text-align: left; width: 4ch; }
+.event-section { margin-top: 6px; }
+.chart.event-chart { justify-content: flex-start; }
+.chart.event-chart .bar { flex: 0 1 96px; }
+.chart.event-chart .bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style></head><body><div class="toolbar"><p>Only the selected data is in this document. PDF tags and reading order depend on the exporting browser.</p><button id="sbd-print-report" type="button">Print / save PDF</button></div><main aria-label="FRC events and contributors report">${pages.join("")}</main></body></html>`;
 }

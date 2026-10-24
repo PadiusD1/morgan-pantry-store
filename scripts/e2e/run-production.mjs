@@ -95,6 +95,7 @@ try {
   await runNode(path.join(root, "scripts", "local-stack", "setup-db.mjs"), [], {
     ...appEnv,
     STACK_MIGRATION_0001: path.join(root, "migrations", "0001_release_one.sql"),
+    STACK_MIGRATION_0003: path.join(root, "migrations", "0003_frc_events.sql"),
     STACK_INDEXES: path.join(root, "tests", "fixtures", "prod-only-indexes.json"),
     ADMIN_EMAIL: email, ADMIN_PASSWORD: password,
     VOLUNTEER_EMAIL: volunteerEmail, VOLUNTEER_PASSWORD: volunteerPassword,

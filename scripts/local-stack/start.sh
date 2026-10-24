@@ -21,6 +21,7 @@ ADMIN_EMAIL=admin@local-stack.invalid
 VOLUNTEER_EMAIL=volunteer@local-stack.invalid
 FIXTURE="$REPO/scripts/local-stack/barcode-fixture.json"
 MIGRATION_0001="$REPO/migrations/0001_release_one.sql"
+MIGRATION_0003="$REPO/migrations/0003_frc_events.sql"
 INDEXES="$REPO/tests/fixtures/prod-only-indexes.json"
 
 refuse() { echo "local stack refused because $*" >&2; exit 2; }
@@ -67,7 +68,7 @@ SESSION_SECRET="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 NODE_DIR="$(dirname "$(command -v node)")"
 
 env -i PATH="$NODE_DIR:/usr/bin:/bin" HOME="$STACK_ROOT/home" TZ=UTC \
-  DATABASE_URL="$DATABASE_URL" STACK_MIGRATION_0001="$MIGRATION_0001" STACK_INDEXES="$INDEXES" \
+  DATABASE_URL="$DATABASE_URL" STACK_MIGRATION_0001="$MIGRATION_0001" STACK_MIGRATION_0003="$MIGRATION_0003" STACK_INDEXES="$INDEXES" \
   ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   VOLUNTEER_EMAIL="$VOLUNTEER_EMAIL" VOLUNTEER_PASSWORD="$VOLUNTEER_PASSWORD" \
   node "$REPO/scripts/local-stack/setup-db.mjs"
