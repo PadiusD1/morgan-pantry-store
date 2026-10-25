@@ -53,6 +53,9 @@ describe("migration 0003 and its rollback", () => {
     expect(await hasColumn()).toBe(false);
     expect(await tables()).toEqual([]);
     expect(await fingerprint()).toEqual(before);
+    // A second run after a finished rollback is a no op, never a parse error.
+    await t.pool.query(rollback());
+    expect(await fingerprint()).toEqual(before);
     await t.pool.query(forward());
     expect(await hasColumn()).toBe(true);
   });

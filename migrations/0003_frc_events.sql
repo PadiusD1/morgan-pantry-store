@@ -31,8 +31,9 @@ CREATE INDEX IF NOT EXISTS "idx_frc_events_status_starts_at" ON "frc_events" USI
 -- A nullable column with no default is a catalog change, not a table rewrite.
 ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "event_id" uuid;
 
--- NOT VALID first, so adding the key never scans under the stronger lock.
--- Every existing value is NULL, so the validation that follows is immediate.
+-- NOT VALID then VALIDATE keeps the pattern of the earlier migrations. ADD COLUMN
+-- above already holds the exclusive lock on transactions until COMMIT, so it saves
+-- no lock time here, and every existing value is NULL, so validation is immediate.
 DO $$
 BEGIN
 	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'transactions_event_id_frc_events_id_fk') THEN
