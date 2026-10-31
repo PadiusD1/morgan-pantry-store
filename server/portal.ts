@@ -23,7 +23,7 @@ const portalRequestSchema = z.object({
   items: z
     .array(
       z.object({
-        inventoryItemId: z.string().uuid(),
+        inventoryItemId: z.guid(),
         itemName: z.string().trim().min(1).max(200),
         itemCategory: z.string().trim().max(120).nullish(),
         requestedQuantity: z.number().int().min(1).max(999),
@@ -75,7 +75,7 @@ export function registerPortalRoutes(app: Express): void {
     if (!parsed.success) {
       return res
         .status(400)
-        .json({ message: parsed.error.errors[0]?.message ?? "Invalid request" });
+        .json({ message: parsed.error.issues[0]?.message ?? "Invalid request" });
     }
 
     // Link to the client roster record when one exists for this student ID
@@ -146,7 +146,7 @@ export function registerPortalRoutes(app: Express): void {
   });
 
   app.post("/api/portal/notifications/:id/read", async (req, res) => {
-    const id = z.string().uuid().safeParse(req.params.id);
+    const id = z.guid().safeParse(req.params.id);
     if (!id.success) return res.status(404).json({ message: "Notification not found" });
     const updated = await markAccountNotificationsRead(req.user!.id, id.data);
     if (!updated.length) return res.status(404).json({ message: "Notification not found" });

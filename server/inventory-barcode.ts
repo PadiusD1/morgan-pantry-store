@@ -11,7 +11,7 @@ import { runIdempotent } from './idempotency';
 /** Attaching a scanned code must never rename a different saved identity. */
 export function registerInventoryBarcodeRoutes(app: Express) {
   app.post('/api/inventory/:id/barcode', async (req, res) => {
-    const id = z.string().uuid().safeParse(req.params.id);
+    const id = z.guid().safeParse(req.params.id);
     const body = z.object({ barcode: z.string().trim().refine(validSavedBarcode) }).strict().safeParse(req.body);
     if (!id.success || !body.success) return res.status(400).json({ message: 'Choose an item and a valid scanned code.' });
     await runIdempotent(req, res, async client => {

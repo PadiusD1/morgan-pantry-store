@@ -18,6 +18,11 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// Zod 4 uuid() and the uuid columns drizzle-zod generates accept only RFC 9562
+// version and variant bits. PostgreSQL and the zod 3 checks this app shipped with
+// accept any 8-4-4-4-12 hex id, so every id field keeps that rule through guid().
+const anyHexId = () => z.guid();
+
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 export const userRoleEnum = pgEnum("user_role", [
@@ -190,7 +195,7 @@ export const householdMembers = pgTable("household_members", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertHouseholdMemberSchema = createInsertSchema(householdMembers)
+export const insertHouseholdMemberSchema = createInsertSchema(householdMembers, { clientId: anyHexId })
   .omit({ id: true, createdAt: true });
 
 export type InsertHouseholdMember = z.infer<typeof insertHouseholdMemberSchema>;
@@ -227,7 +232,7 @@ export const itemGroupItems = pgTable("item_group_items", {
   quantity: integer("quantity").notNull().default(1),
 });
 
-export const insertItemGroupItemSchema = createInsertSchema(itemGroupItems)
+export const insertItemGroupItemSchema = createInsertSchema(itemGroupItems, { groupId: anyHexId, inventoryItemId: anyHexId })
   .omit({ id: true });
 
 export type InsertItemGroupItem = z.infer<typeof insertItemGroupItemSchema>;
@@ -308,9 +313,9 @@ export const transactions = pgTable("transactions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertTransactionSchema = createInsertSchema(transactions)
+export const insertTransactionSchema = createInsertSchema(transactions, { clientId: anyHexId, donorId: anyHexId })
   .omit({ id: true, createdAt: true })
-  .extend({ eventId: z.string().uuid("Choose a valid event.").nullish() });
+  .extend({ eventId: z.guid("Choose a valid event.").nullish() });
 
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 export type Transaction = typeof transactions.$inferSelect;
@@ -341,7 +346,7 @@ const transactionDecimal = (maximum: number) => z.string().trim()
   .regex(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/, "Enter a nonnegative number")
   .refine((value) => Number.isFinite(Number(value)) && Number(value) <= maximum, "Number is outside the supported range");
 
-export const insertTransactionItemSchema = createInsertSchema(transactionItems)
+export const insertTransactionItemSchema = createInsertSchema(transactionItems, { transactionId: anyHexId, inventoryItemId: anyHexId })
   .omit({ id: true })
   .extend({
     name: z.string().trim().min(1).max(200),
@@ -366,7 +371,7 @@ export const packComponents = pgTable("pack_components", {
   weightG: real("weight_g"),
 });
 
-export const insertPackComponentSchema = createInsertSchema(packComponents)
+export const insertPackComponentSchema = createInsertSchema(packComponents, { parentItemId: anyHexId })
   .omit({ id: true });
 
 export type InsertPackComponent = z.infer<typeof insertPackComponentSchema>;
@@ -385,7 +390,7 @@ export const priceHistory = pgTable("price_history", {
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertPriceHistorySchema = createInsertSchema(priceHistory)
+export const insertPriceHistorySchema = createInsertSchema(priceHistory, { inventoryItemId: anyHexId })
   .omit({ id: true });
 
 export type InsertPriceHistory = z.infer<typeof insertPriceHistorySchema>;
@@ -404,7 +409,7 @@ export const weightHistory = pgTable("weight_history", {
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertWeightHistorySchema = createInsertSchema(weightHistory)
+export const insertWeightHistorySchema = createInsertSchema(weightHistory, { inventoryItemId: anyHexId })
   .omit({ id: true });
 
 export type InsertWeightHistory = z.infer<typeof insertWeightHistorySchema>;
@@ -550,7 +555,7 @@ export const requests = pgTable("requests", {
     .$onUpdate(() => new Date()),
 });
 
-export const insertRequestSchema = createInsertSchema(requests)
+export const insertRequestSchema = createInsertSchema(requests, { clientId: anyHexId, userId: anyHexId, transactionId: anyHexId })
   .omit({ id: true, createdAt: true, updatedAt: true });
 
 export type InsertRequest = z.infer<typeof insertRequestSchema>;
@@ -575,7 +580,7 @@ export const requestItems = pgTable("request_items", {
   denialReason: text("denial_reason"),
 });
 
-export const insertRequestItemSchema = createInsertSchema(requestItems)
+export const insertRequestItemSchema = createInsertSchema(requestItems, { requestId: anyHexId, inventoryItemId: anyHexId })
   .omit({ id: true });
 
 export type InsertRequestItem = z.infer<typeof insertRequestItemSchema>;
@@ -596,7 +601,7 @@ export const requestAuditLog = pgTable("request_audit_log", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertRequestAuditLogSchema = createInsertSchema(requestAuditLog)
+export const insertRequestAuditLogSchema = createInsertSchema(requestAuditLog, { requestId: anyHexId })
   .omit({ id: true, createdAt: true });
 
 export type InsertRequestAuditLog = z.infer<typeof insertRequestAuditLogSchema>;
@@ -618,7 +623,7 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertNotificationSchema = createInsertSchema(notifications)
+export const insertNotificationSchema = createInsertSchema(notifications, { requestId: anyHexId })
   .omit({ id: true, createdAt: true });
 
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;

@@ -141,7 +141,7 @@ const approveBodySchema = z.object({
   items: z
     .array(
       z.object({
-        id: z.string().uuid(),
+        id: z.guid(),
         approvedQuantity: z.number().int().min(0),
       }),
     )
@@ -154,13 +154,13 @@ const fulfillBodySchema = z.object({
   items: z
     .array(
       z.object({
-        id: z.string().uuid(),
+        id: z.guid(),
         fulfilledQuantity: z.number().int().min(0),
       }),
     )
     .optional(),
   // The event the staff session had selected when the pickup was completed.
-  eventId: z.string().uuid().nullish(),
+  eventId: z.guid().nullish(),
 });
 
 async function getHydratedItemGroupItems(groupId: string) {
@@ -1023,8 +1023,8 @@ export async function registerRoutes(app: Express): Promise<void> {
   app.post("/api/requests", async (req, res) => {
     const parsed = createRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      const message = parsed.error.errors[0]?.message ?? "Invalid request data";
-      const path = parsed.error.errors[0]?.path?.join(".");
+      const message = parsed.error.issues[0]?.message ?? "Invalid request data";
+      const path = parsed.error.issues[0]?.path?.join(".");
       return res.status(400).json({ message: path ? `${path}: ${message}` : message });
     }
     try {

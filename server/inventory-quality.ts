@@ -37,7 +37,7 @@ export function registerInventoryQualityRoutes(app: Express) {
   });
 
   async function review(req: Request, res: Response, preview: boolean) {
-    const id = z.string().uuid().safeParse(req.params.id);
+    const id = z.guid().safeParse(req.params.id);
     const parsed = measurementSchema.safeParse(req.body);
     if (!id.success || !parsed.success) return res.status(400).json({ message: 'Enter positive measurements (up to four decimals for pounds and two for dollars), a source, and the current item version.' });
     const body = parsed.data;

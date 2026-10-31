@@ -11,7 +11,7 @@ export function registerIntegrationRoutes(app: Express) {
     res.json({ turnstile: { required: c.turnstile.required, configured: c.turnstile.ready }, posthog: { configured: c.posthog.ready, mode: 'Anonymous server events only; no replay or form capture.' }, resend: { configured: c.resend.ready, ledgerReady: ledger, counts: emailCounts }, distributedRateLimitConfigured: c.distributedRateLimitConfigured, cloudflareWaf: 'Not verified by this application. Turnstile does not establish DNS/WAF protection.', databaseTlsVerification: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true', configurationIsNotLiveVerification: true });
   });
   app.post('/api/integrations/test', requireRole('admin'), async (req, res) => {
-    const body = z.object({ service: z.enum(['posthog','resend']), key: z.string().uuid() }).strict().safeParse(req.body);
+    const body = z.object({ service: z.enum(['posthog','resend']), key: z.guid() }).strict().safeParse(req.body);
     if (!body.success) return res.status(400).json({ message: 'Select a service and a unique test key.' });
     if (body.data.service === 'posthog') return res.json({ status: await captureOperationalEvent('integration_test') });
     if (!integrationConfig().resend.ready) return res.status(409).json({ message: 'Resend is not fully configured.' });

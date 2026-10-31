@@ -424,7 +424,7 @@ export function registerAuthRoutes(app: Express): void {
   app.post("/api/auth/signup", async (req, res) => {
     const parsed = signupSchema.safeParse(req.body);
     if (!parsed.success) {
-      const message = parsed.error.errors[0]?.message ?? "Invalid signup details";
+      const message = parsed.error.issues[0]?.message ?? "Invalid signup details";
       return res.status(400).json({ message });
     }
     const { email, password, name, studentId, phone } = parsed.data;
@@ -509,7 +509,7 @@ export function registerAuthRoutes(app: Express): void {
   app.post("/api/users", async (req, res) => {
     const parsed = createUserSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Invalid user" });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid user" });
     }
     const existing = await storage.getUserByEmail(parsed.data.email);
     if (existing) {
@@ -525,7 +525,7 @@ export function registerAuthRoutes(app: Express): void {
   app.patch("/api/users/:id", async (req, res) => {
     const parsed = updateUserSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Invalid update" });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid update" });
     }
     const changes: Record<string, unknown> = { ...parsed.data };
     if (parsed.data.password) {

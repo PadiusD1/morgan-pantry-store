@@ -22,7 +22,7 @@ export function parsePhotoUpload(dataUrl: string): { bytes: Buffer; type: string
 
 export function registerProductPhotoRoutes(app: Express) {
   app.put("/api/inventory/:id/photo", requireRole("admin", "staff"), async (req, res) => {
-    const id = z.string().uuid().safeParse(req.params.id);
+    const id = z.guid().safeParse(req.params.id);
     const body = z.object({ dataUrl: z.string().max(250_000), description: z.string().trim().min(1).max(200), expectedUpdatedAt: z.string().datetime({ offset: true }).optional() }).strict().safeParse(req.body);
     if (!id.success || !body.success) return res.status(400).json({ message: "A valid item and product photo are required." });
     try { parsePhotoUpload(body.data.dataUrl); } catch (error) { return res.status(400).json({ message: (error as Error).message }); }
@@ -32,7 +32,7 @@ export function registerProductPhotoRoutes(app: Express) {
     return res.json({ saved: true, updatedAt: new Date(rows[0].updated_at).toISOString(), imageUrl: `/api/public/inventory/${id.data}/photo?v=${Date.now()}` });
   });
   app.get("/api/public/inventory/:id/photo", async (req, res) => {
-    const id = z.string().uuid().safeParse(req.params.id);
+    const id = z.guid().safeParse(req.params.id);
     if (!id.success) return res.status(404).end();
     const { rows } = await pool.query("SELECT raw_payload FROM inventory_items WHERE id = $1", [id.data]);
     const photo = productPhotoSource(rows[0]?.raw_payload);

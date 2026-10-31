@@ -15,7 +15,7 @@ import { normaliseName } from "@shared/identity";
 import { requests, requestItems, requestAuditLog, notifications, settings } from "@shared/schema";
 
 const requestItemSchema = z.object({
-  inventoryItemId: z.string().uuid(),
+  inventoryItemId: z.guid(),
   itemName: z.string().trim().min(1).max(200),
   itemCategory: z.string().trim().max(120).nullish(),
   requestedQuantity: z.number().int().min(1).max(999),
@@ -26,8 +26,8 @@ export const createRequestSchema = z.object({
   clientIdentifier: z.string().trim().min(1).max(60),
   clientEmail: z.string().trim().email().nullish().or(z.literal("").transform(() => null)),
   clientPhone: z.string().trim().max(30).nullish(),
-  clientId: z.string().uuid().nullish(),
-  userId: z.string().uuid().nullish(),
+  clientId: z.guid().nullish(),
+  userId: z.guid().nullish(),
   reason: z.string().trim().min(1).max(2000),
   studentNote: z.string().trim().max(2000).nullish(),
   items: z.array(requestItemSchema).min(1).max(50),
