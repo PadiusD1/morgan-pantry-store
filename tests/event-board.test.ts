@@ -4,6 +4,7 @@ import {
   type BoardEvent, type EventBoardInput, type EventBoardTransaction,
 } from "../shared/event-board";
 import { eventBoardHtml } from "../shared/event-board-document";
+import { buildBoardReport } from "../shared/reporting";
 
 const E1 = "11111111-1111-4111-8111-111111111111";
 const E2 = "22222222-2222-4222-8222-222222222222";
@@ -41,6 +42,18 @@ function board(transactions: EventBoardTransaction[], extra: Partial<EventBoardI
 const row = (report: ReturnType<typeof board>, key: string) => report.events.find((event) => event.key === key)!;
 
 describe("event board figures", () => {
+  it("includes event only stock in separate and combined reports without inventing clients", () => {
+    const distribution = out(E1, null, 120);
+    const records = [distribution, out(E1, "student-a", 2), out(E2, null, 30), out(null, "student-b", 3)];
+    const selected = board(records, { scope: { kind: "events", ids: [E1], includeUnassigned: false } });
+    expect(selected.totals.distribution).toMatchObject({ entries: 2, units: 122, identifiedClients: 1, unlinkedVisits: 1 });
+    const all = board(records);
+    const general = buildBoardReport(records, [], { from: "", to: "" });
+    expect(all.totals.distribution).toMatchObject({ entries: 4, units: 155, identifiedClients: 2, unlinkedVisits: 2 });
+    expect(general.distribution).toMatchObject({ entries: 4, units: 155, knownClients: 2, unlinkedVisits: 2 });
+    expect(eventBoardCsv(selected, ALL_EVENT_BOARD_DATA)).toContain("Checkouts");
+    expect(eventBoardHtml(selected, ALL_EVENT_BOARD_DATA)).toContain("Checkouts");
+  });
   it("keeps unassigned history unassigned even inside an event's window", () => {
     // Saved at the very hour of First Market, but without an event id.
     const report = board([out(E1, "student-a"), out(null, "student-b", 3, "2026-10-03T15:30:00.000Z")]);
@@ -151,7 +164,7 @@ describe("one selection for screen, CSV and print", () => {
     const selection = ["distributions", "contributors", "units"] as const;
     const sections = eventBoardSections(report, selection);
     expect(sections.map((s) => s.key)).toEqual(["distributions", "contributors"]);
-    expect(sections[0].columns).toEqual(["Event", "Date", "Visits", "Units", "Emergency visits"]);
+    expect(sections[0].columns).toEqual(["Event", "Date", "Checkouts", "Units", "Emergency checkouts"]);
     expect(sections[0].rows.at(-1)).toEqual(["Total", "", 4, 10, 0]);
     const csv = eventBoardCsv(report, selection);
     for (const section of sections) for (const r of section.rows) expect(csv).toContain(String(r[0]));

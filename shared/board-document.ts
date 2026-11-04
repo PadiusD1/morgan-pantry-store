@@ -17,7 +17,7 @@ function footer(section: string): string {
   return `<footer class="page-footer"><span>${BRAND.name} / ${BRAND.domain}</span><span>${escapeHtml(section)}</span></footer>`;
 }
 function monthlyTable(months: BoardReport["months"]): string {
-  return `<div class="table-wrap" tabindex="0" role="region" aria-label="Monthly service data, scroll horizontally on small screens"><table><caption>Monthly service within the selected period</caption><thead><tr><th scope="col">Month</th><th scope="col">Visits</th><th scope="col">Clients</th><th scope="col">Units</th><th scope="col">Lbs</th><th scope="col">Est. USD</th><th scope="col">Emergency</th></tr></thead><tbody>${cells(months.map(m => [monthLabel(m.month), number(m.entries), number(m.knownClients), number(m.units), m.weightLbs.toFixed(1), money(m.valueUsd), number(m.emergencyVisits)]))}</tbody></table></div>`;
+  return `<div class="table-wrap" tabindex="0" role="region" aria-label="Monthly service data, scroll horizontally on small screens"><table><caption>Monthly service within the selected period</caption><thead><tr><th scope="col">Month</th><th scope="col">Checkouts</th><th scope="col">Clients</th><th scope="col">Units</th><th scope="col">Lbs</th><th scope="col">Est. USD</th><th scope="col">Emergency</th></tr></thead><tbody>${cells(months.map(m => [monthLabel(m.month), number(m.entries), number(m.knownClients), number(m.units), m.weightLbs.toFixed(1), money(m.valueUsd), number(m.emergencyVisits)]))}</tbody></table></div>`;
 }
 
 /** The CSV and document share a BoardReport, never separate metric formulas.
@@ -30,12 +30,12 @@ export function boardSummaryHtml(report: BoardReport, selection?: BoardSelection
   const chartMonths = report.months.slice(-12);
   const maxVisits = Math.max(1, ...chartMonths.map(m => m.entries));
   const metrics = [
-    [number(d.entries), "Distribution visits", "One saved checkout is one visit"],
+    [number(d.entries), "Distribution checkouts", "Saved distributions, not attendance"],
     [number(d.knownClients), "Identified clients served", "Distinct linked client records"],
     [number(d.units), "Units distributed", "Items recorded at checkout"],
     [`${d.weightLbs.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} lbs`, "Weight distributed", "Historical checkout weights"],
     [money(d.valueUsd), "Estimated value distributed", "Not cash revenue or measured savings"],
-    [number(d.emergencyVisits), "Emergency visits", "Included in distribution visits"],
+    [number(d.emergencyVisits), "Emergency checkouts", "Included in distribution checkouts"],
   ];
   const quality = d.unvaluedUnits > 0 || d.unweighedUnits > 0 || d.unlinkedVisits > 0;
   const maxItem = Math.max(1, ...report.items.slice(0, 10).map(item => item.quantity));
@@ -55,9 +55,9 @@ export function boardSummaryHtml(report: BoardReport, selection?: BoardSelection
 <section class="report-page">${masthead("Board briefing")}<p class="eyebrow">01 / Impact overview</p><h1>Board Summary</h1><p class="lede">Food access, in focus. Recorded service, resources distributed, and the operating signals that deserve attention.</p>
 <div class="period"><strong>${escapeHtml(report.periodLabel)}</strong><span>Baltimore calendar &middot; Generated ${escapeHtml(report.generatedAt)}</span></div>
 <div class="metrics">${metrics.map(([value, label, note]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span><small>${escapeHtml(note)}</small></div>`).join("")}</div>
-<h2>Service through the period</h2><p class="note">Distribution visits. ${report.months.length > 12 ? "Latest 12 months with recorded distributions; the complete monthly ledger follows." : "Months with recorded distributions; the complete monthly ledger follows."}</p>
-${chartMonths.length ? `<div class="chart" role="img" aria-label="${escapeHtml(chartMonths.map(m => `${monthLabel(m.month)}: ${m.entries} visits`).join("; "))}">${chartMonths.map(m => `<div class="bar"><strong>${number(m.entries)}</strong><svg viewBox="0 0 36 100" preserveAspectRatio="none" aria-hidden="true"><rect x="3" y="${100 - (m.entries / maxVisits) * 92}" width="30" height="${(m.entries / maxVisits) * 92}" fill="var(--sbd-blue)"/></svg><span>${escapeHtml(monthLabel(m.month))}</span></div>`).join("")}</div>` : `<p class="empty">No distributions recorded in this period.</p>`}
-${quality ? `<aside class="quality"><h3>Data quality to review</h3><p>${number(d.unvaluedUnits)} distributed units lack a positive recorded unit value; ${number(d.unweighedUnits)} lack a positive recorded unit weight. ${number(d.unlinkedVisits)} visits are unlinked. These gaps may understate value, weight, or identified reach.</p></aside>` : `<p class="note">No missing positive unit weights, positive unit values, or client links were detected in these saved distribution records. This is not an independent data audit.</p>`}
+<h2>Service through the period</h2><p class="note">Distribution checkouts. ${report.months.length > 12 ? "Latest 12 months with recorded distributions; the complete monthly ledger follows." : "Months with recorded distributions; the complete monthly ledger follows."}</p>
+${chartMonths.length ? `<div class="chart" role="img" aria-label="${escapeHtml(chartMonths.map(m => `${monthLabel(m.month)}: ${m.entries} checkouts`).join("; "))}">${chartMonths.map(m => `<div class="bar"><strong>${number(m.entries)}</strong><svg viewBox="0 0 36 100" preserveAspectRatio="none" aria-hidden="true"><rect x="3" y="${100 - (m.entries / maxVisits) * 92}" width="30" height="${(m.entries / maxVisits) * 92}" fill="var(--sbd-blue)"/></svg><span>${escapeHtml(monthLabel(m.month))}</span></div>`).join("")}</div>` : `<p class="empty">No distributions recorded in this period.</p>`}
+${quality ? `<aside class="quality"><h3>Data quality to review</h3><p>${number(d.unvaluedUnits)} distributed units lack a positive recorded unit value; ${number(d.unweighedUnits)} lack a positive recorded unit weight. ${number(d.unlinkedVisits)} checkouts are unlinked. These gaps may understate value, weight, or identified reach.</p></aside>` : `<p class="note">No missing positive unit weights, positive unit values, or client links were detected in these saved distribution records. This is not an independent data audit.</p>`}
 ${footer("Impact overview")}</section>
 <section class="report-page">${masthead("Operations briefing")}<p class="eyebrow">02 / Operating picture</p><h2 class="display">Resources behind the service.</h2><p class="lede">Receiving describes the selected period. Inventory describes what is recorded on hand when this report is generated.</p>
 <table><caption>Received stock and current inventory</caption><thead><tr><th scope="col">Measure</th><th scope="col">Units</th><th scope="col">Weight (lbs)</th><th scope="col">Estimated value (USD)</th></tr></thead><tbody>${cells([["Received within period (all sources)", number(report.receiving.units), report.receiving.weightLbs.toFixed(1), money(report.receiving.valueUsd)], ["On hand at generation time", number(report.inventory.units), report.inventory.weightLbs.toFixed(1), money(report.inventory.valueUsd)]])}</tbody></table>

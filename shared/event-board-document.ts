@@ -32,7 +32,7 @@ export function eventBoardHtml(report: EventBoardReport, selection: EventBoardSe
   const d = report.totals.distribution;
   const r = report.totals.receiving;
   const metrics: [string, string, string][] = [
-    ...(has("distributions") || has("trend") ? [[number(d.entries), "Distribution visits", "Saved checkouts in this selection"] as [string, string, string]] : []),
+    ...(has("distributions") || has("trend") ? [[number(d.entries), "Distribution checkouts", "Saved checkouts in this selection"] as [string, string, string]] : []),
     ...(has("clients") ? [[number(d.identifiedClients), "Identified clients", "Each client counted once"] as [string, string, string]] : []),
     ...(has("units") && (has("distributions") || has("trend")) ? [[number(d.units), "Units distributed", "Items recorded at checkout"] as [string, string, string]] : []),
     ...(has("weight") && has("distributions") ? [[`${d.weightLbs.toLocaleString("en-US", { maximumFractionDigits: 1, minimumFractionDigits: 1 })} lbs`, "Recorded weight distributed", `${number(d.unweighedUnits)} units without a weight`] as [string, string, string]] : []),
@@ -46,7 +46,7 @@ export function eventBoardHtml(report: EventBoardReport, selection: EventBoardSe
   // The full names are in the aria label and in the tables that follow.
   const barDate = (row: (typeof chartEvents)[number]) => row.startsAt ? BAR_DATE.format(new Date(row.startsAt)) : "No date";
   const chart = (has("distributions") || has("trend")) ? (chartEvents.length
-    ? `<h2>Visits by event</h2><p class="note">${report.events.filter((row) => row.key !== UNASSIGNED_KEY).length > 12 ? "The latest 12 events in this selection, in date order. The tables that follow list every event." : "Events in date order."}</p><div class="chart event-chart" role="img" aria-label="${esc(chartEvents.map((row) => `${label(row)}: ${row.distribution.entries} visits`).join("; "))}">${chartEvents.map((row) => `<div class="bar"><strong>${number(row.distribution.entries)}</strong><svg viewBox="0 0 36 100" preserveAspectRatio="none" aria-hidden="true"><rect x="3" y="${100 - (row.distribution.entries / maxVisits) * 92}" width="30" height="${(row.distribution.entries / maxVisits) * 92}" fill="var(--sbd-blue)"/></svg><span>${esc(barDate(row))}</span></div>`).join("")}</div>`
+    ? `<h2>Checkouts by event</h2><p class="note">${report.events.filter((row) => row.key !== UNASSIGNED_KEY).length > 12 ? "The latest 12 events in this selection, in date order. The tables that follow list every event." : "Events in date order."}</p><div class="chart event-chart" role="img" aria-label="${esc(chartEvents.map((row) => `${label(row)}: ${row.distribution.entries} checkouts`).join("; "))}">${chartEvents.map((row) => `<div class="bar"><strong>${number(row.distribution.entries)}</strong><svg viewBox="0 0 36 100" preserveAspectRatio="none" aria-hidden="true"><rect x="3" y="${100 - (row.distribution.entries / maxVisits) * 92}" width="30" height="${(row.distribution.entries / maxVisits) * 92}" fill="var(--sbd-blue)"/></svg><span>${esc(barDate(row))}</span></div>`).join("")}</div>`
     : `<p class="empty">No event activity in this selection.</p>`) : "";
   const c = report.coverage;
   const gaps = (has("weight") && d.unweighedUnits > 0) || (has("value") && d.unvaluedUnits > 0) || c.ambiguousInbound > 0 || c.unattributedInbound > 0 || c.unknownEventEntries > 0;

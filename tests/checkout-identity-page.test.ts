@@ -20,7 +20,7 @@ describe("check out page identity", () => {
   it("refuses with a destructive toast before any request or cart change", () => {
     const refusal = submit.indexOf("if (!identity.ok)");
     expect(refusal).toBeGreaterThan(0);
-    const branch = submit.slice(refusal, submit.indexOf("const clientPayload", refusal));
+    const branch = submit.slice(refusal, submit.indexOf("clientPayload = buildCheckoutClient", refusal));
     expect(branch).toMatch(/variant:\s*"destructive"/);
     expect(branch).toMatch(/description:\s*identity\.message/);
     expect(branch).toMatch(/return;/);
