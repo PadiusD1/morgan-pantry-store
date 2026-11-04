@@ -47,7 +47,8 @@ describe('product photo safety', () => {
   it('exposes only a same-origin photo route, not provider payload', () => {
     const rawPayload = { product:{image_url:'https://images.openfoodfacts.org/images/test.jpg'}, privateNote:'not public' };
     expect(productPhotoSource(rawPayload)).toEqual({kind:'remote',url:rawPayload.product.image_url});
-    expect(productPhotoPath({id:'abc',rawPayload})).toBe('/api/public/inventory/abc/photo?v=');
+    expect(productPhotoPath({id:'abc',rawPayload})).toMatch(/^\/api\/public\/inventory\/abc\/photo\?v=r[0-9a-z]+$/);
+    expect(productPhotoPath({id:'abc',rawPayload,updatedAt:'2026-11-02T00:00:00Z'})).toBe(productPhotoPath({id:'abc',rawPayload,updatedAt:'2026-11-03T00:00:00Z'}));
   });
 });
 describe('legacy donor review', () => {

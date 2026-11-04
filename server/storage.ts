@@ -36,6 +36,9 @@ import type {
 
 // ─── IStorage interface ──────────────────────────────────────────────────────
 
+/** An inventory row as a list read returns it, without uploaded photo bytes. */
+export type InventoryListItem = InventoryItem & { hasUploadedPhoto: boolean };
+
 export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
@@ -46,7 +49,8 @@ export interface IStorage {
   deleteUser(id: string): Promise<boolean>;
 
   // Inventory
-  getInventoryItems(): Promise<InventoryItem[]>;
+  /** List rows carry no inline photo bytes, see PgStorage.getInventoryItems. */
+  getInventoryItems(): Promise<InventoryListItem[]>;
   getInventoryItem(id: string): Promise<InventoryItem | undefined>;
   getInventoryItemByBarcode(barcode: string): Promise<InventoryItem | undefined>;
   createInventoryItem(item: InsertInventoryItem): Promise<InventoryItem>;

@@ -186,8 +186,8 @@ export function buildBoardReport(transactions: ReportTransaction[], inventory: R
 }
 
 export const REPORT_DEFINITIONS = [
-  "Visits are saved OUT transactions; one checkout counts once regardless of its item count.",
-  "Identified clients are distinct linked client IDs. Visits without a linked record are reported separately; unique monthly counts must not be added together.",
+  "Checkouts are saved OUT transactions. Each checkout counts once, including event distributions without individual information. These counts do not measure attendance.",
+  "Identified clients are distinct linked client IDs. Checkouts without a linked record are reported separately; unique monthly counts must not be added together.",
   "Distributed weight and estimated USD value use the unit values saved with each checkout. Zero or missing values can understate totals.",
   "Received stock includes all IN sources, including purchases and transfers; it is not a measure of donations alone.",
   "Current inventory is a snapshot at generation time, not a historical end-of-period balance. Low stock excludes items already out of stock.",
@@ -201,10 +201,10 @@ export function boardSummaryCsv(report: BoardReport, selection?: BoardSelection)
     ["Morgan State Food Resource Center — Board Summary"],
     ["Reporting period", report.periodLabel], ["Calendar timezone", REPORT_TIME_ZONE], ["Generated", report.generatedAt], [],
     ["Service metric", "Value", "Unit"],
-    ["Completed distribution visits", d.entries, "visits"], ["Identified clients served", d.knownClients, "distinct linked clients"],
-    ["Visits without a linked client record", d.unlinkedVisits, "visits"], ["Units distributed", d.units, "units"],
+    ["Completed distribution checkouts", d.entries, "checkouts"], ["Identified clients served", d.knownClients, "distinct linked clients"],
+    ["Checkouts without a linked client record", d.unlinkedVisits, "checkouts"], ["Units distributed", d.units, "units"],
     ["Weight distributed", d.weightLbs.toFixed(2), "lbs"], ["Estimated value distributed", d.valueUsd.toFixed(2), "USD"],
-    ["Emergency visits", d.emergencyVisits, "visits"],
+    ["Emergency checkouts", d.emergencyVisits, "checkouts"],
     ["Distributed units without a positive recorded unit value", d.unvaluedUnits, "units"],
     ["Distributed units without a positive recorded unit weight", d.unweighedUnits, "units"], [],
     ["Received stock in reporting period", "Value", "Unit"],
@@ -215,7 +215,7 @@ export function boardSummaryCsv(report: BoardReport, selection?: BoardSelection)
     ["Weight on hand", report.inventory.weightLbs.toFixed(2), "lbs"], ["Estimated value on hand", report.inventory.valueUsd.toFixed(2), "USD"],
     ["Low-stock items", report.inventory.lowStockItems, "items"], ["Out-of-stock items", report.inventory.outOfStockItems, "items"], [],
     ["Monthly service within reporting period"],
-    ["Month", "Visits", "Identified clients", "Units", "Weight (lbs)", "Estimated value (USD)", "Emergency visits"],
+    ["Month", "Checkouts", "Identified clients", "Units", "Weight (lbs)", "Estimated value (USD)", "Emergency checkouts"],
     ...report.months.map((m) => [m.month, m.entries, m.knownClients, m.units, m.weightLbs.toFixed(2), m.valueUsd.toFixed(2), m.emergencyVisits]), [],
     ["Distribution by item within reporting period"], ["Item", "Units", "Weight (lbs)", "Estimated value (USD)"],
     ...report.items.map((item) => [item.name, item.quantity, item.weightLbs.toFixed(2), item.valueUsd.toFixed(2)]), [],

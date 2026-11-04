@@ -74,7 +74,7 @@ test("board CSV matches the selected Baltimore day and excludes client details",
   expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   const csv = bytes.toString("utf8");
   expect(csv).toContain("Reporting period,2024-09-30 to 2024-09-30");
-  expect(csv).toContain("Completed distribution visits,1,visits");
+  expect(csv).toContain("Completed distribution checkouts,1,checkouts");
   expect(csv).toContain("Units distributed,5,units");
   expect(csv).toContain("Estimated value distributed,8.50,USD");
   expect(csv).toContain("Units received,7,units");

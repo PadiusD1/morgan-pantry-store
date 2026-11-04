@@ -74,6 +74,7 @@ export default function CheckOutPage() {
   const [clientContact, setClientContact] = useState("");
   const [clientAllergies, setClientAllergies] = useState<string[]>([]);
   const [isEmergency, setIsEmergency] = useState(false);
+  const [eventOnly, setEventOnly] = useState(false);
   // The event this session is working, kept on the server for the session, so
   // it stays through every checkout, a reload and other pages.
   const eventSession = useEventSession();
@@ -430,46 +431,53 @@ export default function CheckOutPage() {
       return;
     }
 
+    if (eventOnly && !activeEvent) {
+      toast({ title: "Choose an event", description: "Select an active event before saving without individual details.", variant: "destructive" });
+      return;
+    }
     const clientNameFinal = clientName.trim();
-    if (!clientNameFinal) {
-      toast({
-        title: "Missing client name",
-        description: "Enter the client's name before recording this check-out.",
+    let clientPayload: ReturnType<typeof buildCheckoutClient> | null = null;
+    if (!eventOnly) {
+      if (!clientNameFinal) {
+        toast({
+          title: "Missing client name",
+          description: "Enter the client's name before recording this check-out.",
+        });
+        return;
+      }
+      const identityError = Object.values(validateIdentityInputs({
+        studentId: isPartner ? "" : clientIdentifier,
+        email: clientEmail,
+        classification: clientClassification,
+      }))[0];
+      if (identityError) {
+        toast({ title: "Check the student details", description: identityError });
+        return;
+      }
+      // A returning student is found by ID or email, so no second record is made,
+      // and a conflicting ID and email is refused with the form and cart kept.
+      const selectedClient = selectedClientRecord;
+      const identity = resolveCheckoutIdentity(clients, {
+        studentId: clientIdentifier,
+        email: clientEmail,
+        name: clientNameFinal,
+        selected: selectedClient,
       });
-      return;
+      if (!identity.ok) {
+        toast({ title: "Check the student details", description: identity.message, variant: "destructive" });
+        return;
+      }
+      clientPayload = buildCheckoutClient({
+        existing: identity.existing,
+        name: identity.name,
+        studentId: clientIdentifier,
+        email: clientEmail,
+        classification: clientClassification,
+        contact: clientContact,
+        // Seeded by the save key, so a retry after a failed save sends the same identifier.
+        random: () => key,
+      });
     }
-    const identityError = Object.values(validateIdentityInputs({
-      studentId: isPartner ? "" : clientIdentifier,
-      email: clientEmail,
-      classification: clientClassification,
-    }))[0];
-    if (identityError) {
-      toast({ title: "Check the student details", description: identityError });
-      return;
-    }
-    // A returning student is found by ID or email, so no second record is made,
-    // and a conflicting ID and email is refused with the form and cart kept.
-    const selectedClient = selectedClientRecord;
-    const identity = resolveCheckoutIdentity(clients, {
-      studentId: clientIdentifier,
-      email: clientEmail,
-      name: clientNameFinal,
-      selected: selectedClient,
-    });
-    if (!identity.ok) {
-      toast({ title: "Check the student details", description: identity.message, variant: "destructive" });
-      return;
-    }
-    const clientPayload = buildCheckoutClient({
-      existing: identity.existing,
-      name: identity.name,
-      studentId: clientIdentifier,
-      email: clientEmail,
-      classification: clientClassification,
-      contact: clientContact,
-      // Seeded by the save key, so a retry after a failed save sends the same identifier.
-      random: () => key,
-    });
 
     // No stock validation — checkout always proceeds.
     // If inventory is insufficient, it will be auto-adjusted.
@@ -524,13 +532,13 @@ export default function CheckOutPage() {
 
     const location = locationFor(key);
 
-    let result: { client: typeof clients[number]; saved?: unknown };
+    let result: { client: typeof clients[number] | null; saved?: unknown };
     try {
       result = await withIdempotencyKey(key, () => recordOutbound({
         client: clientPayload,
         items: cart,
         location,
-        isEmergency,
+        isEmergency: eventOnly ? false : isEmergency,
         eventId: activeEvent?.id ?? null,
         timestamp: startedAt,
       }));
@@ -582,14 +590,14 @@ export default function CheckOutPage() {
       return;
     }
 
-    if (result?.client) {
+    if (result) {
       // The receipt shows what the server saved, never the cart.
-      setReceipt(receiptFromSaved(result.saved, [result.client, ...clients], new Date().toISOString()));
+      setReceipt(receiptFromSaved(result.saved, [...(result.client ? [result.client] : []), ...clients], new Date().toISOString()));
 
       const savedEvent = (result.saved as { eventName?: string | null } | null)?.eventName;
       toast({
         title: isEmergency ? "Emergency shop recorded" : "Check-out recorded",
-        description: `Distribution recorded for ${savedCheckOutName(result.saved, result.client.name)}${isEmergency ? " (Emergency Shop Appointment)" : ""}${savedEvent ? ` at ${savedEvent}` : ""}${location ? " with location" : ""}.`,
+        description: `Distribution recorded for ${savedCheckOutName(result.saved, result.client?.name ?? "event distribution")}${isEmergency ? " (Emergency Shop Appointment)" : ""}${savedEvent ? ` at ${savedEvent}` : ""}${location ? " with location" : ""}.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       setCart([]);
@@ -616,8 +624,22 @@ export default function CheckOutPage() {
             and a portal still passes React submit events up this tree. */}
         <div className="mb-4"><EventSessionBar mode="checkout" /></div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <section className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
-            <div className="space-y-3">
+          <fieldset className="rounded-md border p-3 space-y-2" disabled={!!fulfillingRequestId}>
+            <legend className="px-1 text-sm font-medium">Checkout details</legend>
+            <label className="flex min-h-11 items-center gap-2">
+              <input type="radio" name="checkout-mode" checked={!eventOnly} onChange={() => setEventOnly(false)} />
+              Individual information
+            </label>
+            <label className="flex min-h-11 items-center gap-2">
+              <input type="radio" name="checkout-mode" checked={eventOnly} onChange={() => { setEventOnly(true); setClientFromId(""); setIsEmergency(false); }} />
+              Event only
+            </label>
+            <p className="text-sm text-muted-foreground">Event only records the selected event and items without individual registration. It does not count people attending.</p>
+            {eventOnly && !activeEvent && <p role="status">Choose an active event above before saving.</p>}
+            {fulfillingRequestId && <p>Loaded requests keep their individual information.</p>}
+          </fieldset>
+          <section className={eventOnly ? "grid gap-3" : "grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]"}>
+            {!eventOnly && <div className="min-w-0 space-y-3">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="client-search-trigger" data-testid="label-client">
                   Client (type to search students + partners)
@@ -877,12 +899,13 @@ export default function CheckOutPage() {
                   )}
                 </div>
               </div>
-            </div>
+            </div>}
 
-            <div className="space-y-3">
+            <div className="min-w-0 space-y-3">
               {/* Approved Requests — load into cart */}
               <ApprovedRequestsSection
                 onLoad={(req: any) => {
+                  setEventOnly(false);
                   // Auto-fill client
                   const existingClient = clients.find((c: any) => c.identifier === req.clientIdentifier || c.id === req.clientId);
                   if (existingClient) {
@@ -1098,13 +1121,13 @@ export default function CheckOutPage() {
               Fulfilling approved request. Status will update to Completed after checkout.
             </div>
           )}
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[11px] text-muted-foreground" data-testid="text-check-out-help">
-              This will reduce inventory and log an OUT transaction linked to this client.
+              {eventOnly ? "This records the items under the selected event and in general reports without a person record." : "This will reduce inventory and record the items for this client."}
             </p>
             {/* Held only until the session's event first loads, so a checkout at an
                 event is never saved as general distribution by a fast click. */}
-            <Button type="submit" disabled={!cart.length || eventSession.isPending} data-testid="button-save-check-out">
+            <Button type="submit" disabled={!cart.length || eventSession.isPending || (eventOnly && !activeEvent)} data-testid="button-save-check-out">
               Complete check-out ({totalUnits} units)
             </Button>
           </div>
@@ -1374,8 +1397,7 @@ function ReceiptContent({ receipt }: { receipt: ReceiptData }) {
       <div className="border-t border-dashed" />
 
       <div className="space-y-1 text-sm">
-        <div><strong>Client:</strong> {receipt.clientName}</div>
-        <div><strong>ID:</strong> {receipt.clientIdentifier}</div>
+        {receipt.clientName ? <><div><strong>Client</strong> {receipt.clientName}</div><div><strong>ID</strong> {receipt.clientIdentifier}</div></> : <div>Distribution without individual information</div>}
         <div><strong>Date:</strong> {formattedDate}</div>
         <div><strong>Time:</strong> {formattedTime}</div>
         {receipt.eventName && <div data-testid="receipt-event"><strong>Event:</strong> {receipt.eventName}</div>}

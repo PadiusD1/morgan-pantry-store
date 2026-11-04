@@ -76,7 +76,7 @@ export type DistributionMovement = Movement & {
   identifiedClients: number;
   students: number;
   partners: number;
-  /** Visits saved without a linked client record, which cannot be deduplicated. */
+  /** Checkouts saved without a linked client record, which cannot be deduplicated. */
   unlinkedVisits: number;
   emergencyVisits: number;
 };
@@ -226,7 +226,7 @@ export function buildEventBoard(input: EventBoardInput): EventBoardReport {
   };
 
   // An event chosen by name, or one that started in the period, is listed even
-  // with nothing recorded, because a held event with no saved visits is real
+  // with nothing recorded, because a held event with no saved checkouts is real
   // information and not a missing figure.
   for (const event of input.events) {
     const started = reportDateKey(event.startsAt);
@@ -382,12 +382,12 @@ export function eventBoardSections(report: EventBoardReport, selection: EventBoa
   if (has("distributions")) {
     sections.push({
       key: "distributions", title: "Distributions by event",
-      columns: ["Event", "Date", "Visits", ...measures.map((m) => m.label), "Emergency visits"],
+      columns: ["Event", "Date", "Checkouts", ...measures.map((m) => m.label), "Emergency checkouts"],
       rows: [
         ...report.events.map((row) => [row.name, eventDate(row), row.distribution.entries, ...measures.map((m) => m.value(row.distribution)), row.distribution.emergencyVisits]),
         ["Total", "", report.totals.distribution.entries, ...measures.map((m) => m.value(report.totals.distribution)), report.totals.distribution.emergencyVisits],
       ],
-      note: "Each checkout belongs to the one event saved on it. Checkouts saved without an event stay unassigned.",
+      note: "Each checkout belongs to the one event saved on it. Checkouts saved without an event stay unassigned. Event distributions without individual information count as checkouts, not attendance.",
     });
   }
   if (has("donations")) {
@@ -404,12 +404,12 @@ export function eventBoardSections(report: EventBoardReport, selection: EventBoa
   if (has("clients")) {
     sections.push({
       key: "clients", title: "Unique clients served",
-      columns: ["Event", "Date", "Identified clients", "Students", "Partner organizations", "Visits without a linked client"],
+      columns: ["Event", "Date", "Identified clients", "Students", "Partner organizations", "Checkouts without a linked client"],
       rows: [
         ...report.events.map((row) => [row.name, eventDate(row), row.distribution.identifiedClients, row.distribution.students, row.distribution.partners, row.distribution.unlinkedVisits]),
         ["Distinct across this selection", "", report.totals.distribution.identifiedClients, report.totals.distribution.students, report.totals.distribution.partners, report.totals.distribution.unlinkedVisits],
       ],
-      note: "A client served at several events is counted once in the bottom line, so event rows do not add up to it. Visits without a linked client record cannot be deduplicated and are listed separately.",
+      note: "A client served at several events is counted once in the bottom line, so event rows do not add up to it. Checkouts without a linked client record cannot be deduplicated and are listed separately.",
     });
   }
   if (has("contributors")) {
@@ -432,7 +432,7 @@ export function eventBoardSections(report: EventBoardReport, selection: EventBoa
   if (has("trend")) {
     sections.push({
       key: "trend", title: "Event comparison and trend",
-      columns: ["Event", "Date", "Visits", "Visits compared with the previous event", "Identified clients", ...(has("units") ? ["Units distributed"] : []), "Entries received"],
+      columns: ["Event", "Date", "Checkouts", "Checkouts compared with the previous event", "Identified clients", ...(has("units") ? ["Units distributed"] : []), "Entries received"],
       rows: assigned.map((row, index) => [
         row.name, eventDate(row), row.distribution.entries,
         index === 0 ? "First in view" : visitChange(row.distribution.entries - assigned[index - 1].distribution.entries),
@@ -450,7 +450,7 @@ export function eventBoardDefinitions(report: EventBoardReport, selection: Event
   return [
     "Dates use the inclusive Baltimore calendar. Only selected sections and measures are included, and an omitted one is not zero.",
     "Every transaction belongs to the event saved on it. Activity saved without an event is shown as not assigned and is never placed in an event afterwards.",
-    ...(has("distributions") || has("trend") ? ["A visit is one saved checkout, however many items it holds."] : []),
+    ...(has("distributions") || has("trend") ? ["Each saved checkout counts once, however many items it holds. Event distributions without individual information do not measure attendance."] : []),
     ...(has("clients") ? ["Identified clients are distinct linked client records, students and partner organizations, not people in households. The selection total counts each client once."] : []),
     ...(has("weight") || has("value") ? ["Pounds and estimated value add only the positive figures saved with each line. Units without one are listed, so a total that excludes them is understated, not complete. Estimated value is not cash or acquisition cost."] : []),
     ...(has("contributors") || has("donations") ? [`Donations are credited through the same attribution as the donor directory. ${count(c.ambiguousInbound)} entries name a source shared by several records and are credited to no one. ${count(c.unattributedInbound)} entries have no identifiable donor or partner. ${count(c.nameMatchedInbound)} entries are credited by a unique name rather than a stored record.`] : []),

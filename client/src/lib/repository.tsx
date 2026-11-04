@@ -158,13 +158,13 @@ export type RepositoryContextValue = RepositoryState & {
     eventId?: string | null;
   }) => Promise<unknown>;
   recordOutbound: (options: {
-    client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
+    client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string } | null;
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
     eventId?: string | null;
-  }) => Promise<{ client: ClientRecord; saved?: unknown }>;
+  }) => Promise<{ client: ClientRecord | null; saved?: unknown }>;
   upsertClient: (partial: Partial<ClientRecord> & { name: string; identifier: string }) => ClientRecord;
   updateSettings: (partial: Partial<Settings>) => void;
   upsertBarcodeCache: (barcode: string, entry: Omit<BarcodeCacheEntry, "cachedAt">) => void;
@@ -720,20 +720,21 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
   }
 
   async function recordOutbound(options: {
-    client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string };
+    client: { id?: string; name: string; identifier: string; contact?: string; email?: string; classification?: string } | null;
     items: { itemId: string; quantity: number }[];
     timestamp?: string;
     location?: GeoLocation;
     isEmergency?: boolean;
     eventId?: string | null;
-  }): Promise<{ client: ClientRecord; saved?: unknown }> {
+  }): Promise<{ client: ClientRecord | null; saved?: unknown }> {
     const timestamp = options.timestamp ?? new Date().toISOString();
     const isEmergency = Boolean(options.isEmergency);
     if (!options.items.length) {
       throw new Error("Check-out requires at least one item.");
     }
 
-    const client = upsertClient({
+    if (!options.client && !options.eventId) throw new Error("Choose an event for checkout without individual details.");
+    const client = options.client ? upsertClient({
       id: options.client.id,
       name: options.client.name,
       identifier: options.client.identifier,
@@ -741,7 +742,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       // Only typed values go in, so a blank box never wipes a stored one.
       ...(options.client.email ? { email: options.client.email } : {}),
       ...(options.client.classification ? { classification: options.client.classification } : {}),
-    });
+    }) : null;
 
     const currentInventory = (inventoryQuery.data ?? []).map(toInventoryItem);
 
@@ -779,8 +780,8 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       timestamp,
       source: null,
       donor: null,
-      clientId: client.id,
-      clientName: client.name,
+      clientId: client?.id ?? null,
+      clientName: client?.name ?? null,
       isEmergency,
       eventId: options.eventId ?? null,
       latitude: options.location?.latitude ?? null,
@@ -810,7 +811,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
       // new client the create POST may still be in flight — await it so the
       // transaction links to the correct server client ID (and so a client-create
       // failure surfaces here rather than being silently dropped).
-      const realClientId = await resolveClientId(client.id);
+      const realClientId = client ? await resolveClientId(client.id) : null;
       let saved: unknown = null;
 
       if (txItems.length) {
@@ -831,8 +832,8 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
           type: "OUT",
           timestamp,
           clientId: realClientId,
-          clientName: client.name,
-          clientClassification: options.client.classification ?? null,
+          clientName: client?.name ?? null,
+          clientClassification: options.client?.classification ?? null,
           isEmergency,
           // The live selection of this session, checked again by the server
           // inside the save. Absent when no event applies.
@@ -860,7 +861,7 @@ export function RepositoryProvider({ children }: { children: React.ReactNode }) 
 
       // Return the client carrying its resolved (real) server id so the caller
       // can select the persisted record for the receipt.
-      return { client: { ...client, id: realClientId }, saved };
+      return { client: client && realClientId ? { ...client, id: realClientId } : null, saved };
     } catch (err) {
       // Roll back every optimistic mutation to the server's truth, then rethrow
       // so the page can surface an error toast and skip the success receipt.

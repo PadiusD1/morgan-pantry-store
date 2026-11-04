@@ -81,7 +81,7 @@ export default function ReportsPage() {
     const map = new Map<string, { name: string; visits: number; units: number }>();
     for (const tx of rangeTx) {
       const id = tx.clientId || `unlinked:${tx.clientName || tx.id}`;
-      const name = tx.clientName || (tx.clientId && names.get(tx.clientId)) || "Unlinked client";
+      const name = tx.clientName || (tx.clientId && names.get(tx.clientId)) || "Without individual information";
       const current = map.get(id) || { name, visits: 0, units: 0 };
       current.visits += 1;
       current.units += tx.items.reduce((sum, item) => sum + item.quantity, 0);
@@ -210,12 +210,12 @@ export default function ReportsPage() {
           {!boardSelection.length && <p role="status" className="text-sm">Select at least one data option to populate and export your board report.</p>}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {[
-              ["Distribution visits", count(board.distribution.entries), "visits"],
+              ["Distribution checkouts", count(board.distribution.entries), "visits"],
               ["Identified clients served", count(board.distribution.knownClients), "clients"],
               ["Units distributed", count(board.distribution.units), "units"],
               ["Weight distributed", `${board.distribution.weightLbs.toFixed(1)} lbs`, "weight"],
               ["Estimated value distributed", money(board.distribution.valueUsd), "value"],
-              ["Emergency visits", count(board.distribution.emergencyVisits), "emergencies"],
+              ["Emergency checkouts", count(board.distribution.emergencyVisits), "emergencies"],
             ].filter(([, , id]) => boardSelection.includes(id as BoardDataKey)).map(([label, value, id]) => (
               <div key={id} className="min-w-0 rounded-lg border border-border/80 bg-background/60 p-3">
                 <p className="break-words text-xl font-semibold sm:text-2xl" data-testid={`text-board-${id}`}>{value}</p>
@@ -224,7 +224,7 @@ export default function ReportsPage() {
             ))}
           </div>
           <p className="text-xs text-muted-foreground">Only selected metrics and breakdowns populate the board report. Client names, student IDs, contacts, and locations are excluded.</p>
-          {boardSelection.includes("clients") && board.distribution.unlinkedVisits > 0 && <p className="text-xs text-muted-foreground">{count(board.distribution.unlinkedVisits)} visits have no linked client record and are excluded from the identified-client count.</p>}
+          {boardSelection.includes("clients") && board.distribution.unlinkedVisits > 0 && <p className="text-xs text-muted-foreground">{count(board.distribution.unlinkedVisits)} checkouts have no linked client record and are excluded from the identified-client count.</p>}
           {((boardSelection.includes("value") && board.distribution.unvaluedUnits > 0) || (boardSelection.includes("weight") && board.distribution.unweighedUnits > 0)) && (
             <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950" data-testid="text-report-missing-values">Data quality: {boardSelection.includes("value") && `${count(board.distribution.unvaluedUnits)} distributed units have no positive recorded unit value. `}{boardSelection.includes("weight") && `${count(board.distribution.unweighedUnits)} distributed units have no positive recorded unit weight. `}Totals may be understated.</p>
           )}
@@ -317,7 +317,7 @@ export default function ReportsPage() {
             <CardTitle className="section-heading">Movement within period</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1.5 text-sm py-4 px-4">
-            <div data-testid="text-report-range-tx-count">Distribution visits: {count(board.distribution.entries)}</div>
+            <div data-testid="text-report-range-tx-count">Distribution checkouts: {count(board.distribution.entries)}</div>
             <div data-testid="text-report-range-weight">
               Total weight distributed: {board.distribution.weightLbs.toFixed(1)} lbs
             </div>
@@ -387,7 +387,7 @@ export default function ReportsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 py-3 border-b border-border/60 bg-red-50/40">
             <div data-testid="text-emergency-range-count">
               <p className="text-2xl font-semibold">{emergencyRangeStats.count}</p>
-              <p className="text-xs text-muted-foreground">Emergency visits in range</p>
+              <p className="text-xs text-muted-foreground">Emergency checkouts in range</p>
             </div>
             <div data-testid="text-emergency-range-units">
               <p className="text-2xl font-semibold">{emergencyRangeStats.units}</p>
@@ -395,10 +395,10 @@ export default function ReportsPage() {
             </div>
             <div data-testid="text-emergency-total">
               <p className="text-2xl font-semibold">{emergencyError ? "Unavailable" : emergencyPending ? "Loading…" : emergencyReport?.totalEmergencies ?? "Unavailable"}</p>
-              <p className="text-xs text-muted-foreground">Lifetime emergency visits</p>
+              <p className="text-xs text-muted-foreground">Lifetime emergency checkouts</p>
             </div>
           </div>
-          <p className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">The client table below covers all recorded emergency visits, independent of the date filter.</p>
+          <p className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">The client table below covers all recorded emergency checkouts, independent of the date filter.</p>
           {!emergencyError && !emergencyPending && <Table>
             <TableHeader>
               <TableRow>
@@ -423,7 +423,7 @@ export default function ReportsPage() {
               )}
               {emergencyPage.rows.map((row) => (
                 <TableRow key={row.client_id || row.client_name} data-testid={`row-emergency-${row.client_id || row.client_name}`}>
-                  <TableCell className="text-sm">{row.client_name || "Unlinked client"}</TableCell>
+                  <TableCell className="text-sm">{row.client_name || "Without individual information"}</TableCell>
                   <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{row.client_identifier || "—"}</TableCell>
                   <TableCell className="text-sm text-right font-medium">{row.emergency_count}</TableCell>
                   <TableCell className="hidden md:table-cell text-xs">
@@ -456,7 +456,7 @@ export default function ReportsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Client</TableHead>
-                <TableHead className="text-right">Visits</TableHead>
+                <TableHead className="text-right">Checkouts</TableHead>
                 <TableHead className="text-right">Total units</TableHead>
               </TableRow>
             </TableHeader>
@@ -468,7 +468,7 @@ export default function ReportsPage() {
                     className="py-6 text-center text-sm text-muted-foreground"
                     data-testid="text-report-no-client"
                   >
-                    No client visits for this range.
+                    No checkouts for this range.
                   </TableCell>
                 </TableRow>
               )}

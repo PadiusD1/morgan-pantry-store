@@ -17,7 +17,7 @@ describe("check out page receipt", () => {
   });
 
   it("shows the receipt of a saved check out from the saved response", () => {
-    const success = outbound.slice(outbound.indexOf("if (result?.client)"));
+    const success = outbound.slice(outbound.indexOf("if (result)"));
     expect(success).toMatch(/receiptFromSaved\(result\.saved,/);
     expect(success).not.toMatch(/setReceipt\(\{/);
   });

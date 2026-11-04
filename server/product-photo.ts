@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { z } from "zod";
 import { pool } from "./pg";
 import { requireRole } from "./auth";
-import { productPhotoSource } from "@shared/product-photo";
+import { productPhotoSource, productPhotoVersion } from "@shared/product-photo";
 import { photoAttributionHtml } from "@shared/photo-attribution";
 
 const MAX_IMAGE_BYTES = 180_000;
@@ -29,12 +29,12 @@ export function registerProductPhotoRoutes(app: Express) {
     const photo = { ...body.data, source: "Staff-supplied product photo", reviewedAt: new Date().toISOString(), reviewedBy: req.user!.id };
     const { rowCount, rows } = await pool.query(`UPDATE inventory_items SET raw_payload = COALESCE(raw_payload, '{}'::jsonb) || jsonb_build_object('frcPhoto', $2::jsonb), updated_at = GREATEST(clock_timestamp(),date_trunc('milliseconds',updated_at)+interval '1 millisecond') WHERE id = $1 AND ($3::timestamptz IS NULL OR date_trunc('milliseconds',updated_at) = $3::timestamptz) RETURNING updated_at`, [id.data, JSON.stringify(photo), body.data.expectedUpdatedAt ?? null]);
     if (!rowCount) return res.status(409).json({ message: "This item changed or is no longer available. Refresh and review before uploading again." });
-    return res.json({ saved: true, updatedAt: new Date(rows[0].updated_at).toISOString(), imageUrl: `/api/public/inventory/${id.data}/photo?v=${Date.now()}` });
+    return res.json({ saved: true, updatedAt: new Date(rows[0].updated_at).toISOString(), imageUrl: `/api/public/inventory/${id.data}/photo?v=${productPhotoVersion({ rawPayload: { frcPhoto: photo } })}` });
   });
   app.get("/api/public/inventory/:id/photo", async (req, res) => {
     const id = z.guid().safeParse(req.params.id);
     if (!id.success) return res.status(404).end();
-    const { rows } = await pool.query("SELECT raw_payload FROM inventory_items WHERE id = $1", [id.data]);
+    const { rows } = await pool.query("SELECT raw_payload, updated_at FROM inventory_items WHERE id = $1", [id.data]);
     const photo = productPhotoSource(rows[0]?.raw_payload);
     if (!photo) return res.status(404).end();
     // Credits are fetched only when requested, not once per card render. The
@@ -69,7 +69,10 @@ export function registerProductPhotoRoutes(app: Express) {
       const type = imageContentType(bytes);
       if (!type) return res.status(404).end();
       res.setHeader("Content-Type", type);
-      res.setHeader("Cache-Control", "public, max-age=300, s-maxage=3600");
+      // A link carrying the current photo version never changes meaning, so the
+      // student page and the CDN reuse it instead of reading the photo again.
+      const current = productPhotoVersion({ rawPayload: rows[0].raw_payload, updatedAt: rows[0].updated_at });
+      res.setHeader("Cache-Control", req.query.v === current ? "public, max-age=31536000, s-maxage=31536000, immutable" : "public, max-age=300, s-maxage=3600");
       res.setHeader("X-Content-Type-Options", "nosniff");
       return res.end(bytes);
     } catch { return res.status(404).end(); }
