@@ -12,6 +12,15 @@ for (const width of [1440, 320]) {
     const clientsBefore = await (await request.get('/api/clients')).json();
     expect((await request.put('/api/frc-events/session', { data: { eventId: null } })).ok()).toBeTruthy();
     await page.goto('/check-out');
+    await page.getByTestId('input-client-name').fill('Synthetic Person');
+    await page.getByTestId('input-client-identifier').fill('T9999999');
+    await page.getByTestId('input-client-email').fill('synthetic@example.invalid');
+    await page.getByTestId('input-client-contact').fill('5550100');
+    await page.getByRole('radio', { name: 'Event only', exact: true }).check();
+    await page.getByRole('radio', { name: 'Individual information', exact: true }).check();
+    for (const field of ['name', 'identifier', 'email', 'contact']) {
+      await expect(page.getByTestId(`input-client-${field}`)).toHaveValue('');
+    }
     await page.getByRole('radio', { name: 'Event only', exact: true }).check();
     await expect(page.getByTestId('input-client-name')).toHaveCount(0);
     await page.getByTestId('select-cart-item').click();
@@ -50,6 +59,62 @@ for (const width of [1440, 320]) {
     await expect(page.getByTestId('input-client-name')).toBeVisible();
   });
 }
+
+test('event only UI retries a committed save whose response was lost exactly once', async ({ page, request }) => {
+  const label = `Lost event response ${randomUUID()}`;
+  const event = await (await request.post('/api/frc-events', { data: { name: label, startsAt: new Date().toISOString() } })).json();
+  const item = await (await request.post('/api/inventory', { data: { name: label, quantity: 100 } })).json();
+  expect((await request.put('/api/frc-events/session', { data: { eventId: event.id } })).ok()).toBeTruthy();
+  await page.goto('/check-out');
+  await page.getByRole('radio', { name: 'Event only', exact: true }).check();
+  await page.getByTestId('select-cart-item').click();
+  await page.getByTestId(`option-cart-item-${item.id}`).click();
+  await page.getByTestId(`input-cart-quantity-${item.id}`).fill('25');
+  let committedId = '';
+  const keys: string[] = [];
+  await page.context().route('**/api/transactions', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    keys.push(route.request().headers()['idempotency-key']);
+    if (!committedId) {
+      const saved = await route.fetch();
+      expect(saved.status()).toBe(201);
+      committedId = (await saved.json()).id;
+      return route.abort('failed');
+    }
+    return route.continue();
+  });
+  await page.getByTestId('button-save-check-out').click();
+  await expect(page.getByText('Save not confirmed').first()).toBeVisible();
+  expect((await (await request.get(`/api/inventory/${item.id}`)).json()).quantity).toBe(75);
+  await expect(page.getByTestId(`input-cart-quantity-${item.id}`)).toHaveValue('25');
+  const [retry] = await Promise.all([
+    page.waitForResponse(r => new URL(r.url()).pathname === '/api/transactions' && r.request().method() === 'POST'),
+    page.getByTestId('button-save-check-out').click(),
+  ]);
+  expect(await retry.json()).toMatchObject({ id: committedId, clientId: null, eventId: event.id });
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBeTruthy();
+  expect(keys[1]).toBe(keys[0]);
+  const history = await (await request.get('/api/transactions')).json();
+  expect(history.filter((tx: any) => tx.items.some((line: any) => line.inventoryItemId === item.id))).toHaveLength(1);
+  expect((await (await request.get(`/api/inventory/${item.id}`)).json()).quantity).toBe(75);
+});
+
+test('loading a pickup request exits event only mode and prevents anonymous checkout', async ({ page }) => {
+  // A synthetic approved request isolates the mode transition from request approval.
+  await page.context().route('**/api/requests?status=*', async route => {
+    const approved = new URL(route.request().url()).searchParams.get('status') === 'approved';
+    await route.fulfill({ json: approved ? [{ id: 'synthetic-pickup', clientName: 'Synthetic Pickup', clientIdentifier: 'T9999998', items: [] }] : [] });
+  });
+  await page.goto('/check-out');
+  await page.getByRole('radio', { name: 'Event only', exact: true }).check();
+  await page.getByRole('button', { name: /Approved Requests/ }).click();
+  await page.getByRole('button', { name: 'Load into Cart', exact: true }).click();
+  await expect(page.getByRole('radio', { name: 'Individual information', exact: true })).toBeChecked();
+  await expect(page.getByRole('radio', { name: 'Event only', exact: true })).toBeDisabled();
+  await expect(page.getByTestId('input-client-name')).toHaveValue('Synthetic Pickup');
+  await expect(page.getByTestId('input-client-identifier')).toHaveValue('T9999998');
+});
 
 test('a check in save error has a visible named dismiss control and keeps the entry', async ({ page, request }, info) => {
   await page.setViewportSize({ width: 320, height: 800 });
