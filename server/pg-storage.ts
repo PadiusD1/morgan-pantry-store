@@ -11,7 +11,7 @@
  *   regardless of DB collation.
  */
 
-import { eq, and, gte, lte, desc, asc, sql, count, type SQL } from "drizzle-orm";
+import { eq, and, gte, lte, desc, asc, sql, count, getTableColumns, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { DonorStore } from "./donor-find-or-create";
 import {
@@ -58,7 +58,8 @@ import {
   type InsertDonor,
 } from "@shared/schema";
 import { findItemByBarcodeForms, withInventoryBarcodeQueue } from "./inventory-identity";
-import type { IStorage } from "./storage";
+import type { IStorage, InventoryListItem } from "./storage";
+import { MAX_UPLOAD_DATA_URL_LENGTH, UPLOAD_DATA_URL_SQL_PATTERN } from "@shared/product-photo";
 import { db } from "./pg";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -137,9 +138,30 @@ export class PgStorage implements IStorage {
 
   // ─── Inventory ─────────────────────────────────────────────────────────
 
-  async getInventoryItems(): Promise<InventoryItem[]> {
+  /**
+   * Every list read for staff, the public request page and the quality queue.
+   *
+   * Uploaded photos live inline in raw_payload as base64, and these lists are
+   * refetched every 30 seconds on every open screen, so reading whole rows sent
+   * every photo across the database connection on every poll. That transfer is
+   * what exhausted the Supabase free plan egress. PostgreSQL now drops the
+   * bytes itself and only reports whether a valid upload exists, using the same
+   * format and length rules as productPhotoSource. The photo route still reads
+   * the full payload for the one image it serves.
+   */
+  async getInventoryItems(): Promise<InventoryListItem[]> {
+    const payload = inventoryItems.rawPayload;
     return db
-      .select()
+      .select({
+        ...getTableColumns(inventoryItems),
+        rawPayload: sql<unknown>`CASE WHEN jsonb_typeof(${payload} -> 'frcPhoto') = 'object'
+          THEN jsonb_set(${payload}, '{frcPhoto}', (${payload} -> 'frcPhoto') - 'dataUrl')
+          ELSE ${payload} END`.as("raw_payload"),
+        hasUploadedPhoto: sql<boolean>`COALESCE(
+          jsonb_typeof(${payload} #> '{frcPhoto,dataUrl}') = 'string'
+          AND char_length(${payload} #>> '{frcPhoto,dataUrl}') <= ${MAX_UPLOAD_DATA_URL_LENGTH}
+          AND (${payload} #>> '{frcPhoto,dataUrl}') ~ ${UPLOAD_DATA_URL_SQL_PATTERN}, false)`.as("has_uploaded_photo"),
+      })
       .from(inventoryItems)
       .orderBy(sql`lower(${inventoryItems.name})`);
   }
